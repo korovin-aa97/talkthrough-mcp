@@ -33,6 +33,11 @@ def _build_parser() -> argparse.ArgumentParser:
     process.add_argument(
         "--vocabulary", default=None, help="domain terms to bias transcription toward"
     )
+    process.add_argument(
+        "--model",
+        default=None,
+        help="whisper model for this run (e.g. large-v3-turbo); default from env/small",
+    )
 
     gc = sub.add_parser("gc", help="delete old jobs from the local store")
     gc.add_argument("--keep-days", type=int, default=30, help="keep jobs newer than N days")
@@ -91,6 +96,7 @@ def _cmd_process(args: argparse.Namespace) -> int:
         recorded_at=args.recorded_at,
         vocabulary=args.vocabulary,
         language=args.language,
+        model=args.model,
         force=args.force,
         progress=on_progress,
     )

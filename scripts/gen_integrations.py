@@ -37,8 +37,9 @@ UVX_ARGS: list[str] = _UVX_ARGS[INSTALL_PHASE]
 UVX_CMDLINE = "uvx " + " ".join(UVX_ARGS)
 
 ENV_DOC = (
-    "Optional env vars: TALKTHROUGH_WHISPER_MODEL (default `small`; use `medium`/"
-    "`large-v3` for non-English narration), TALKTHROUGH_OCR (`off` to disable), "
+    "Optional env vars: TALKTHROUGH_WHISPER_MODEL (default `small`; use "
+    "`large-v3-turbo` for non-English narration — agents can also pass "
+    "`model=` per call), TALKTHROUGH_OCR (`off` to disable), "
     "TALKTHROUGH_HOME (job store root, default `~/.talkthrough`)."
 )
 

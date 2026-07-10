@@ -32,3 +32,5 @@ A markdown spec with these sections:
 4. **Visual references** — frame refs for every screen/mockup discussed.
 5. **Open questions** — everything ambiguous or contested, with the quote that
    raised it. Do not resolve ambiguity yourself — surface it.
+
+Write the spec in the workshop's language; quotes stay verbatim.

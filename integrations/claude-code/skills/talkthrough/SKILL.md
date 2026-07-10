@@ -66,6 +66,11 @@ method: `triage-recording` (screencast → findings JSON per the contract in
 - Findings/quotes must cite the narrator's exact words + `t_ms` (+ `t_wall`
   when known) + the frame files you actually inspected.
 - Low STT/vision confidence → surface a question; never silently guess.
-- Non-English narration transcribing poorly → suggest
-  `TALKTHROUGH_WHISPER_MODEL=medium` and reprocess with `force=true`;
-  domain jargon → pass `vocabulary="Term1, Term2"`.
+- Any narration language works (Whisper auto-detects; the summary reports
+  `language` + `language_probability`). Garbled transcript or low/wrong
+  detection → re-call `process_media(path, model="large-v3-turbo",
+  force=true)` (best multilingual quality) or pin `language="…"`; domain
+  jargon → pass `vocabulary="Term1, Term2"`.
+- Write digests/summaries for the recording author in the narrator's
+  language; keep quotes verbatim in the original — translate in your own
+  prose only, never inside a quote.

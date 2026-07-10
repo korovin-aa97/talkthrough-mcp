@@ -32,6 +32,7 @@ class SttResult:
     model: str
     segments: tuple[SttSegment, ...]
     latency_ms: int
+    language_probability: float | None = None
 
     def full_text(self) -> str:
         return " ".join(segment.text for segment in self.segments if segment.text).strip()
@@ -88,9 +89,11 @@ def transcribe(
         if on_segment is not None:
             on_segment(t1_ms)
 
+    probability = getattr(info, "language_probability", None)
     return SttResult(
         language=getattr(info, "language", None),
         model=model_name,
         segments=tuple(_renumber(segments)),
         latency_ms=int((time.monotonic() - started) * 1000),
+        language_probability=round(float(probability), 3) if probability is not None else None,
     )

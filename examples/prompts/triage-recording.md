@@ -34,4 +34,6 @@ Return ONE fenced JSON object, no other prose:
 
 Rules: low STT/vision confidence → route="question" with a concrete question —
 never a silent guess. Findings without frame evidence (audio-only jobs) must say
-so in `frame_refs: []`.
+so in `frame_refs: []`. Write `digest` in the narrator's language (the
+transcript language); keep every `quote` verbatim in the original language —
+never translate quotes.

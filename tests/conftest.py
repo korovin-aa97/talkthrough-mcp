@@ -64,7 +64,12 @@ def make_manifest(
         ),
         wall_clock=wall_clock,
         transcript=Transcript(
-            available=True, reason="", language="en", model="tiny", segments=segments
+            available=True,
+            reason="",
+            language="en",
+            model="tiny",
+            language_probability=0.97,
+            segments=segments,
         ),
         frames=FrameIndex(
             count=len(frames),

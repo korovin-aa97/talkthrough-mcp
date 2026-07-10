@@ -41,6 +41,7 @@ class Transcript:
     reason: str
     language: str | None
     model: str | None
+    language_probability: float | None = None
     segments: list[SttSegment] = field(default_factory=list)
 
     def full_text(self) -> str:

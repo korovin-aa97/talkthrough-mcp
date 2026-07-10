@@ -93,7 +93,7 @@ Then, in your agent:
 
 | Tool | What it does |
 |---|---|
-| `process_media(path, recorded_at?, vocabulary?, language?, force?)` | Ingest a video/audio file: local STT, keyframes, OCR, wall-clock. Returns a compact summary. Idempotent by content hash — re-calls are instant. |
+| `process_media(path, recorded_at?, vocabulary?, language?, model?, force?)` | Ingest a video/audio file: local STT, keyframes, OCR, wall-clock. Returns a compact summary. Idempotent by content hash — re-calls are instant. |
 | `get_transcript(job_id, start_ms?, end_ms?, format?)` | Paginated transcript as `segments`, `text`, or `srt`; truncation returns `next_start_ms`. |
 | `get_frames(job_id, at_ms? \| start_ms?+end_ms?, max_frames?, include_duplicates?)` | Keyframe images nearest a timestamp or evenly thinned across a range (unique frames by default, max 6/call). |
 | `get_moment(job_id, start_ms, end_ms)` | The "one remark" bundle: transcript slice + up to 3 frames + their OCR text + wall-clock range. |
@@ -142,23 +142,42 @@ transcribed by a local whisper model, OCR is local ONNX inference, and there is
 no telemetry. The only network access is one-time tool/model downloads (ffmpeg
 build, whisper model, OCR models).
 
-## Transcription quality
+## Languages
 
-The default whisper model is `small` (good English/major-language accuracy on
-CPU). For non-English narration or tricky audio, set:
+Narration in any of Whisper's ~99 languages works: the language is
+auto-detected per recording, and the summary reports both `language` and
+`language_probability` so agents can tell a confident detection from a shaky
+one (silence or music at the start can fool the detector — pin it with
+`language="ru"` and `force=true` when that happens).
 
-```bash
-TALKTHROUGH_WHISPER_MODEL=medium   # or large-v3 (slower, best quality)
-```
+Pick the model for your languages — per call (`model=` parameter, agents do
+this themselves when a transcript comes back garbled) or as the server
+default (`TALKTHROUGH_WHISPER_MODEL`):
 
-Feed product names via the `vocabulary` parameter — it biases the decoder so
-jargon survives transcription.
+| Model | Size | Best for |
+|---|---|---|
+| `small` (default) | 464 MB | English and major-language narration on CPU |
+| `large-v3-turbo` | ~1.5 GB | **recommended for non-English** — near-large quality at near-small speed |
+| `medium` | ~1.5 GB | conservative alternative to turbo |
+| `tiny` / `base` | 75–145 MB | quick drafts, CI |
+| `*.en` variants | — | English-only, slightly faster/better for EN |
+
+Tips that work in every language: pass product names via
+`vocabulary="Term1, Term2"` (biases the decoder so jargon survives), and note
+that the workflow prompts instruct agents to write digests in the
+**narrator's language** while keeping quotes verbatim — the server never
+translates (exact quotes are evidence; translation is the agent's job).
+
+Current limitation: OCR of on-screen text covers Latin + Chinese scripts
+(RapidOCR defaults); other scripts are tracked in
+[#3](https://github.com/korovin-aa97/talkthrough-mcp/issues/3). Spoken
+language support is unaffected.
 
 ## Configuration
 
 | Env var | Default | Meaning |
 |---|---|---|
-| `TALKTHROUGH_WHISPER_MODEL` | `small` | whisper model name (`tiny`/`base`/`small`/`medium`/`large-v3`) |
+| `TALKTHROUGH_WHISPER_MODEL` | `small` | default whisper model (`tiny`/`base`/`small`/`medium`/`large-v3`/`large-v3-turbo`); the `model` tool param overrides per call |
 | `TALKTHROUGH_OCR` | `on` | set `off` to skip OCR |
 | `TALKTHROUGH_MAX_SECONDS` | `7200` | max media duration |
 | `TALKTHROUGH_MAX_FRAMES` | `600` | keyframe cap per job |

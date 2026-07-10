@@ -49,6 +49,33 @@ DEFAULT_MAX_SECONDS = 7200
 DEFAULT_MAX_FRAMES = 600
 DEFAULT_WHISPER_MODEL = "small"
 
+# Names faster-whisper auto-downloads by alias (kept in sync with
+# faster_whisper.utils._MODELS; validated here so a typo fails fast with a
+# clear message instead of a Hugging Face 404 mid-pipeline).
+ALLOWED_WHISPER_MODELS = frozenset(
+    {
+        "tiny",
+        "tiny.en",
+        "base",
+        "base.en",
+        "small",
+        "small.en",
+        "medium",
+        "medium.en",
+        "large-v1",
+        "large-v2",
+        "large-v3",
+        "large",
+        "large-v3-turbo",
+        "turbo",
+        "distil-small.en",
+        "distil-medium.en",
+        "distil-large-v2",
+        "distil-large-v3",
+        "distil-large-v3.5",
+    }
+)
+
 TRANSCRIPT_PREVIEW_SEGMENTS = 15
 
 ProgressFn = Callable[[str, float], None]
@@ -82,6 +109,16 @@ def max_frames_cap() -> int:
 
 def whisper_model_name() -> str:
     return os.environ.get("TALKTHROUGH_WHISPER_MODEL", DEFAULT_WHISPER_MODEL).strip()
+
+
+def resolve_whisper_model(override: str | None) -> str:
+    """Per-call override > env default; unknown names fail fast with the allowlist."""
+    name = (override or whisper_model_name()).strip()
+    if name not in ALLOWED_WHISPER_MODELS:
+        raise ValidationError(
+            f"unknown whisper model {name!r} — allowed: {', '.join(sorted(ALLOWED_WHISPER_MODELS))}"
+        )
+    return name
 
 
 def _validate_extension(media: Path) -> None:
@@ -129,11 +166,13 @@ def process_media(
     recorded_at: str | None = None,
     vocabulary: str | None = None,
     language: str | None = None,
+    model: str | None = None,
     force: bool = False,
     progress: ProgressFn | None = None,
 ) -> ProcessResult:
     """Run the full pipeline; instantly returns the existing manifest when reprocessing."""
     started = time.monotonic()
+    model_name = resolve_whisper_model(model)
 
     def report(stage: str, fraction: float) -> None:
         if progress is not None:
@@ -197,7 +236,7 @@ def process_media(
 
                 stt_result = stt.transcribe(
                     wav_path,
-                    model_name=whisper_model_name(),
+                    model_name=model_name,
                     language=language,
                     vocabulary=vocabulary,
                     on_segment=on_segment,
@@ -207,6 +246,7 @@ def process_media(
                     reason="",
                     language=stt_result.language,
                     model=stt_result.model,
+                    language_probability=stt_result.language_probability,
                     segments=list(stt_result.segments),
                 )
             finally:
@@ -306,6 +346,7 @@ def summarize(result: ProcessResult) -> dict[str, Any]:
             "available": manifest.transcript.available,
             "reason": manifest.transcript.reason or None,
             "language": manifest.transcript.language,
+            "language_probability": manifest.transcript.language_probability,
             "model": manifest.transcript.model,
             "segment_count": len(segments),
             "preview_segments": preview,

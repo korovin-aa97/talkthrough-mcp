@@ -13,7 +13,7 @@ extensions:
     args: ["--from", "git+https://github.com/korovin-aa97/talkthrough-mcp", "talkthrough-mcp"]
 ```
 
-Optional env vars: TALKTHROUGH_WHISPER_MODEL (default `small`; use `medium`/`large-v3` for non-English narration), TALKTHROUGH_OCR (`off` to disable), TALKTHROUGH_HOME (job store root, default `~/.talkthrough`).
+Optional env vars: TALKTHROUGH_WHISPER_MODEL (default `small`; use `large-v3-turbo` for non-English narration — agents can also pass `model=` per call), TALKTHROUGH_OCR (`off` to disable), TALKTHROUGH_HOME (job store root, default `~/.talkthrough`).
 
 Verify: the client should list 7 tools (process_media, get_transcript, get_frames, get_moment, search, extract_frame, list_jobs). A `list_jobs` call returning an empty list is a healthy first run.
 

@@ -27,4 +27,5 @@ A markdown backlog table, ordered by priority, one row per item:
 
 Below the table: a "Cut lines" section — items explicitly deferred in the demo,
 each with the deferring quote and timestamp. Every row MUST carry real evidence
-from the recording; no invented items.
+from the recording; no invented items. Write items in the demo's language;
+evidence quotes stay verbatim.

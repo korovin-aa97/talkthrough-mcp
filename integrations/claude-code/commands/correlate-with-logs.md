@@ -29,4 +29,5 @@ A markdown incident walkthrough: one section per correlated moment with (a) the
 narrator's quote + t_wall, (b) the matching log lines, (c) the frame ref showing
 the screen, and (d) your read of cause vs. symptom. Close with a "Confidence and
 gaps" note: which correlations are exact (t_wall confidence "exact"/"high") and
-which are approximate ("medium"/"low" — mtime-derived anchors drift).
+which are approximate ("medium"/"low" — mtime-derived anchors drift). Quote
+remarks verbatim in their original language.

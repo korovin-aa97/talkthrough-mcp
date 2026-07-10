@@ -7,9 +7,15 @@ Outputs (committed, consumed as-is by CI — `say` is macOS-only):
   rendered via Pillow and overlaid), narrated with the macOS ``say`` voice
   reading a fixed English script, muxed with a known ``creation_time`` tag.
 - ``meeting-demo.m4a`` — a short say-only audio recording (no video stream).
+- ``multilang-ru-demo.m4a`` — a short Russian narration (Milena voice) for
+  the language-detection test.
 
 Scene boundaries and the script keywords are mirrored in
 ``tests/integration/fixture_facts.py`` — update both together.
+
+Rebuild selectively: ``python make_fixtures.py ru`` (targets: demo, meeting,
+ru; default all) — so adding a fixture never rewrites the committed bytes of
+the others.
 """
 
 from __future__ import annotations
@@ -38,6 +44,11 @@ MEETING_SCRIPT = (
     "by Friday. Second action item, schedule a follow up call with the design "
     "team next week. We decided to postpone the pricing change until September."
 )
+RU_SCRIPT = (
+    "Это тестовая запись на русском языке. Кнопка отправки не работает, это "
+    "блокирует весь сценарий. Ещё я хочу фильтр по дате в списке заказов. "
+    "Волшебное слово — карбюратор."
+)
 
 SCENES = [
     {"color": "0x1E3A5F", "title": "SCENE LOGIN PAGE", "subtitle": ""},
@@ -53,10 +64,10 @@ def _ffmpeg() -> str:
     return ffmpeg_path()
 
 
-def _say(text: str, out_aiff: Path) -> None:
+def _say(text: str, out_aiff: Path, *, voice: str = "Samantha") -> None:
     cmd = ["/usr/bin/say", "-r", SAY_RATE, "-o", str(out_aiff), text]
     try:
-        subprocess.run([*cmd[:3], "-v", "Samantha", *cmd[3:]], check=True, capture_output=True)
+        subprocess.run([*cmd[:3], "-v", voice, *cmd[3:]], check=True, capture_output=True)
     except subprocess.CalledProcessError:
         subprocess.run(cmd, check=True, capture_output=True)  # default voice fallback
 
@@ -153,6 +164,32 @@ def build_demo_mp4(ffmpeg: str) -> Path:
     return out
 
 
+def build_ru_m4a(ffmpeg: str) -> Path:
+    out = FIXTURES_DIR / "multilang-ru-demo.m4a"
+    speech = BUILD_DIR / "ru-speech.aiff"
+    _say(RU_SCRIPT, speech, voice="Milena")
+    subprocess.run(
+        [
+            ffmpeg,
+            "-y",
+            "-hide_banner",
+            "-loglevel",
+            "error",
+            "-i",
+            str(speech),
+            "-c:a",
+            "aac",
+            "-b:a",
+            "96k",
+            str(out),
+        ],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    return out
+
+
 def build_meeting_m4a(ffmpeg: str) -> Path:
     out = FIXTURES_DIR / "meeting-demo.m4a"
     speech = BUILD_DIR / "meeting-speech.aiff"
@@ -181,14 +218,24 @@ def build_meeting_m4a(ffmpeg: str) -> Path:
     return out
 
 
+BUILDERS = {
+    "demo": build_demo_mp4,
+    "meeting": build_meeting_m4a,
+    "ru": build_ru_m4a,
+}
+
+
 def main() -> None:
     if sys.platform != "darwin":
         raise SystemExit("fixture generation uses macOS `say`; run it on macOS once")
+    targets = sys.argv[1:] or list(BUILDERS)
+    unknown = set(targets) - set(BUILDERS)
+    if unknown:
+        raise SystemExit(f"unknown targets {sorted(unknown)}; choose from {sorted(BUILDERS)}")
     BUILD_DIR.mkdir(parents=True, exist_ok=True)
     ffmpeg = _ffmpeg()
-    demo = build_demo_mp4(ffmpeg)
-    meeting = build_meeting_m4a(ffmpeg)
-    for path in (demo, meeting):
+    for target in targets:
+        path = BUILDERS[target](ffmpeg)
         print(f"{path.name}: {path.stat().st_size / 1_000_000:.2f} MB")
 
 

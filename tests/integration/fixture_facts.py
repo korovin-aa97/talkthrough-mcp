@@ -26,3 +26,9 @@ OCR_SCENE_WORD = "SCENE"
 
 # Meeting narration keywords (>=1 required).
 MEETING_KEYWORDS = ("action", "report", "team")
+
+# Russian narration (Milena voice) — language-detection fixture. Keyword
+# asserts are deliberately absent: whisper `tiny` is weak at Russian
+# TRANSCRIPTION, but language DETECTION on clean speech is reliable.
+RU_M4A = FIXTURES_DIR / "multilang-ru-demo.m4a"
+RU_LANGUAGE = "ru"

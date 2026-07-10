@@ -99,6 +99,7 @@ async def process_media(
     recorded_at: str | None = None,
     vocabulary: str | None = None,
     language: str | None = None,
+    model: str | None = None,
     force: bool = False,
 ) -> dict[str, Any]:
     state = _ProgressState()
@@ -130,6 +131,7 @@ async def process_media(
                 recorded_at=recorded_at,
                 vocabulary=vocabulary,
                 language=language,
+                model=model,
                 force=force,
                 progress=on_progress,
             )

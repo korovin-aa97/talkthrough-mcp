@@ -194,6 +194,22 @@ def test_audio_only_frame_tools_error_clearly(meeting: ProcessResult) -> None:
     assert len(content) == 1  # no image blocks
 
 
+# --- multilingual: language detection is plumbed through ----------------------
+
+
+def test_russian_narration_detected_and_reported(integration_home: Path) -> None:
+    from tests.integration.fixture_facts import RU_LANGUAGE, RU_M4A
+
+    result = pipeline.process_media(str(RU_M4A))
+    transcript = result.manifest.transcript
+    assert transcript.language == RU_LANGUAGE
+    assert (transcript.language_probability or 0) > 0.5
+    assert transcript.segments, "russian narration must produce segments even on tiny"
+    summary = pipeline.summarize(result)
+    assert summary["transcript"]["language"] == RU_LANGUAGE
+    assert summary["transcript"]["language_probability"] == transcript.language_probability
+
+
 # --- mutating tests: keep these LAST -----------------------------------------
 
 

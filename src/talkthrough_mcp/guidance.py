@@ -34,6 +34,7 @@ URLs — local file paths only.
 Examples:
 - process_media(path="/Users/sam/Desktop/bug-repro.mov") — narrated screencast, defaults are right
 - process_media(path="~/Videos/demo.mp4", language="en") — pin the language, skip auto-detect
+- process_media(path="/rec/interview.mov", model="large-v3-turbo") — best multilingual quality (1.5 GB, one-time)
 - process_media(path="/tmp/standup.m4a") — audio-only: transcript tools work, frame tools will error
 - process_media(path="/rec/review.mov", vocabulary="OKR, PgBouncer, Kanban") — jargon survives STT
 - process_media(path="/rec/demo.mov", recorded_at="2026-07-10T12:03:00+02:00") — exact wall-clock anchor
@@ -41,6 +42,7 @@ Examples:
 - user: "I just recorded my screen, it's on my Desktop" → process_media(path="/Users/<user>/Desktop/<file>.mov")
 - user drops a browser tab capture → process_media(path="~/Downloads/tab-capture.webm")
 - summary shows wall_clock=null → ask when recording started, re-call with recorded_at=... and force=true
+- transcript garbled or language_probability low → re-call with model="large-v3-turbo" (or language="ru") + force=true
 - 30-min video is fine: progress notifications stream while whisper runs; expect minutes, not seconds
 - after success, do NOT dump everything — continue with get_transcript / get_moment / search on the job_id
 - anti-example: frames from an already-processed job → get_frames(job_id=...), never process_media again
@@ -245,7 +247,9 @@ Return ONE fenced JSON object, no other prose:
 
 Rules: low STT/vision confidence → route="question" with a concrete question —
 never a silent guess. Findings without frame evidence (audio-only jobs) must say
-so in `frame_refs: []`.
+so in `frame_refs: []`. Write `digest` in the narrator's language (the
+transcript language); keep every `quote` verbatim in the original language —
+never translate quotes.
 """,
     "spec-from-workshop": """\
 You are a product engineer writing a spec from a recorded workshop / design
@@ -276,6 +280,8 @@ A markdown spec with these sections:
 4. **Visual references** — frame refs for every screen/mockup discussed.
 5. **Open questions** — everything ambiguous or contested, with the quote that
    raised it. Do not resolve ambiguity yourself — surface it.
+
+Write the spec in the workshop's language; quotes stay verbatim.
 """,
     "backlog-from-demo": """\
 You are a product owner turning a recorded product demo into a prioritized
@@ -301,7 +307,8 @@ A markdown backlog table, ordered by priority, one row per item:
 
 Below the table: a "Cut lines" section — items explicitly deferred in the demo,
 each with the deferring quote and timestamp. Every row MUST carry real evidence
-from the recording; no invented items.
+from the recording; no invented items. Write items in the demo's language;
+evidence quotes stay verbatim.
 """,
     "meeting-actions": """\
 You are taking minutes from a recorded meeting processed by talkthrough as job
@@ -330,7 +337,8 @@ Markdown with three sections:
 3. **Open questions** — what needs an answer, who raised it, timestamp.
 
 Owners and dates come ONLY from spoken words — never infer them. When unclear,
-write "unassigned"/"unspecified".
+write "unassigned"/"unspecified". Write the minutes in the meeting's language;
+quotes stay verbatim.
 """,
     "correlate-with-logs": """\
 You are debugging with two evidence streams: a narrated recording (talkthrough
@@ -358,7 +366,8 @@ A markdown incident walkthrough: one section per correlated moment with (a) the
 narrator's quote + t_wall, (b) the matching log lines, (c) the frame ref showing
 the screen, and (d) your read of cause vs. symptom. Close with a "Confidence and
 gaps" note: which correlations are exact (t_wall confidence "exact"/"high") and
-which are approximate ("medium"/"low" — mtime-derived anchors drift).
+which are approximate ("medium"/"low" — mtime-derived anchors drift). Quote
+remarks verbatim in their original language.
 """,
 }
 

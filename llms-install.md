@@ -56,8 +56,9 @@ Add to the client's MCP servers config (`claude_desktop_config.json`,
 ```
 
 Optional env vars (add an `"env"` object next to `"args"` if the user needs
-them): `TALKTHROUGH_WHISPER_MODEL` (default `small`; use `medium` or
-`large-v3` for non-English narration), `TALKTHROUGH_OCR` (`off` to disable),
+them): `TALKTHROUGH_WHISPER_MODEL` (default `small`; use `large-v3-turbo`
+for non-English narration — the `process_media` tool also accepts a per-call
+`model` parameter), `TALKTHROUGH_OCR` (`off` to disable),
 `TALKTHROUGH_HOME` (job store root, default `~/.talkthrough`).
 
 ## Verify the installation

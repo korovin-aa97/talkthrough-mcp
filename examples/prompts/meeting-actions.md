@@ -24,4 +24,5 @@ Markdown with three sections:
 3. **Open questions** — what needs an answer, who raised it, timestamp.
 
 Owners and dates come ONLY from spoken words — never infer them. When unclear,
-write "unassigned"/"unspecified".
+write "unassigned"/"unspecified". Write the minutes in the meeting's language;
+quotes stay verbatim.
