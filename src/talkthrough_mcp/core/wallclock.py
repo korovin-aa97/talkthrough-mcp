@@ -4,7 +4,9 @@ Priority ladder (§ DESIGN.md):
 
 1. ``recorded_at`` tool param (user/agent override)      -> confidence ``exact``
 2. QuickTime tag ``com.apple.quicktime.creationdate``    -> ``high``
-   (macOS Cmd+Shift+5 writes it, WITH the local tz offset)
+   (WITH the local tz offset; QuickTime Player still writes it, Cmd+Shift+5
+   wrote it before macOS 26 — ReplayKit screen recordings carry only UTC
+   ``creation_time`` and resolve at rung 3)
 3. Container ``creation_time`` tag (usually UTC, no tz)  -> ``medium``
 4. File mtime minus duration (recorders finalize the
    file at recording END)                                -> ``low``

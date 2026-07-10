@@ -87,8 +87,8 @@ the second call on the same bytes returns the stored summary in milliseconds.
 | Rung | Source | Confidence | tz offset |
 |---|---|---|---|
 | 1 | `recorded_at` param | `exact` | from the ISO string (naive → machine-local) |
-| 2 | `com.apple.quicktime.creationdate` | `high` | carried by the tag |
-| 3 | container `creation_time` | `medium` | unknown (UTC instant only) |
+| 2 | `com.apple.quicktime.creationdate` | `high` | carried by the tag (QuickTime Player; pre-macOS-26 ⌘⇧5) |
+| 3 | container `creation_time` | `medium` | unknown (UTC instant only); macOS 26+ ⌘⇧5/ReplayKit lands here |
 | 4 | file mtime − duration | `low` | machine-local |
 | 5 | — | wall_clock = null | — |
 

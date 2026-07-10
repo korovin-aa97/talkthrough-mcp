@@ -124,9 +124,11 @@ Every timestamped result carries both `t_ms` (video-relative) and `t_wall`
 (ISO 8601 real time) once the recording start is known. Resolution ladder:
 
 1. `recorded_at` parameter (agent/user override) → confidence `exact`
-2. QuickTime `com.apple.quicktime.creationdate` tag (macOS ⌘⇧5 writes it, with
-   timezone) → `high`
-3. Container `creation_time` tag (UTC) → `medium`
+2. QuickTime `com.apple.quicktime.creationdate` tag, carries the local
+   timezone (QuickTime Player recordings; ⌘⇧5 wrote it before macOS 26) → `high`
+3. Container `creation_time` tag (UTC) → `medium` — macOS 26+ ⌘⇧5/ReplayKit
+   screen recordings land here (no `creationdate` tag anymore); pass
+   `recorded_at=` when local-tz `t_wall` matters
 4. File mtime minus duration (recorders finalize files at recording END) → `low`
 5. Nothing → tools still work with relative `t_ms` only
 
