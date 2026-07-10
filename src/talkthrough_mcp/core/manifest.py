@@ -1,0 +1,246 @@
+"""Manifest schema ``talkthrough-manifest/v1``: build, save/load, and queries.
+
+The manifest is the single durable artifact of a processed job. Everything
+the lazy retrieval tools serve (transcript slices, frame lookups, search)
+reads from here — the source media is only re-read by ``extract_frame``.
+"""
+
+from __future__ import annotations
+
+import json
+from dataclasses import asdict, dataclass, field
+from pathlib import Path
+from typing import Any
+
+from .frames import Frame
+from .stt import SttSegment
+from .wallclock import WallClock
+
+SCHEMA = "talkthrough-manifest/v1"
+MANIFEST_NAME = "manifest.json"
+FRAMES_DIR_NAME = "frames"
+
+
+@dataclass(frozen=True)
+class MediaMeta:
+    path: str
+    filename: str
+    kind: str  # "video" | "audio"
+    duration_s: float
+    size_bytes: int
+    width: int
+    height: int
+    video_codec: str
+    has_audio: bool
+    has_video: bool
+
+
+@dataclass
+class Transcript:
+    available: bool
+    reason: str
+    language: str | None
+    model: str | None
+    segments: list[SttSegment] = field(default_factory=list)
+
+    def full_text(self) -> str:
+        return " ".join(segment.text for segment in self.segments if segment.text).strip()
+
+
+@dataclass
+class FrameIndex:
+    count: int
+    unique_count: int
+    cap_hit: bool
+    items: list[Frame] = field(default_factory=list)
+
+
+@dataclass(frozen=True)
+class Caps:
+    max_seconds: int
+    max_frames: int
+    scene_threshold: float
+    ocr: bool
+
+
+@dataclass
+class Manifest:
+    schema: str
+    job_id: str
+    created_at: str
+    media: MediaMeta
+    wall_clock: WallClock | None
+    transcript: Transcript
+    frames: FrameIndex
+    caps: Caps
+    tool_versions: dict[str, str]
+
+    def t_wall_iso(self, t_ms: int) -> str | None:
+        return self.wall_clock.t_wall_iso(t_ms) if self.wall_clock else None
+
+    def unique_frames(self) -> list[Frame]:
+        return [frame for frame in self.frames.items if frame.is_unique]
+
+    def to_dict(self) -> dict[str, Any]:
+        payload = asdict(self)
+        payload["wall_clock"] = self.wall_clock.to_dict() if self.wall_clock else None
+        return payload
+
+    @staticmethod
+    def from_dict(payload: dict[str, Any]) -> Manifest:
+        media = MediaMeta(**payload["media"])
+        transcript_raw = dict(payload["transcript"])
+        transcript_raw["segments"] = [
+            SttSegment(**segment) for segment in transcript_raw.get("segments", [])
+        ]
+        frames_raw = dict(payload["frames"])
+        frames_raw["items"] = [Frame(**item) for item in frames_raw.get("items", [])]
+        return Manifest(
+            schema=str(payload["schema"]),
+            job_id=str(payload["job_id"]),
+            created_at=str(payload["created_at"]),
+            media=media,
+            wall_clock=WallClock.from_dict(payload.get("wall_clock")),
+            transcript=Transcript(**transcript_raw),
+            frames=FrameIndex(**frames_raw),
+            caps=Caps(**payload["caps"]),
+            tool_versions={str(k): str(v) for k, v in payload.get("tool_versions", {}).items()},
+        )
+
+
+def save_manifest(manifest: Manifest, job_dir: Path) -> Path:
+    path = job_dir / MANIFEST_NAME
+    path.write_text(
+        json.dumps(manifest.to_dict(), ensure_ascii=False, indent=2), encoding="utf-8"
+    )
+    return path
+
+
+def load_manifest(job_dir: Path) -> Manifest:
+    path = job_dir / MANIFEST_NAME
+    return Manifest.from_dict(json.loads(path.read_text(encoding="utf-8")))
+
+
+# --- transcript formatting -------------------------------------------------
+
+
+def _srt_timestamp(t_ms: int) -> str:
+    hours, rem = divmod(max(0, t_ms), 3_600_000)
+    minutes, rem = divmod(rem, 60_000)
+    seconds, millis = divmod(rem, 1000)
+    return f"{hours:02d}:{minutes:02d}:{seconds:02d},{millis:03d}"
+
+
+def format_srt(segments: list[SttSegment]) -> str:
+    """SubRip text: 1-based sequential index, HH:MM:SS,mmm ranges, blank-line separated."""
+    blocks = [
+        f"{index}\n{_srt_timestamp(seg.t0_ms)} --> {_srt_timestamp(seg.t1_ms)}\n{seg.text}"
+        for index, seg in enumerate(segments, start=1)
+    ]
+    return "\n\n".join(blocks) + ("\n" if blocks else "")
+
+
+def slice_segments(
+    segments: list[SttSegment], start_ms: int | None, end_ms: int | None
+) -> list[SttSegment]:
+    """Segments overlapping [start_ms, end_ms] (inclusive bounds, open-ended when None)."""
+    lo = start_ms if start_ms is not None else 0
+    hi = end_ms if end_ms is not None else None
+    picked = []
+    for segment in segments:
+        if segment.t1_ms < lo:
+            continue
+        if hi is not None and segment.t0_ms > hi:
+            continue
+        picked.append(segment)
+    return picked
+
+
+# --- frame queries ----------------------------------------------------------
+
+
+def _served_frames(manifest: Manifest, include_duplicates: bool) -> list[Frame]:
+    return manifest.frames.items if include_duplicates else manifest.unique_frames()
+
+
+def nearest_frames(
+    manifest: Manifest, at_ms: int, count: int, *, include_duplicates: bool = False
+) -> list[Frame]:
+    """The ``count`` frames closest to ``at_ms``, returned in time order."""
+    pool = _served_frames(manifest, include_duplicates)
+    closest = sorted(pool, key=lambda frame: (abs(frame.ms - at_ms), frame.ms))[:count]
+    return sorted(closest, key=lambda frame: frame.ms)
+
+
+def frames_in_range(
+    manifest: Manifest,
+    start_ms: int,
+    end_ms: int,
+    max_count: int,
+    *,
+    include_duplicates: bool = False,
+) -> list[Frame]:
+    """Frames within [start_ms, end_ms], evenly thinned down to ``max_count``."""
+    pool = [f for f in _served_frames(manifest, include_duplicates) if start_ms <= f.ms <= end_ms]
+    if len(pool) <= max_count:
+        return pool
+    if max_count <= 1:
+        return [pool[len(pool) // 2]]
+    step = (len(pool) - 1) / (max_count - 1)
+    indices = sorted({round(i * step) for i in range(max_count)})
+    return [pool[i] for i in indices]
+
+
+def nearest_frame_ms(manifest: Manifest, at_ms: int) -> int | None:
+    frames = nearest_frames(manifest, at_ms, 1)
+    return frames[0].ms if frames else None
+
+
+# --- search -----------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class SearchHit:
+    source: str  # "transcript" | "ocr"
+    t_ms: int
+    t_wall: str | None
+    text: str
+    seq: int | None  # transcript segment seq (transcript hits)
+    frame_ms: int | None  # frame position (ocr hits)
+    nearest_frame_ms: int | None
+
+
+def search_manifest(manifest: Manifest, query: str) -> list[SearchHit]:
+    """Case-insensitive substring match over transcript segments AND frame OCR text."""
+    needle = query.strip().lower()
+    hits: list[SearchHit] = []
+    if not needle:
+        return hits
+    for segment in manifest.transcript.segments:
+        if needle in segment.text.lower():
+            hits.append(
+                SearchHit(
+                    source="transcript",
+                    t_ms=segment.t0_ms,
+                    t_wall=manifest.t_wall_iso(segment.t0_ms),
+                    text=segment.text,
+                    seq=segment.seq,
+                    frame_ms=None,
+                    nearest_frame_ms=nearest_frame_ms(manifest, segment.t0_ms),
+                )
+            )
+    for frame in manifest.frames.items:
+        if frame.ocr_text and needle in frame.ocr_text.lower():
+            hits.append(
+                SearchHit(
+                    source="ocr",
+                    t_ms=frame.ms,
+                    t_wall=manifest.t_wall_iso(frame.ms),
+                    text=frame.ocr_text,
+                    seq=None,
+                    frame_ms=frame.ms,
+                    nearest_frame_ms=frame.ms,
+                )
+            )
+    hits.sort(key=lambda hit: hit.t_ms)
+    return hits

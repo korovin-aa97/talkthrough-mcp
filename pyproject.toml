@@ -57,8 +57,14 @@ src = ["src", "tests"]
 [tool.ruff.lint]
 select = ["E", "F", "W", "I", "UP", "B", "SIM", "RUF"]
 
+[tool.ruff.lint.per-file-ignores]
+# captured ffmpeg stderr sample lines are long by nature
+"tests/unit/test_frames.py" = ["E501"]
+
 [tool.mypy]
-python_version = "3.11"
+# 3.12 (the pinned dev/CI interpreter): transitive numpy stubs use py3.12
+# `type` statements; ruff target-version py311 keeps the syntax floor honest.
+python_version = "3.12"
 strict = true
 warn_unreachable = true
 show_error_codes = true
@@ -74,6 +80,7 @@ ignore_missing_imports = true
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+pythonpath = ["."]
 timeout = 900
 addopts = "-ra"
 
