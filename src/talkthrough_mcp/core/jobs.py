@@ -76,6 +76,9 @@ def job_lock(job_id: str, *, wait_seconds: int = 600) -> Iterator[None]:
     try:
         import fcntl
     except ImportError:  # pragma: no cover - Windows best-effort
+        # No flock semantics, but keep the on-disk layout identical: the
+        # job.lock marker exists on every platform.
+        lock_path.touch(exist_ok=True)
         yield
         return
     handle = lock_path.open("w")

@@ -7,12 +7,16 @@ from pathlib import Path
 
 from tests.conftest import make_manifest
 
+from talkthrough_mcp.core.frames import Frame
 from talkthrough_mcp.core.manifest import (
+    FrameIndex,
     Manifest,
     format_srt,
     frames_in_range,
     load_manifest,
+    nearest_frame_ms,
     nearest_frames,
+    representative_frame,
     save_manifest,
     search_manifest,
     slice_segments,
@@ -104,3 +108,40 @@ def test_from_dict_tolerates_extra_free_form_versions(tmp_path: Path) -> None:
     payload["tool_versions"]["ffmpeg"] = "ffmpeg version 7.0"
     rebuilt = Manifest.from_dict(payload)
     assert rebuilt.tool_versions["ffmpeg"] == "ffmpeg version 7.0"
+
+
+def _long_static_manifest() -> Manifest:
+    """One keyframe, a long deduplicated stretch, then a scene change."""
+    manifest = make_manifest(wall_clock=CLOCK)
+    frames = [Frame(ms=1000, file="t00001000.jpg", duplicate_of=None, ocr_text="STATE A")]
+    frames += [
+        Frame(ms=ms, file=f"t{ms:08d}.jpg", duplicate_of=1000, ocr_text=None)
+        for ms in range(2000, 11000, 1000)
+    ]
+    frames.append(Frame(ms=11000, file="t00011000.jpg", duplicate_of=None, ocr_text="STATE B"))
+    manifest.frames = FrameIndex(count=len(frames), unique_count=2, cap_hit=False, items=frames)
+    return manifest
+
+
+def test_representative_frame_resolves_duplicates_instead_of_jumping_scenes() -> None:
+    manifest = _long_static_manifest()
+    # At 9.5s the time-nearest UNIQUE frame is the next scene (11s), but the
+    # screen still showed the 1s state — frame@9000 is duplicate_of=1000.
+    assert nearest_frames(manifest, 9500, 1)[0].ms == 11000  # the old, misleading pick
+    representative = representative_frame(manifest, 9500)
+    assert representative is not None
+    assert representative.ms == 1000
+    assert nearest_frame_ms(manifest, 9500) == 1000  # search hits use this
+
+
+def test_representative_frame_keeps_true_nearest_at_scene_boundary() -> None:
+    manifest = _long_static_manifest()
+    representative = representative_frame(manifest, 10800)
+    assert representative is not None
+    assert representative.ms == 11000
+
+
+def test_representative_frame_none_for_audio_only() -> None:
+    manifest = make_manifest(kind="audio")
+    assert representative_frame(manifest, 1000) is None
+    assert nearest_frame_ms(manifest, 1000) is None

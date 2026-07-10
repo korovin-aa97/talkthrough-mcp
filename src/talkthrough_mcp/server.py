@@ -29,6 +29,7 @@ from .core.manifest import (
     format_srt,
     frames_in_range,
     nearest_frames,
+    representative_frame,
     search_manifest,
     slice_segments,
 )
@@ -247,10 +248,18 @@ def get_moment(job_id: str, start_ms: int, end_ms: int) -> list[str | Image]:
     manifest = _load(job_id)
     segments = slice_segments(manifest.transcript.segments, start_ms, end_ms)
     picked = []
+    fallback_note: str | None = None
     if manifest.media.has_video:
         picked = frames_in_range(manifest, start_ms, end_ms, MOMENT_MAX_FRAMES)
         if not picked:
-            picked = nearest_frames(manifest, (start_ms + end_ms) // 2, 1)
+            rep = representative_frame(manifest, (start_ms + end_ms) // 2)
+            if rep is not None:
+                picked = [rep]
+                fallback_note = (
+                    f"no unique keyframe inside the range — serving t={rep.ms}ms, the "
+                    "keyframe representing the on-screen state here (long static "
+                    "stretches deduplicate to one keyframe)"
+                )
     payload: dict[str, Any] = {
         "job_id": job_id,
         "range": {
@@ -276,6 +285,8 @@ def get_moment(job_id: str, start_ms: int, end_ms: int) -> list[str | Image]:
     }
     if not manifest.media.has_video:
         payload["note"] = "audio-only job: transcript evidence only, no frames exist"
+    elif fallback_note:
+        payload["note"] = fallback_note
     directory = jobs.frames_dir(job_id)
     content: list[str | Image] = [_json_block(payload)]
     content.extend(Image(path=directory / frame.file) for frame in picked)
