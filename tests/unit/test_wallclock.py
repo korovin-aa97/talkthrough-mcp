@@ -110,6 +110,19 @@ def test_nothing_resolves_to_none() -> None:
     assert resolve() is None
 
 
+def test_captured_ffprobe_json_fixture_resolves_via_metadata_rung() -> None:
+    import json
+    from pathlib import Path
+
+    fixture = Path(__file__).parents[1] / "fixtures" / "probe" / "talkthrough-demo.format.json"
+    payload = json.loads(fixture.read_text(encoding="utf-8"))
+    tags = payload["format"]["tags"]
+    clock = resolve(format_tags=tags, mtime_epoch=1_800_000_000.0)
+    assert clock is not None
+    assert clock.source == SOURCE_METADATA
+    assert clock.start_utc == datetime(2026, 7, 10, 10, 0, 0, tzinfo=UTC)
+
+
 def test_t_wall_iso_utc_rendering() -> None:
     clock = WallClock(
         start_utc=datetime(2026, 7, 10, 10, 0, 0, tzinfo=UTC),

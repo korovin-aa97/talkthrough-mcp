@@ -1,0 +1,22 @@
+{
+    "format": {
+        "filename": "tests/fixtures/talkthrough-demo.mp4",
+        "nb_streams": 2,
+        "nb_programs": 0,
+        "nb_stream_groups": 0,
+        "format_name": "mov,mp4,m4a,3gp,3g2,mj2",
+        "format_long_name": "QuickTime / MOV",
+        "start_time": "0.000000",
+        "duration": "14.661995",
+        "size": "247155",
+        "bit_rate": "134854",
+        "probe_score": 100,
+        "tags": {
+            "major_brand": "isom",
+            "minor_version": "512",
+            "compatible_brands": "isomiso2avc1mp41",
+            "creation_time": "2026-07-10T10:00:00.000000Z",
+            "encoder": "Lavf61.1.100"
+        }
+    }
+}
