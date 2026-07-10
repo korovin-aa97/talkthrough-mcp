@@ -1,0 +1,18 @@
+# talkthrough-mcp
+
+> Local-first MCP server that turns narrated screen recordings (or any
+> video/audio file) into agent-ready structured data: timestamped transcript
+> segments, scene-change keyframes, OCR text, and wall-clock anchoring, with
+> lazy token-budgeted retrieval tools. No LLM inside the server; recordings
+> never leave the machine.
+
+## Docs
+
+- [README](README.md): positioning, quickstart per client, tool reference,
+  wall-clock ladder, configuration, CLI
+- [Install guide for agents](llms-install.md): machine-followable setup steps
+- [Agent skill](skills/talkthrough/SKILL.md): how to use the tools well
+- [Design](docs/DESIGN.md): pipeline, manifest schema, token-budget rules
+- [Findings contract](examples/output-contract.schema.json): triage output JSON Schema
+- [Workflow prompts](examples/prompts/): the 5 server prompts as plain files
+- [Contributing](CONTRIBUTING.md): dev setup and gates

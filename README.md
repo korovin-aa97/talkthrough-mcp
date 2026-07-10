@@ -1,7 +1,14 @@
 # talkthrough-mcp
 
+[![ci](https://github.com/korovin-aa97/talkthrough-mcp/actions/workflows/ci.yml/badge.svg)](https://github.com/korovin-aa97/talkthrough-mcp/actions/workflows/ci.yml)
+[![license: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+[![python](https://img.shields.io/badge/python-3.11%E2%80%933.13-blue.svg)](pyproject.toml)
+<!-- uncomment at PyPI publish: [![PyPI](https://img.shields.io/pypi/v/talkthrough-mcp.svg)](https://pypi.org/project/talkthrough-mcp/) -->
+
 **Feedback ingestion for AI agents.** Record your screen and talk; your agent
 does the rest — files the bugs, writes the spec, builds the backlog.
+
+![talkthrough demo: process a narrated recording, then query it lazily](assets/demo.gif)
 
 `talkthrough-mcp` is a local-first MCP server that turns a narrated screen
 recording (or any video/audio file) into agent-ready structured data:
@@ -27,7 +34,15 @@ OCR is pip-only, and whisper models download themselves on first use.
 
 ```bash
 # private-phase install (needs git access to the repo):
-claude mcp add talkthrough -- uvx --from git+https://github.com/korovin-aa97/talkthrough-mcp talkthrough-mcp
+claude mcp add -s user talkthrough -- uvx --from git+https://github.com/korovin-aa97/talkthrough-mcp talkthrough-mcp
+```
+
+Or install the full plugin (server + the five workflow commands + the triage
+agent + an agent skill):
+
+```
+/plugin marketplace add korovin-aa97/talkthrough-mcp
+/plugin install talkthrough@talkthrough
 ```
 
 ### Claude Desktop
@@ -52,6 +67,14 @@ claude mcp add talkthrough -- uvx --from git+https://github.com/korovin-aa97/tal
 ### Cursor
 
 `~/.cursor/mcp.json` — same `command`/`args` block as Claude Desktop.
+
+### Everything else that speaks MCP
+
+| Client | How |
+|---|---|
+| Cline / Roo Code | point the agent at [`llms-install.md`](llms-install.md) — it self-installs; or paste the JSON block above into `cline_mcp_settings.json` |
+| Codex CLI, Gemini CLI, Goose, … | any MCP stdio client: command `uvx`, args as in the JSON block above |
+| Claude Desktop (one-click) | `.mcpb` desktop extension — planned, see [`integrations/mcpb/`](integrations/mcpb/) |
 
 ### Local checkout (development)
 
@@ -161,6 +184,27 @@ progress notifications, and the CLI prints stage lines.
 Video: `.mov` `.mp4` `.webm` `.mkv` — audio-only: `.m4a` `.mp3` `.wav` `.ogg`
 `.flac` (transcript tools only; frame tools explain why they're unavailable).
 Local files only.
+
+## How it compares
+
+| | talkthrough | cloud recorder SaaS | meeting notetakers | typical video-analyzer MCPs |
+|---|---|---|---|---|
+| Runs fully locally | ✅ | ❌ | ❌ | varies |
+| Any local video/audio file | ✅ | browser/app captures | meetings only | ✅ |
+| Wall-clock anchoring (log correlation) | ✅ | ❌ | ❌ | ❌ |
+| Ships agent workflows (prompts, skill, findings contract) | ✅ | ❌ | ❌ | ❌ |
+| OCR of on-screen text, searchable | ✅ | some | ❌ | rare |
+
+## For agents & tooling
+
+Machine-readable entry points, so AI agents can install and use this server
+without a human reading docs:
+
+- [`llms-install.md`](llms-install.md) — step-by-step install instructions for agents
+- [`llms.txt`](llms.txt) — index of the documentation
+- [`skills/talkthrough/SKILL.md`](skills/talkthrough/SKILL.md) — an [Agent Skill](https://agentskills.io) teaching the tool workflow (works in Claude Code, Codex CLI, Cursor, and other SKILL.md-compatible tools)
+- [`server.json`](server.json) — MCP registry manifest
+- [`.claude-plugin/`](.claude-plugin/) + [`commands/`](commands/) + [`agents/`](agents/) — the Claude Code plugin (drift-tested against the server prompts)
 
 ## Roadmap (not in v1)
 

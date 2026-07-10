@@ -1,0 +1,18 @@
+{
+  "name": "talkthrough",
+  "owner": {
+    "name": "korovin-aa97",
+    "url": "https://github.com/korovin-aa97"
+  },
+  "metadata": {
+    "description": "Marketplace for the talkthrough plugin: narrated screen recordings in, agent-ready evidence out.",
+    "version": "0.1.0"
+  },
+  "plugins": [
+    {
+      "name": "talkthrough",
+      "source": "./",
+      "description": "Turn narrated screen recordings into filed bugs, specs, backlogs and meeting actions — local Whisper + keyframes + OCR + wall-clock via the talkthrough MCP server."
+    }
+  ]
+}

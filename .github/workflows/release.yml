@@ -1,0 +1,56 @@
+# Release: build + publish to PyPI (Trusted Publishing) + GitHub Release.
+#
+# Triggered ONLY by pushing a version tag (v0.1.0, …). Nothing runs while the
+# repo has no tags, so committing this workflow is inert until flip day.
+#
+# ONE-TIME MANUAL SETUP before the first tag (flip day):
+#   pypi.org → account → Publishing → add a "Trusted Publisher":
+#     project: talkthrough-mcp, owner: korovin-aa97,
+#     repository: talkthrough-mcp, workflow: release.yml, environment: pypi
+# No API tokens are stored anywhere.
+
+name: release
+
+on:
+  push:
+    tags: ["v*"]
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+      - run: uv build
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dist
+          path: dist/
+
+  publish-pypi:
+    needs: build
+    runs-on: ubuntu-latest
+    environment: pypi
+    permissions:
+      id-token: write # OIDC for PyPI Trusted Publishing
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: dist
+          path: dist/
+      - uses: pypa/gh-action-pypi-publish@release/v1
+
+  github-release:
+    needs: publish-pypi
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: dist
+          path: dist/
+      - run: gh release create "$GITHUB_REF_NAME" dist/* --generate-notes
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}

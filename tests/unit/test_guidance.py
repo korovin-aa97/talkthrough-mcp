@@ -88,3 +88,24 @@ def test_example_prompt_files_do_not_drift(name: str) -> None:
     assert path.read_text(encoding="utf-8") == guidance.render_prompt(name, "<job_id>"), (
         f"{path} drifted from guidance.PROMPT_TEMPLATES[{name!r}] — regenerate it"
     )
+
+
+@pytest.mark.parametrize("name", guidance.PROMPT_NAMES)
+def test_plugin_command_files_do_not_drift(name: str) -> None:
+    """The Claude Code plugin commands render from the same templates."""
+    path = REPO_ROOT / "commands" / f"{name}.md"
+    assert path.is_file(), f"missing {path} — plugin commands must mirror server prompts"
+    content = path.read_text(encoding="utf-8")
+    assert content.startswith("---\n"), f"{path}: missing frontmatter"
+    assert guidance.render_prompt(name, "$ARGUMENTS") in content, (
+        f"{path} drifted from guidance.PROMPT_TEMPLATES[{name!r}] — regenerate it"
+    )
+
+
+def test_plugin_agent_is_identical_to_example_agent() -> None:
+    example = (REPO_ROOT / "examples" / "agents" / "feedback-triage.md").read_text(encoding="utf-8")
+    plugin = (REPO_ROOT / "agents" / "feedback-triage.md").read_text(encoding="utf-8")
+    assert plugin == example, (
+        "agents/feedback-triage.md (plugin) drifted from examples/agents/feedback-triage.md — "
+        "they must stay byte-identical"
+    )

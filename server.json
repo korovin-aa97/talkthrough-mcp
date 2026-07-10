@@ -1,0 +1,42 @@
+{
+  "$schema": "https://static.modelcontextprotocol.io/schemas/2025-09-29/server.schema.json",
+  "name": "io.github.korovin-aa97/talkthrough-mcp",
+  "description": "Turn narrated screen recordings into agent-ready data: local Whisper transcript, scene keyframes, OCR text, wall-clock anchoring. Lazy retrieval tools keep long videos out of the context window.",
+  "repository": {
+    "url": "https://github.com/korovin-aa97/talkthrough-mcp",
+    "source": "github"
+  },
+  "version": "0.1.0",
+  "packages": [
+    {
+      "registryType": "pypi",
+      "registryBaseUrl": "https://pypi.org",
+      "identifier": "talkthrough-mcp",
+      "version": "0.1.0",
+      "runtimeHint": "uvx",
+      "transport": {
+        "type": "stdio"
+      },
+      "environmentVariables": [
+        {
+          "name": "TALKTHROUGH_WHISPER_MODEL",
+          "description": "Whisper model name (tiny|base|small|medium|large-v3). Default: small. Use medium/large-v3 for non-English narration.",
+          "isRequired": false,
+          "isSecret": false
+        },
+        {
+          "name": "TALKTHROUGH_OCR",
+          "description": "Set to 'off' to disable OCR of keyframes. Default: on.",
+          "isRequired": false,
+          "isSecret": false
+        },
+        {
+          "name": "TALKTHROUGH_HOME",
+          "description": "Job store root. Default: ~/.talkthrough",
+          "isRequired": false,
+          "isSecret": false
+        }
+      ]
+    }
+  ]
+}
