@@ -47,5 +47,6 @@ into your planning tool.
   by id — the store is content-addressed.
 - Domain jargon: pass `vocabulary="YourProduct, PgBouncer, OKR"` to
   `process_media` so product names survive transcription.
-- Non-English narration: set `TALKTHROUGH_WHISPER_MODEL=medium` (or
-  `large-v3`) in the server's environment.
+- Non-English narration: auto-detected; for best quality pass
+  `model="large-v3-turbo"` to `process_media` (or set it as
+  `TALKTHROUGH_WHISPER_MODEL`) — see README → Languages.

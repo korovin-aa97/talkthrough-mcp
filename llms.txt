@@ -16,6 +16,8 @@
   OpenCode, Goose, Copilot CLI, Windsurf, Zed
 - [Agent skill](.agents/skills/talkthrough/SKILL.md): how to use the tools well
 - [Agent contributor guide](AGENTS.md): working on this repo with a coding agent
+- [Troubleshooting](docs/TROUBLESHOOTING.md): first-run downloads, client
+  wiring, language/OCR/wall-clock fixes, data removal
 - [Design](docs/DESIGN.md): pipeline, manifest schema, token-budget rules
 - [Findings contract](examples/output-contract.schema.json): triage output JSON Schema
 - [Workflow prompts](examples/prompts/): the 5 server prompts as plain files

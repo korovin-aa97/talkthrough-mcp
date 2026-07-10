@@ -20,13 +20,19 @@
       "environmentVariables": [
         {
           "name": "TALKTHROUGH_WHISPER_MODEL",
-          "description": "Whisper model name (tiny|base|small|medium|large-v3). Default: small. Use medium/large-v3 for non-English narration.",
+          "description": "Whisper model (tiny|base|small|medium|large-v3|large-v3-turbo). Default: small. Use large-v3-turbo for non-English narration; the process_media `model` param overrides per call.",
           "isRequired": false,
           "isSecret": false
         },
         {
           "name": "TALKTHROUGH_OCR",
           "description": "Set to 'off' to disable OCR of keyframes. Default: on.",
+          "isRequired": false,
+          "isSecret": false
+        },
+        {
+          "name": "TALKTHROUGH_OCR_LANG",
+          "description": "Recognition script for on-screen text: a language code (ru, ja, ko, ar, hi, ...) or a RapidOCR pack name (eslav, cyrillic, ...). Default: Latin+Chinese.",
           "isRequired": false,
           "isSecret": false
         },

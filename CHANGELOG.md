@@ -6,9 +6,8 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
-## [0.1.0] — 2026-07-10
-
-First working version (private phase).
+Everything below ships as `v0.1.0` at the first public release (this section
+is renamed to `[0.1.0] — <date>` when the tag is cut).
 
 ### Added
 
@@ -23,14 +22,30 @@ First working version (private phase).
   output.
 - 7 MCP tools (`process_media`, `get_transcript`, `get_frames`, `get_moment`,
   `search`, `extract_frame`, `list_jobs`) with 10-15 usage examples embedded
-  in every description (unit-gated).
+  in every description (unit-gated); `get_moment`/`search` pick a
+  window-representative frame, not the nearest cross-scene keyframe.
 - 5 server prompts (`triage-recording`, `spec-from-workshop`,
   `backlog-from-demo`, `meeting-actions`, `correlate-with-logs`), mirrored in
   `examples/prompts/` with a no-drift test.
-- CLI: `serve` (stdio MCP, default) / `process` / `gc`.
+- Multilingual support: language auto-detection with `language_probability`
+  in manifest and summary; per-call `model=` parameter validated against the
+  faster-whisper alias list (incl. `large-v3-turbo`); prompts mandate digests
+  in the narrator's language with verbatim quotes; on-screen-text OCR script
+  packs via `TALKTHROUGH_OCR_LANG` / `TALKTHROUGH_OCR_PARAMS`.
+- CLI: `serve` (stdio MCP, default) / `process [--json] [--model]` / `gc`.
 - ffmpeg resolution ladder with pip-only `static-ffmpeg` fallback; OCR
   gracefully disables (`TALKTHROUGH_OCR=off` or import failure).
-- Tests: 61 unit / 14 integration (committed synthetic fixtures) / 1 e2e over
-  real MCP stdio; CI on ubuntu (full) + macos (lint+unit).
-- Examples: genericized triage agent, findings contract JSON Schema,
-  composition patterns.
+- Engine-agnostic integrations: `integrations/<engine>/` for 12 MCP clients,
+  a full Claude Code plugin, the cross-engine agent skill
+  (`.agents/skills/talkthrough/`), `AGENTS.md`, `llms-install.md`, `llms.txt`,
+  and the MCP-registry `server.json` — every artifact generated from one
+  source of truth (`scripts/gen_integrations.py`) and byte-pinned by tests,
+  including the README install matrix.
+- Examples: genericized triage agent, findings-contract JSON Schema,
+  composition patterns, GitHub-issues recipe.
+- Docs: FAQ + Limitations in README, `docs/TROUBLESHOOTING.md`,
+  `docs/DESIGN.md`; PEP 561 `py.typed` marker.
+- CI: ubuntu (lint, mypy strict, unit + integration + e2e over committed
+  synthetic EN/RU fixtures) + macos (lint, unit) + windows best-effort smoke;
+  actions pinned by commit SHA; release workflow via PyPI Trusted Publishing
+  (inert until the first `v*` tag).

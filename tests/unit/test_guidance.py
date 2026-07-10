@@ -92,8 +92,8 @@ def test_generated_artifacts_do_not_drift() -> None:
 
     Covers examples/prompts, the Claude Code plugin (commands, .mcp.json,
     skill + agent mirrors), every integrations/<engine>/ doc, the ClawHub
-    skill, and the repo-root dev .mcp.json. Regenerate with:
-    `uv run python scripts/gen_integrations.py`.
+    skill, the MCP-registry server.json, and the repo-root dev .mcp.json.
+    Regenerate with: `uv run python scripts/gen_integrations.py`.
     """
     artifacts = _generated_artifacts()
     assert len(artifacts) >= 20
@@ -104,6 +104,36 @@ def test_generated_artifacts_do_not_drift() -> None:
             f"{rel_path} drifted from scripts/gen_integrations.py — regenerate, "
             "or move your edit into the generator/canonical source"
         )
+
+
+def test_readme_install_region_is_generated() -> None:
+    """The marked install block in README.md is spliced by the generator (no drift)."""
+    from scripts.gen_integrations import spliced_readme
+
+    text = (REPO_ROOT / "README.md").read_text(encoding="utf-8")
+    assert text == spliced_readme(text), (
+        "README.md install region drifted from scripts/gen_integrations.py — regenerate"
+    )
+
+
+def test_install_buttons_encode_the_pypi_command() -> None:
+    """Flip-day deeplink buttons (INSTALL_PHASE='pypi') round-trip to `uvx talkthrough-mcp`."""
+    import base64
+    import json
+    import re
+    import urllib.parse
+
+    from scripts.gen_integrations import _install_buttons
+
+    block = _install_buttons(["talkthrough-mcp"])
+    cursor = re.search(r"cursor\.com/en/install-mcp\?name=talkthrough&config=([^)]+)\)", block)
+    assert cursor is not None
+    decoded = json.loads(base64.b64decode(urllib.parse.unquote(cursor.group(1))))
+    assert decoded == {"command": "uvx", "args": ["talkthrough-mcp"]}
+    vscode = re.search(r"vscode\.dev/redirect/mcp/install\?name=talkthrough&config=([^)&]+)", block)
+    assert vscode is not None
+    assert json.loads(urllib.parse.unquote(vscode.group(1)))["args"] == ["talkthrough-mcp"]
+    assert "quality=insiders" in block
 
 
 def test_generator_covers_every_engine_folder() -> None:

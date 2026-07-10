@@ -11,6 +11,7 @@ license-files = ["LICENSE"]
 requires-python = ">=3.11,<3.14"
 keywords = [
     "mcp",
+    "mcp server",
     "model-context-protocol",
     "screen-recording",
     "video",
@@ -30,6 +31,7 @@ classifiers = [
     "Programming Language :: Python :: 3.13",
     "Topic :: Multimedia :: Video",
     "Topic :: Software Development :: Quality Assurance",
+    "Typing :: Typed",
 ]
 dependencies = [
     "faster-whisper>=1.2.1",
@@ -40,7 +42,10 @@ dependencies = [
 ]
 
 [project.urls]
+Homepage = "https://github.com/korovin-aa97/talkthrough-mcp"
 Repository = "https://github.com/korovin-aa97/talkthrough-mcp"
+Issues = "https://github.com/korovin-aa97/talkthrough-mcp/issues"
+Changelog = "https://github.com/korovin-aa97/talkthrough-mcp/blob/main/CHANGELOG.md"
 
 [project.scripts]
 talkthrough-mcp = "talkthrough_mcp.cli:main"
