@@ -1,0 +1,86 @@
+[project]
+name = "talkthrough-mcp"
+version = "0.1.0"
+description = "Local-first MCP server that turns narrated screen recordings into agent-ready structured data: timestamped transcript, scene keyframes, OCR text, and wall-clock anchoring."
+readme = "README.md"
+authors = [
+    { name = "korovin-aa97", email = "korovin.aa97@gmail.com" }
+]
+license = "MIT"
+license-files = ["LICENSE"]
+requires-python = ">=3.11,<3.14"
+keywords = [
+    "mcp",
+    "model-context-protocol",
+    "screen-recording",
+    "video",
+    "transcription",
+    "whisper",
+    "ocr",
+    "feedback",
+]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "Operating System :: MacOS",
+    "Operating System :: POSIX :: Linux",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Multimedia :: Video",
+    "Topic :: Software Development :: Quality Assurance",
+]
+dependencies = [
+    "faster-whisper>=1.2.1",
+    "mcp>=1.28.1",
+    "pillow>=12.3.0",
+    "rapidocr>=3.9.1",
+    "static-ffmpeg>=3.0",
+]
+
+[project.urls]
+Repository = "https://github.com/korovin-aa97/talkthrough-mcp"
+
+[project.scripts]
+talkthrough-mcp = "talkthrough_mcp.cli:main"
+
+[build-system]
+requires = ["uv_build>=0.11.2,<0.12.0"]
+build-backend = "uv_build"
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+src = ["src", "tests"]
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "UP", "B", "SIM", "RUF"]
+
+[tool.mypy]
+python_version = "3.11"
+strict = true
+warn_unreachable = true
+show_error_codes = true
+
+[[tool.mypy.overrides]]
+module = [
+    "faster_whisper.*",
+    "static_ffmpeg.*",
+    "rapidocr.*",
+    "rapidocr_onnxruntime.*",
+]
+ignore_missing_imports = true
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+timeout = 900
+addopts = "-ra"
+
+[dependency-groups]
+dev = [
+    "mypy>=2.2.0",
+    "pytest>=9.1.1",
+    "pytest-timeout>=2.4.0",
+    "ruff>=0.15.21",
+]

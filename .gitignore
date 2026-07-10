@@ -1,0 +1,20 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+build/
+dist/
+.venv/
+.mypy_cache/
+.ruff_cache/
+.pytest_cache/
+.coverage
+
+# talkthrough job store (never commit processed recordings)
+.talkthrough/
+
+# fixture build intermediates (the two committed fixture files stay tracked)
+tests/fixtures/_build/
+
+# OS noise
+.DS_Store
