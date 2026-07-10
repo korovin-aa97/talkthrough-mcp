@@ -1,0 +1,92 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "talkthrough findings contract",
+  "description": "Output contract for recording triage (used by the triage-recording prompt and the example triage agent). Rule: low STT/vision confidence means route=question with a concrete question - never a silent guess.",
+  "type": "object",
+  "required": ["findings", "digest"],
+  "properties": {
+    "findings": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/finding" }
+    },
+    "digest": {
+      "type": "string",
+      "description": "Numbered one-line-per-finding summary the recording author can answer with e.g. '1,3-4'."
+    },
+    "key_frames": {
+      "type": "array",
+      "items": { "type": "string" },
+      "description": "2-3 frame refs that best show the problems."
+    }
+  },
+  "$defs": {
+    "finding": {
+      "type": "object",
+      "required": [
+        "title",
+        "quote",
+        "t_ms",
+        "observed",
+        "expected",
+        "acceptance_criteria",
+        "verify_via",
+        "route",
+        "severity",
+        "confidence"
+      ],
+      "properties": {
+        "title": { "type": "string" },
+        "quote": {
+          "type": "string",
+          "description": "The narrator's exact words from the transcript segment."
+        },
+        "t_ms": { "type": "integer", "minimum": 0 },
+        "t_wall": {
+          "type": ["string", "null"],
+          "description": "ISO 8601 wall-clock time; null when the recording start is unknown."
+        },
+        "frame_refs": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "Frame files actually inspected (empty for audio-only jobs)."
+        },
+        "observed": {
+          "type": "string",
+          "description": "What the frames/OCR actually show - from the pixels, never from imagination."
+        },
+        "expected": { "type": "string" },
+        "acceptance_criteria": {
+          "type": "array",
+          "items": { "type": "string" },
+          "minItems": 1
+        },
+        "verify_via": {
+          "type": "string",
+          "description": "The exact flow to reproduce/verify: which screen, which actions, which visible outcome."
+        },
+        "route": { "enum": ["bug", "feature", "question"] },
+        "severity": {
+          "enum": ["P1", "P2", "P3"],
+          "description": "P1 when the narrator says the flow is broken/blocked; P2 default; P3 polish."
+        },
+        "confidence": { "enum": ["high", "medium", "low"] },
+        "question": {
+          "type": "string",
+          "description": "Required when route=question: the concrete question for the recording author."
+        }
+      },
+      "allOf": [
+        {
+          "if": { "properties": { "route": { "const": "question" } } },
+          "then": { "required": ["question"] }
+        },
+        {
+          "if": { "properties": { "confidence": { "const": "low" } } },
+          "then": {
+            "properties": { "route": { "const": "question" } }
+          }
+        }
+      ]
+    }
+  }
+}
