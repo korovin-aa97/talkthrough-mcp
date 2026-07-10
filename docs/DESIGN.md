@@ -121,9 +121,11 @@ Models use tools far better when the server ships usage guidance:
    param combos, agent intents mapped to the right call, edge cases
    (audio-only, `wall_clock=null`, truncation continuation), and
    anti-examples redirecting to the better tool.
-2. Five `@mcp.prompt()` workflow prompts mirror `examples/prompts/*.md` —
-   both render from the same templates in `guidance.py`; a unit test pins
-   file content to the templates so they cannot drift.
+2. Five `@mcp.prompt()` workflow prompts mirror `examples/prompts/*.md` and
+   the Claude Code plugin commands — everything renders from the same
+   templates in `guidance.py` via `scripts/gen_integrations.py`, which also
+   emits every `integrations/<engine>/` adapter; a unit test byte-pins all
+   generated files so they cannot drift.
 
 ## Testing strategy
 

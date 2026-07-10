@@ -63,6 +63,8 @@ select = ["E", "F", "W", "I", "UP", "B", "SIM", "RUF"]
 # tool-description example one-liners are allowed up to 120 chars by the
 # guidance contract (enforced in tests/unit/test_guidance.py)
 "src/talkthrough_mcp/guidance.py" = ["E501"]
+# generator templates carry one-line skill descriptions and markdown tables
+"scripts/gen_integrations.py" = ["E501"]
 
 [tool.mypy]
 # 3.12 (the pinned dev/CI interpreter): transitive numpy stubs use py3.12

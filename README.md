@@ -70,11 +70,12 @@ agent + an agent skill):
 
 ### Everything else that speaks MCP
 
-| Client | How |
-|---|---|
-| Cline / Roo Code | point the agent at [`llms-install.md`](llms-install.md) — it self-installs; or paste the JSON block above into `cline_mcp_settings.json` |
-| Codex CLI, Gemini CLI, Goose, … | any MCP stdio client: command `uvx`, args as in the JSON block above |
-| Claude Desktop (one-click) | `.mcpb` desktop extension — planned, see [`integrations/mcpb/`](integrations/mcpb/) |
+Per-engine setup folders with exact config snippets live in
+[`integrations/`](integrations/): **Codex CLI · OpenClaw · Gemini CLI ·
+Cursor · Cline/Roo · OpenCode · Goose · Copilot CLI · Windsurf · Zed** —
+plus the Claude Code plugin and a Claude Desktop `.mcpb` draft. Any other
+MCP stdio client works with the same `uvx` command. Agents can self-install
+via [`llms-install.md`](llms-install.md).
 
 ### Local checkout (development)
 
@@ -202,9 +203,10 @@ without a human reading docs:
 
 - [`llms-install.md`](llms-install.md) — step-by-step install instructions for agents
 - [`llms.txt`](llms.txt) — index of the documentation
-- [`skills/talkthrough/SKILL.md`](skills/talkthrough/SKILL.md) — an [Agent Skill](https://agentskills.io) teaching the tool workflow (works in Claude Code, Codex CLI, Cursor, and other SKILL.md-compatible tools)
+- [`.agents/skills/talkthrough/SKILL.md`](.agents/skills/talkthrough/SKILL.md) — an [Agent Skill](https://agentskills.io) teaching the tool workflow; discovered automatically inside a checkout by Codex CLI (`$talkthrough`) and readable by Claude Code, Cursor, Copilot, Gemini CLI and other SKILL.md-compatible tools
+- [`AGENTS.md`](AGENTS.md) — instructions for coding agents contributing to this repo
 - [`server.json`](server.json) — MCP registry manifest
-- [`.claude-plugin/`](.claude-plugin/) + [`commands/`](commands/) + [`agents/`](agents/) — the Claude Code plugin (drift-tested against the server prompts)
+- [`integrations/`](integrations/) — per-engine adapters, all generated from one source of truth and drift-tested (incl. the Claude Code plugin under [`integrations/claude-code/`](integrations/claude-code/))
 
 ## Roadmap (not in v1)
 

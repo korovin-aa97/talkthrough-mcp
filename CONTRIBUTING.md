@@ -34,9 +34,12 @@ CI runs the same three on ubuntu (full suite) and macos (lint + unit).
 `core/` is the deterministic pipeline (no MCP imports); `server.py` is a thin
 FastMCP layer over it; `guidance.py` is the single source of truth for tool
 descriptions and prompt templates — **never edit a tool description or prompt
-anywhere else**. `tests/unit/test_guidance.py` gates example counts and pins
-`examples/prompts/*.md` (and the Claude Code plugin `commands/`) to the same
-templates, so drift fails the build. See `docs/DESIGN.md` for the full map.
+anywhere else**. Everything under `integrations/` (plus `examples/prompts/`
+and `.mcp.json`) is rendered by `scripts/gen_integrations.py`; edit the
+generator or the canonical sources and re-run it —
+`tests/unit/test_guidance.py` byte-pins every generated file, so drift fails
+the build. See `docs/DESIGN.md` for the full map and `AGENTS.md` for the
+agent-facing version of these rules.
 
 ## Guidelines
 

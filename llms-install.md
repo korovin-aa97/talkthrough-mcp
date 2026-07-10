@@ -81,5 +81,6 @@ them): `TALKTHROUGH_WHISPER_MODEL` (default `small`; use `medium` or
 - Frame tools error on `.m4a`/`.mp3` inputs → expected: audio-only jobs have
   transcripts but no frames.
 
-More context for usage (not installation): `skills/talkthrough/SKILL.md` and
-the tool reference in `README.md`.
+More context for usage (not installation): `.agents/skills/talkthrough/SKILL.md`
+and the tool reference in `README.md`. Per-engine config examples:
+`integrations/<engine>/README.md`.

@@ -16,5 +16,6 @@ dist/
 # fixture build intermediates (the two committed fixture files stay tracked)
 tests/fixtures/_build/
 
-# OS noise
+# OS / IDE noise
 .DS_Store
+.idea/

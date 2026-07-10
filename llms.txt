@@ -11,7 +11,11 @@
 - [README](README.md): positioning, quickstart per client, tool reference,
   wall-clock ladder, configuration, CLI
 - [Install guide for agents](llms-install.md): machine-followable setup steps
-- [Agent skill](skills/talkthrough/SKILL.md): how to use the tools well
+- [Per-engine integrations](integrations/README.md): exact config snippets for
+  Claude Code/Desktop, Codex CLI, OpenClaw, Gemini CLI, Cursor, Cline,
+  OpenCode, Goose, Copilot CLI, Windsurf, Zed
+- [Agent skill](.agents/skills/talkthrough/SKILL.md): how to use the tools well
+- [Agent contributor guide](AGENTS.md): working on this repo with a coding agent
 - [Design](docs/DESIGN.md): pipeline, manifest schema, token-budget rules
 - [Findings contract](examples/output-contract.schema.json): triage output JSON Schema
 - [Workflow prompts](examples/prompts/): the 5 server prompts as plain files

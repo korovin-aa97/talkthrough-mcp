@@ -81,31 +81,57 @@ def test_prompt_optional_context_is_injected(name: str) -> None:
     assert "ACME Payments GmbH" in rendered
 
 
-@pytest.mark.parametrize("name", guidance.PROMPT_NAMES)
-def test_example_prompt_files_do_not_drift(name: str) -> None:
-    path = REPO_ROOT / "examples" / "prompts" / f"{name}.md"
-    assert path.is_file(), f"missing {path} — examples/prompts must mirror server prompts"
-    assert path.read_text(encoding="utf-8") == guidance.render_prompt(name, "<job_id>"), (
-        f"{path} drifted from guidance.PROMPT_TEMPLATES[{name!r}] — regenerate it"
+def _generated_artifacts() -> dict[str, str]:
+    from scripts.gen_integrations import build_artifacts
+
+    return build_artifacts()
+
+
+def test_generated_artifacts_do_not_drift() -> None:
+    """Every engine-integration artifact is byte-pinned to scripts/gen_integrations.py.
+
+    Covers examples/prompts, the Claude Code plugin (commands, .mcp.json,
+    skill + agent mirrors), every integrations/<engine>/ doc, the ClawHub
+    skill, and the repo-root dev .mcp.json. Regenerate with:
+    `uv run python scripts/gen_integrations.py`.
+    """
+    artifacts = _generated_artifacts()
+    assert len(artifacts) >= 20
+    for rel_path, expected in sorted(artifacts.items()):
+        path = REPO_ROOT / rel_path
+        assert path.is_file(), f"missing generated file {rel_path} — run gen_integrations.py"
+        assert path.read_text(encoding="utf-8") == expected, (
+            f"{rel_path} drifted from scripts/gen_integrations.py — regenerate, "
+            "or move your edit into the generator/canonical source"
+        )
+
+
+def test_generator_covers_every_engine_folder() -> None:
+    """No hand-made stragglers: every integrations/<engine>/ has generated docs."""
+    artifacts = _generated_artifacts()
+    generated_dirs = {
+        rel.split("/")[1]
+        for rel in artifacts
+        if rel.startswith("integrations/") and rel.count("/") >= 2
+    }
+    on_disk = {
+        entry.name
+        for entry in (REPO_ROOT / "integrations").iterdir()
+        if entry.is_dir()
+    }
+    # claude-desktop is the one hand-maintained exception (mcpb manifest draft).
+    uncovered = on_disk - {"claude-desktop"} - generated_dirs
+    assert on_disk - {"claude-desktop"} == generated_dirs, (
+        f"engine folders without generator coverage: {uncovered}"
     )
 
 
-@pytest.mark.parametrize("name", guidance.PROMPT_NAMES)
-def test_plugin_command_files_do_not_drift(name: str) -> None:
-    """The Claude Code plugin commands render from the same templates."""
-    path = REPO_ROOT / "commands" / f"{name}.md"
-    assert path.is_file(), f"missing {path} — plugin commands must mirror server prompts"
-    content = path.read_text(encoding="utf-8")
-    assert content.startswith("---\n"), f"{path}: missing frontmatter"
-    assert guidance.render_prompt(name, "$ARGUMENTS") in content, (
-        f"{path} drifted from guidance.PROMPT_TEMPLATES[{name!r}] — regenerate it"
-    )
+def test_marketplace_points_at_the_plugin_subdir() -> None:
+    import json
 
-
-def test_plugin_agent_is_identical_to_example_agent() -> None:
-    example = (REPO_ROOT / "examples" / "agents" / "feedback-triage.md").read_text(encoding="utf-8")
-    plugin = (REPO_ROOT / "agents" / "feedback-triage.md").read_text(encoding="utf-8")
-    assert plugin == example, (
-        "agents/feedback-triage.md (plugin) drifted from examples/agents/feedback-triage.md — "
-        "they must stay byte-identical"
+    manifest = json.loads(
+        (REPO_ROOT / ".claude-plugin" / "marketplace.json").read_text(encoding="utf-8")
     )
+    sources = [plugin["source"] for plugin in manifest["plugins"]]
+    assert sources == ["./integrations/claude-code"]
+    assert (REPO_ROOT / "integrations/claude-code/.claude-plugin/plugin.json").is_file()
