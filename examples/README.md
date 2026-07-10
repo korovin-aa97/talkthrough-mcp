@@ -23,7 +23,8 @@ files are starting points.
 digest items, then create one issue per approved finding with the `gh` CLI:
 title from `title`, body from `quote`/`observed`/`expected`/
 `acceptance_criteria`/`verify_via`, and attach the referenced frames from
-`~/.talkthrough/jobs/<job_id>/frames/`.
+`~/.talkthrough/jobs/<job_id>/frames/`. Runnable version:
+[`recipes/github-issues.md`](recipes/github-issues.md).
 
 **File to Jira via the Atlassian MCP.** Same flow; map `severity` P1-P3 to
 your priority scheme and put `t_wall` in the description so teammates can

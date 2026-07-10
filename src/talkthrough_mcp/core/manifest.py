@@ -192,9 +192,30 @@ def frames_in_range(
     return [pool[i] for i in indices]
 
 
+def representative_frame(manifest: Manifest, at_ms: int) -> Frame | None:
+    """The unique frame that best represents the on-screen STATE at ``at_ms``.
+
+    Looks for the time-nearest frame over ALL frames including duplicates: a
+    duplicate is proof the screen still looked like its ``duplicate_of``
+    keyframe, so it resolves to that unique frame. Plain nearest-unique
+    selection can jump across a scene change when a long static stretch was
+    deduplicated away (issue #10).
+    """
+    pool = manifest.frames.items
+    if not pool:
+        return None
+    closest = min(pool, key=lambda frame: (abs(frame.ms - at_ms), frame.ms))
+    if closest.duplicate_of is None:
+        return closest
+    for frame in pool:
+        if frame.ms == closest.duplicate_of and frame.duplicate_of is None:
+            return frame
+    return closest
+
+
 def nearest_frame_ms(manifest: Manifest, at_ms: int) -> int | None:
-    frames = nearest_frames(manifest, at_ms, 1)
-    return frames[0].ms if frames else None
+    frame = representative_frame(manifest, at_ms)
+    return frame.ms if frame else None
 
 
 # --- search -----------------------------------------------------------------

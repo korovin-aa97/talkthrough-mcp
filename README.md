@@ -168,10 +168,11 @@ that the workflow prompts instruct agents to write digests in the
 **narrator's language** while keeping quotes verbatim — the server never
 translates (exact quotes are evidence; translation is the agent's job).
 
-Current limitation: OCR of on-screen text covers Latin + Chinese scripts
-(RapidOCR defaults); other scripts are tracked in
-[#3](https://github.com/korovin-aa97/talkthrough-mcp/issues/3). Spoken
-language support is unaffected.
+On-screen text (OCR) defaults to RapidOCR's Latin + Chinese models. For other
+scripts set `TALKTHROUGH_OCR_LANG` to your language — `ru`/`uk` (→ the
+`eslav` pack), `ja`, `ko`, `ar`, `hi`, `el`, `th`, or any RapidOCR pack name
+like `cyrillic` — and reprocess with `force=true`; the matching recognition
+model downloads once. Spoken-language support is unaffected either way.
 
 ## Configuration
 
@@ -179,6 +180,8 @@ language support is unaffected.
 |---|---|---|
 | `TALKTHROUGH_WHISPER_MODEL` | `small` | default whisper model (`tiny`/`base`/`small`/`medium`/`large-v3`/`large-v3-turbo`); the `model` tool param overrides per call |
 | `TALKTHROUGH_OCR` | `on` | set `off` to skip OCR |
+| `TALKTHROUGH_OCR_LANG` | Latin+Chinese | recognition script for on-screen text: a language code (`ru`, `ja`, `ko`, `ar`, `hi`, …) or a RapidOCR pack name (`eslav`, `cyrillic`, `latin`, …); the model downloads once |
+| `TALKTHROUGH_OCR_PARAMS` | — | advanced: JSON object of raw RapidOCR params merged over the derived ones, e.g. `{"Rec.lang_type": "cyrillic"}` |
 | `TALKTHROUGH_MAX_SECONDS` | `7200` | max media duration |
 | `TALKTHROUGH_MAX_FRAMES` | `600` | keyframe cap per job |
 | `TALKTHROUGH_HOME` | `~/.talkthrough` | job store root |
@@ -200,6 +203,15 @@ First run notes: missing system ffmpeg triggers a one-time `static-ffmpeg`
 download; the first transcription downloads the whisper model (~460 MB for
 `small`); both are cached. A long video takes minutes — progress streams as MCP
 progress notifications, and the CLI prints stage lines.
+
+## Windows (best-effort)
+
+CI runs lint, the unit suite, and a full CLI smoke on `windows-latest`
+(static-ffmpeg Windows build, whisper `tiny` transcription, OCR, and the
+instant idempotent re-run). Notes: the per-job lock is POSIX `fcntl` and
+degrades to a no-op on Windows — fine for a single-user machine; quote paths
+with spaces (`uv run talkthrough-mcp process "C:\Videos\Screen Recording.mp4"`).
+Windows is not a release gate — if something breaks, please open an issue.
 
 ## Supported inputs
 
