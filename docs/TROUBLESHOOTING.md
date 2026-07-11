@@ -16,6 +16,13 @@ After that, expect roughly 3× faster than real time on an Apple-Silicon CPU
 with the default `small` model, OCR included (a 2-minute clip ≈ 40 s).
 Re-processing the same file returns instantly from the job store.
 
+## `pip install` says "No matching distribution found"
+
+Your Python is older than 3.11 (macOS ships 3.9 as `/usr/bin/python3`), so
+pip filters out every release and prints the confusing "from versions: none".
+Fixes: use `uvx talkthrough-mcp` (uv picks a compatible Python by itself), or
+create the venv from a modern interpreter, e.g. `python3.12 -m venv`.
+
 ## The server doesn't show up in my client
 
 - Restart the client after editing its MCP config — most read it at startup.

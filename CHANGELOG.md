@@ -4,7 +4,10 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions follow
 [SemVer](https://semver.org/).
 
-## [Unreleased]
+## [0.1.1] — 2026-07-11
+
+Launch-day fixes from a full as-a-new-user E2E pass (every install path,
+a real 2-minute narrated recording, contract-validated triage).
 
 ### Fixed
 
@@ -12,6 +15,13 @@ All notable changes to this project are documented here. The format follows
   the stored transcript's model now reprocesses the file instead of silently
   returning the old model's transcript. Changing the env default still keeps
   the store intact; `force=true` behaves as before.
+
+### Docs
+
+- Removed the dead Goose one-click button (their deep-link endpoint 404s
+  ecosystem-wide); the Goose config stays in the client matrix.
+- Troubleshooting: `pip install` on Python < 3.11 prints a confusing
+  "No matching distribution" — explained, with the `uvx` escape hatch.
 
 ## [0.1.0] — 2026-07-11
 
