@@ -4,6 +4,17 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions follow
 [SemVer](https://semver.org/).
 
+## [0.1.2] — 2026-07-11
+
+### Fixed
+
+- All 7 tools now ship MCP `ToolAnnotations` (readOnly/destructive/idempotent/
+  openWorld hints). Non-interactive clients gate approvals on these — OpenAI
+  Codex `exec` silently cancelled every un-annotated call ("user cancelled
+  MCP tool call"); with hints, Codex drives talkthrough headlessly. Hints are
+  honest: only `process_media`/`extract_frame` write, and only inside
+  `TALKTHROUGH_HOME`.
+
 ## [0.1.1] — 2026-07-11
 
 Launch-day fixes from a full as-a-new-user E2E pass (every install path,

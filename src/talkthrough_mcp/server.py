@@ -19,6 +19,7 @@ from typing import Any, Literal
 
 from mcp.server.fastmcp import Context, FastMCP, Image
 from mcp.server.fastmcp.exceptions import ToolError
+from mcp.types import ToolAnnotations
 
 from . import guidance
 from .core import jobs, pipeline
@@ -39,6 +40,18 @@ MOMENT_MAX_FRAMES = 3
 TRANSCRIPT_CHAR_BUDGET = 30_000  # ~8k tokens
 SEARCH_MAX_HITS = 50
 LIST_JOBS_MAX = 50
+
+# Non-interactive clients gate tool approvals on these hints (codex exec
+# silently cancels un-annotated calls). Both shapes stay honest: nothing here
+# destroys user data or reaches beyond the local machine.
+READONLY_TOOL = ToolAnnotations(
+    readOnlyHint=True, destructiveHint=False, idempotentHint=True, openWorldHint=False
+)
+# Writes only inside TALKTHROUGH_HOME (new job dirs / frame extracts);
+# content-addressing keeps it idempotent.
+LOCAL_WRITE_TOOL = ToolAnnotations(
+    readOnlyHint=False, destructiveHint=False, idempotentHint=True, openWorldHint=False
+)
 
 mcp = FastMCP(
     "talkthrough",
@@ -93,7 +106,7 @@ class _ProgressState:
     fraction: float = 0.0
 
 
-@mcp.tool(description=guidance.TOOL_DESCRIPTIONS["process_media"])
+@mcp.tool(description=guidance.TOOL_DESCRIPTIONS["process_media"], annotations=LOCAL_WRITE_TOOL)
 async def process_media(
     path: str,
     ctx: Context,  # type: ignore[type-arg]
@@ -143,7 +156,7 @@ async def process_media(
     return pipeline.summarize(result)
 
 
-@mcp.tool(description=guidance.TOOL_DESCRIPTIONS["get_transcript"])
+@mcp.tool(description=guidance.TOOL_DESCRIPTIONS["get_transcript"], annotations=READONLY_TOOL)
 def get_transcript(
     job_id: str,
     start_ms: int | None = None,
@@ -197,7 +210,11 @@ def get_transcript(
     return payload
 
 
-@mcp.tool(description=guidance.TOOL_DESCRIPTIONS["get_frames"], structured_output=False)
+@mcp.tool(
+    description=guidance.TOOL_DESCRIPTIONS["get_frames"],
+    annotations=READONLY_TOOL,
+    structured_output=False,
+)
 def get_frames(
     job_id: str,
     at_ms: int | None = None,
@@ -241,7 +258,11 @@ def get_frames(
     return content
 
 
-@mcp.tool(description=guidance.TOOL_DESCRIPTIONS["get_moment"], structured_output=False)
+@mcp.tool(
+    description=guidance.TOOL_DESCRIPTIONS["get_moment"],
+    annotations=READONLY_TOOL,
+    structured_output=False,
+)
 def get_moment(job_id: str, start_ms: int, end_ms: int) -> list[str | Image]:
     if end_ms < start_ms:
         raise ToolError(f"end_ms {end_ms} is before start_ms {start_ms}")
@@ -293,7 +314,7 @@ def get_moment(job_id: str, start_ms: int, end_ms: int) -> list[str | Image]:
     return content
 
 
-@mcp.tool(description=guidance.TOOL_DESCRIPTIONS["search"])
+@mcp.tool(description=guidance.TOOL_DESCRIPTIONS["search"], annotations=READONLY_TOOL)
 def search(job_id: str, query: str) -> dict[str, Any]:
     manifest = _load(job_id)
     if not query.strip():
@@ -320,7 +341,11 @@ def search(job_id: str, query: str) -> dict[str, Any]:
     }
 
 
-@mcp.tool(description=guidance.TOOL_DESCRIPTIONS["extract_frame"], structured_output=False)
+@mcp.tool(
+    description=guidance.TOOL_DESCRIPTIONS["extract_frame"],
+    annotations=LOCAL_WRITE_TOOL,
+    structured_output=False,
+)
 def extract_frame(
     job_id: str,
     at_ms: int,
@@ -354,7 +379,7 @@ def extract_frame(
     return [_json_block(meta), Image(path=out_path)]
 
 
-@mcp.tool(description=guidance.TOOL_DESCRIPTIONS["list_jobs"])
+@mcp.tool(description=guidance.TOOL_DESCRIPTIONS["list_jobs"], annotations=READONLY_TOOL)
 def list_jobs() -> dict[str, Any]:
     manifests = jobs.list_jobs()
     return {

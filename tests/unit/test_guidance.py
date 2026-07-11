@@ -56,6 +56,20 @@ def test_registered_tools_match_guidance_exactly() -> None:
         assert len(guidance.example_lines(tool.description or "")) >= MIN_EXAMPLES
 
 
+def test_every_tool_carries_honest_annotations() -> None:
+    """Non-interactive clients (codex exec) silently cancel un-annotated tool
+    calls — every tool must ship hints, and they must stay truthful."""
+    writers = {"process_media", "extract_frame"}  # write only inside TALKTHROUGH_HOME
+    tools = asyncio.run(mcp.list_tools())
+    for tool in tools:
+        ann = tool.annotations
+        assert ann is not None, f"{tool.name}: missing ToolAnnotations"
+        assert ann.destructiveHint is False
+        assert ann.idempotentHint is True
+        assert ann.openWorldHint is False
+        assert ann.readOnlyHint is (tool.name not in writers), tool.name
+
+
 def test_exactly_five_prompts_registered() -> None:
     prompts = asyncio.run(mcp.list_prompts())
     assert sorted(prompt.name for prompt in prompts) == sorted(guidance.PROMPT_NAMES)
