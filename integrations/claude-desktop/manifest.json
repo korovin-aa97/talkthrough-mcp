@@ -1,5 +1,4 @@
 {
-  "$comment": "DRAFT — Claude Desktop extension (.mcpb) manifest. Build & submit AFTER the package is on PyPI: validate with the `mcpb` CLI (npx @anthropic-ai/mcpb validate), pack, install locally in Claude Desktop, then submit to the extensions directory. Requires uv on the user machine (documented in the directory listing).",
   "manifest_version": "0.2",
   "name": "talkthrough",
   "display_name": "Talkthrough — narrated recordings for your agent",
@@ -17,14 +16,16 @@
     "mcp_config": {
       "command": "uvx",
       "args": ["talkthrough-mcp"],
-      "env": {}
+      "env": {
+        "TALKTHROUGH_WHISPER_MODEL": "${user_config.whisper_model}"
+      }
     }
   },
   "user_config": {
     "whisper_model": {
       "type": "string",
       "title": "Whisper model",
-      "description": "tiny | base | small | medium | large-v3 (default small; medium+ recommended for non-English narration)",
+      "description": "tiny | base | small | medium | large-v3 | large-v3-turbo (default small; large-v3-turbo recommended for non-English narration)",
       "default": "small",
       "required": false
     }
