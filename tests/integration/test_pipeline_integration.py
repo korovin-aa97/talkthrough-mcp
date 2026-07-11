@@ -233,3 +233,24 @@ def test_force_reprocess_with_recorded_at_re_anchors(demo: ProcessResult) -> Non
     assert clock.start_utc.isoformat(timespec="seconds") == CREATION_TIME_ISO
     assert clock.tz_offset_min == 120
     assert result.manifest.t_wall_iso(0) == "2026-07-10T12:00:00+02:00"
+
+
+def test_explicit_model_mismatch_triggers_reprocess(
+    demo: ProcessResult, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """An explicit different `model=` must NOT silently return the old-model
+    manifest (launch-day E2E catch); same explicit model still reuses instantly.
+    Transcription is stubbed so no extra whisper model downloads in CI."""
+    calls: list[str] = []
+
+    def boom(*args: object, **kwargs: object) -> None:
+        calls.append("transcribe")
+        raise RuntimeError("reprocess attempted")
+
+    monkeypatch.setattr(pipeline.stt, "transcribe", boom)
+    rerun = pipeline.process_media(str(DEMO_MP4), model="tiny")
+    assert rerun.reused is True
+    assert not calls, "matching explicit model must not reprocess"
+    with pytest.raises(RuntimeError, match="reprocess attempted"):
+        pipeline.process_media(str(DEMO_MP4), model="base")
+    assert calls == ["transcribe"]

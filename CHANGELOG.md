@@ -4,6 +4,15 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions follow
 [SemVer](https://semver.org/).
 
+## [Unreleased]
+
+### Fixed
+
+- An explicit per-call `model=` (tool param / CLI `--model`) that differs from
+  the stored transcript's model now reprocesses the file instead of silently
+  returning the old model's transcript. Changing the env default still keeps
+  the store intact; `force=true` behaves as before.
+
 ## [0.1.0] — 2026-07-11
 
 First public release.

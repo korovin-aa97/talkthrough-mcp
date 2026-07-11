@@ -187,19 +187,35 @@ def process_media(
     report("hashing file", 0.02)
     job_id = jobs.compute_job_id(media)
 
-    if jobs.job_exists(job_id) and not force:
+    def reusable() -> Manifest | None:
+        """Reuse unless forced — or unless an EXPLICIT per-call model differs
+        from the stored transcript's model (silently returning the old model's
+        text would betray the caller's intent). A changed env default
+        deliberately does NOT invalidate the store."""
+        if force or not jobs.job_exists(job_id):
+            return None
         manifest = jobs.load_job(job_id)
+        if model is not None and manifest.transcript.model != model_name:
+            logger.info(
+                "job %s exists with model %s but %s was explicitly requested — reprocessing",
+                job_id, manifest.transcript.model, model_name,
+            )
+            return None
+        return manifest
+
+    manifest_hit = reusable()
+    if manifest_hit is not None:
         logger.info("job %s already processed — returning existing manifest", job_id)
         return ProcessResult(
-            manifest=manifest, reused=True, elapsed_s=time.monotonic() - started
+            manifest=manifest_hit, reused=True, elapsed_s=time.monotonic() - started
         )
 
     with jobs.job_lock(job_id):
         # Re-check under the lock: a concurrent call may have just finished it.
-        if jobs.job_exists(job_id) and not force:
-            manifest = jobs.load_job(job_id)
+        manifest_hit = reusable()
+        if manifest_hit is not None:
             return ProcessResult(
-                manifest=manifest, reused=True, elapsed_s=time.monotonic() - started
+                manifest=manifest_hit, reused=True, elapsed_s=time.monotonic() - started
             )
 
         report("probing media", 0.05)
