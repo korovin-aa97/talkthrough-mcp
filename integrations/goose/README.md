@@ -1,6 +1,6 @@
 # Goose
 
-Server command (stdio): `uvx --from git+https://github.com/korovin-aa97/talkthrough-mcp talkthrough-mcp`
+Server command (stdio): `uvx talkthrough-mcp`
 
 Config: `~/.config/goose/config.yaml`
 
@@ -10,7 +10,7 @@ extensions:
     enabled: true
     type: stdio
     cmd: uvx
-    args: ["--from", "git+https://github.com/korovin-aa97/talkthrough-mcp", "talkthrough-mcp"]
+    args: ["talkthrough-mcp"]
 ```
 
 Optional env vars: TALKTHROUGH_WHISPER_MODEL (default `small`; use `large-v3-turbo` for non-English narration — agents can also pass `model=` per call), TALKTHROUGH_OCR (`off` to disable), TALKTHROUGH_OCR_LANG (on-screen-text script, e.g. `ru`, `ja`, `ko`), TALKTHROUGH_HOME (job store root, default `~/.talkthrough`).

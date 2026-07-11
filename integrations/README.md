@@ -3,7 +3,7 @@
 The talkthrough MCP server is engine-agnostic (stdio MCP). Server command:
 
 ```
-uvx --from git+https://github.com/korovin-aa97/talkthrough-mcp talkthrough-mcp
+uvx talkthrough-mcp
 ```
 
 One folder per engine with the exact config to paste:

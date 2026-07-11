@@ -1,6 +1,6 @@
 # Windsurf
 
-Server command (stdio): `uvx --from git+https://github.com/korovin-aa97/talkthrough-mcp talkthrough-mcp`
+Server command (stdio): `uvx talkthrough-mcp`
 
 Config: `~/.codeium/windsurf/mcp_config.json`
 
@@ -10,8 +10,6 @@ Config: `~/.codeium/windsurf/mcp_config.json`
     "talkthrough": {
       "command": "uvx",
       "args": [
-        "--from",
-        "git+https://github.com/korovin-aa97/talkthrough-mcp",
         "talkthrough-mcp"
       ]
     }

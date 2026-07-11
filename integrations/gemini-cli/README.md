@@ -1,6 +1,6 @@
 # Gemini CLI
 
-Server command (stdio): `uvx --from git+https://github.com/korovin-aa97/talkthrough-mcp talkthrough-mcp`
+Server command (stdio): `uvx talkthrough-mcp`
 
 Config: `~/.gemini/settings.json`
 
@@ -10,8 +10,6 @@ Config: `~/.gemini/settings.json`
     "talkthrough": {
       "command": "uvx",
       "args": [
-        "--from",
-        "git+https://github.com/korovin-aa97/talkthrough-mcp",
         "talkthrough-mcp"
       ]
     }

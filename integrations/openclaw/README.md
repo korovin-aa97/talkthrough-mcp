@@ -1,6 +1,6 @@
 # OpenClaw
 
-Server command (stdio): `uvx --from git+https://github.com/korovin-aa97/talkthrough-mcp talkthrough-mcp`
+Server command (stdio): `uvx talkthrough-mcp`
 
 Config: `~/.openclaw/openclaw.json`
 
@@ -11,8 +11,6 @@ Config: `~/.openclaw/openclaw.json`
       "talkthrough": {
         "command": "uvx",
         "args": [
-          "--from",
-          "git+https://github.com/korovin-aa97/talkthrough-mcp",
           "talkthrough-mcp"
         ]
       }
@@ -24,7 +22,7 @@ Config: `~/.openclaw/openclaw.json`
 Or via CLI:
 
 ```bash
-openclaw mcp add talkthrough --command uvx --arg --from --arg git+https://github.com/korovin-aa97/talkthrough-mcp --arg talkthrough-mcp
+openclaw mcp add talkthrough --command uvx --arg talkthrough-mcp
 ```
 
 ClawHub: a publish-ready skill wrapper lives in [`clawhub/`](clawhub/) (submit after the repo is public).

@@ -1,6 +1,6 @@
 # Cline / Roo Code
 
-Server command (stdio): `uvx --from git+https://github.com/korovin-aa97/talkthrough-mcp talkthrough-mcp`
+Server command (stdio): `uvx talkthrough-mcp`
 
 Config: `cline_mcp_settings.json (via MCP Servers UI)`
 
@@ -10,8 +10,6 @@ Config: `cline_mcp_settings.json (via MCP Servers UI)`
     "talkthrough": {
       "command": "uvx",
       "args": [
-        "--from",
-        "git+https://github.com/korovin-aa97/talkthrough-mcp",
         "talkthrough-mcp"
       ]
     }

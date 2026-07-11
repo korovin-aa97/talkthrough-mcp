@@ -34,7 +34,7 @@ from talkthrough_mcp import guidance  # noqa: E402
 
 # --- the one flip-day switch -------------------------------------------------
 
-INSTALL_PHASE = "git"  # "git" (private/pre-PyPI) | "pypi"
+INSTALL_PHASE = "pypi"  # "git" (private/pre-PyPI) | "pypi"
 
 _UVX_ARGS = {
     "git": ["--from", "git+https://github.com/korovin-aa97/talkthrough-mcp", "talkthrough-mcp"],

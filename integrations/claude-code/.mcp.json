@@ -3,8 +3,6 @@
     "talkthrough": {
       "command": "uvx",
       "args": [
-        "--from",
-        "git+https://github.com/korovin-aa97/talkthrough-mcp",
         "talkthrough-mcp"
       ]
     }

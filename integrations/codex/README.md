@@ -1,13 +1,13 @@
 # OpenAI Codex CLI
 
-Server command (stdio): `uvx --from git+https://github.com/korovin-aa97/talkthrough-mcp talkthrough-mcp`
+Server command (stdio): `uvx talkthrough-mcp`
 
 Config: `~/.codex/config.toml (or project-scoped .codex/config.toml in trusted projects)`
 
 ```toml
 [mcp_servers.talkthrough]
 command = "uvx"
-args = ["--from", "git+https://github.com/korovin-aa97/talkthrough-mcp", "talkthrough-mcp"]
+args = ["talkthrough-mcp"]
 ```
 
 Skills: this repo ships the talkthrough skill at `.agents/skills/talkthrough/` — Codex discovers it automatically inside a checkout; for global use copy it to `~/.agents/skills/` and invoke with `$talkthrough`.

@@ -1,6 +1,6 @@
 # Zed
 
-Server command (stdio): `uvx --from git+https://github.com/korovin-aa97/talkthrough-mcp talkthrough-mcp`
+Server command (stdio): `uvx talkthrough-mcp`
 
 Config: `settings.json (Zed)`
 
@@ -12,8 +12,6 @@ Config: `settings.json (Zed)`
       "command": {
         "path": "uvx",
         "args": [
-          "--from",
-          "git+https://github.com/korovin-aa97/talkthrough-mcp",
           "talkthrough-mcp"
         ]
       }

@@ -1,6 +1,6 @@
 # OpenCode
 
-Server command (stdio): `uvx --from git+https://github.com/korovin-aa97/talkthrough-mcp talkthrough-mcp`
+Server command (stdio): `uvx talkthrough-mcp`
 
 Config: `opencode.json (project) or ~/.config/opencode/opencode.json`
 
@@ -11,8 +11,6 @@ Config: `opencode.json (project) or ~/.config/opencode/opencode.json`
       "type": "local",
       "command": [
         "uvx",
-        "--from",
-        "git+https://github.com/korovin-aa97/talkthrough-mcp",
         "talkthrough-mcp"
       ],
       "enabled": true

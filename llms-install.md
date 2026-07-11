@@ -15,24 +15,19 @@ turns narrated screen recordings / audio files into queryable structured data
 
 ## Server command (stdio)
 
-While the package is distributed from GitHub (private/pre-PyPI phase):
-
-```
-uvx --from git+https://github.com/korovin-aa97/talkthrough-mcp talkthrough-mcp
-```
-
-Once on PyPI, prefer the shorter form:
-
 ```
 uvx talkthrough-mcp
 ```
+
+(To run the latest unreleased main instead:
+`uvx --from git+https://github.com/korovin-aa97/talkthrough-mcp talkthrough-mcp`)
 
 ## Client configuration
 
 ### Claude Code
 
 ```bash
-claude mcp add -s user talkthrough -- uvx --from git+https://github.com/korovin-aa97/talkthrough-mcp talkthrough-mcp
+claude mcp add -s user talkthrough -- uvx talkthrough-mcp
 ```
 
 ### Claude Desktop / Cursor / Cline / any JSON-config client
@@ -45,11 +40,7 @@ Add to the client's MCP servers config (`claude_desktop_config.json`,
   "mcpServers": {
     "talkthrough": {
       "command": "uvx",
-      "args": [
-        "--from",
-        "git+https://github.com/korovin-aa97/talkthrough-mcp",
-        "talkthrough-mcp"
-      ]
+      "args": ["talkthrough-mcp"]
     }
   }
 }
