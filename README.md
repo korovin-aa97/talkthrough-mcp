@@ -5,7 +5,7 @@
 [![ci](https://github.com/korovin-aa97/talkthrough-mcp/actions/workflows/ci.yml/badge.svg)](https://github.com/korovin-aa97/talkthrough-mcp/actions/workflows/ci.yml)
 [![license: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 [![python](https://img.shields.io/badge/python-3.11%E2%80%933.13-blue.svg)](pyproject.toml)
-<!-- uncomment at PyPI publish: [![PyPI](https://img.shields.io/pypi/v/talkthrough-mcp.svg)](https://pypi.org/project/talkthrough-mcp/) -->
+[![PyPI](https://img.shields.io/pypi/v/talkthrough-mcp.svg)](https://pypi.org/project/talkthrough-mcp/)
 
 [Quickstart](#quickstart) · [Tools](#tools) · [FAQ](#faq) ·
 [Troubleshooting](docs/TROUBLESHOOTING.md) · [Changelog](CHANGELOG.md) ·
