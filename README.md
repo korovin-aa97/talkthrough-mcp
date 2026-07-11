@@ -47,12 +47,21 @@ OCR is pip-only, and whisper models download themselves on first use.
 
 ### Claude Code
 
+Two install paths — **pick one**, not both (the plugin already includes
+the server; installing both would register it twice):
+
+**Server only** — the 7 tools + 5 prompts, and nothing else on your
+system. Choose this for a minimal setup, or when you manage MCP servers
+yourself across several clients:
+
 ```bash
 claude mcp add -s user talkthrough -- uvx talkthrough-mcp
 ```
 
-Or install the full plugin (server + the five workflow commands + the triage
-agent + an agent skill):
+**Full plugin** — the same server, plus native slash commands
+(`/talkthrough:triage-recording`, …) that handle the ceremony for you,
+a ready-made triage subagent, and an agent skill that teaches Claude the
+workflow. Choose this for the best out-of-the-box experience:
 
 ```
 /plugin marketplace add korovin-aa97/talkthrough-mcp
