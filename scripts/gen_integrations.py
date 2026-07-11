@@ -420,10 +420,10 @@ def build_registry_manifest() -> dict[str, str]:
     manifest = {
         "$schema": "https://static.modelcontextprotocol.io/schemas/2025-09-29/server.schema.json",
         "name": "io.github.korovin-aa97/talkthrough-mcp",
+        # Registry hard limit: <= 100 chars (enforced server-side, checked 2026-07-11).
         "description": (
-            "Turn narrated screen recordings into agent-ready data: local Whisper "
-            "transcript, scene keyframes, OCR text, wall-clock anchoring. Lazy "
-            "retrieval tools keep long videos out of the context window."
+            "Narrated screen recordings into agent-ready data: "
+            "local transcript, keyframes, OCR, wall-clock."
         ),
         "repository": {
             "url": "https://github.com/korovin-aa97/talkthrough-mcp",
