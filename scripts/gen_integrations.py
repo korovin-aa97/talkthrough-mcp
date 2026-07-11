@@ -274,17 +274,15 @@ def _install_buttons(uvx_args: list[str]) -> str:
     b64 = urllib.parse.quote(base64.b64encode(config.encode()).decode(), safe="")
     url = urllib.parse.quote(config, safe="")
     url_stdio = urllib.parse.quote(stdio_config, safe="")
-    goose_args = "&".join("arg=" + urllib.parse.quote(arg, safe="") for arg in uvx_args)
-    goose_desc = urllib.parse.quote(
-        "Turn narrated screen recordings into agent-ready data", safe=""
-    )
+    # No Goose button: block.github.io/goose/extension?… 404s ecosystem-wide
+    # since their site restructure (checked 2026-07-11; even playwright-mcp's
+    # button is dead). Goose users get the YAML config from the matrix below.
     buttons = [
         f"[![Install in Cursor](https://cursor.com/deeplink/mcp-install-dark.svg)](https://cursor.com/en/install-mcp?name=talkthrough&config={b64})",
         f"[![Install in VS Code](https://img.shields.io/badge/VS_Code-Install_Server-0098FF?style=flat-square&logo=visualstudiocode&logoColor=white)](https://vscode.dev/redirect/mcp/install?name=talkthrough&config={url_stdio})",
         f"[![Install in VS Code Insiders](https://img.shields.io/badge/VS_Code_Insiders-Install_Server-24bfa5?style=flat-square&logo=visualstudiocode&logoColor=white)](https://insiders.vscode.dev/redirect/mcp/install?name=talkthrough&config={url_stdio}&quality=insiders)",
         f"[![Add to LM Studio](https://files.lmstudio.ai/deeplink/mcp-install-light.svg)](https://lmstudio.ai/install-mcp?name=talkthrough&config={b64})",
         f"[![Add to Kiro](https://kiro.dev/images/add-to-kiro.svg)](https://kiro.dev/launch/mcp/add?name=talkthrough&config={url})",
-        f"[![Install in Goose](https://block.github.io/goose/img/extension-install-dark.svg)](https://block.github.io/goose/extension?cmd=uvx&{goose_args}&id=talkthrough&name=Talkthrough&description={goose_desc})",
     ]
     return "\n".join(buttons) + "\n"
 

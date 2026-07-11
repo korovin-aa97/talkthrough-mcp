@@ -43,7 +43,6 @@ OCR is pip-only, and whisper models download themselves on first use.
 [![Install in VS Code Insiders](https://img.shields.io/badge/VS_Code_Insiders-Install_Server-24bfa5?style=flat-square&logo=visualstudiocode&logoColor=white)](https://insiders.vscode.dev/redirect/mcp/install?name=talkthrough&config=%7B%22command%22%3A%22uvx%22%2C%22args%22%3A%5B%22talkthrough-mcp%22%5D%2C%22type%22%3A%22stdio%22%7D&quality=insiders)
 [![Add to LM Studio](https://files.lmstudio.ai/deeplink/mcp-install-light.svg)](https://lmstudio.ai/install-mcp?name=talkthrough&config=eyJjb21tYW5kIjoidXZ4IiwiYXJncyI6WyJ0YWxrdGhyb3VnaC1tY3AiXX0%3D)
 [![Add to Kiro](https://kiro.dev/images/add-to-kiro.svg)](https://kiro.dev/launch/mcp/add?name=talkthrough&config=%7B%22command%22%3A%22uvx%22%2C%22args%22%3A%5B%22talkthrough-mcp%22%5D%7D)
-[![Install in Goose](https://block.github.io/goose/img/extension-install-dark.svg)](https://block.github.io/goose/extension?cmd=uvx&arg=talkthrough-mcp&id=talkthrough&name=Talkthrough&description=Turn%20narrated%20screen%20recordings%20into%20agent-ready%20data)
 
 ### Claude Code
 
