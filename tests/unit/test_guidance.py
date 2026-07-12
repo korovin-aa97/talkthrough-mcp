@@ -163,10 +163,8 @@ def test_generator_covers_every_engine_folder() -> None:
         for entry in (REPO_ROOT / "integrations").iterdir()
         if entry.is_dir()
     }
-    # claude-desktop is the one hand-maintained exception (mcpb manifest draft).
-    uncovered = on_disk - {"claude-desktop"} - generated_dirs
-    assert on_disk - {"claude-desktop"} == generated_dirs, (
-        f"engine folders without generator coverage: {uncovered}"
+    assert on_disk == generated_dirs, (
+        f"engine folders without generator coverage: {on_disk - generated_dirs}"
     )
 
 

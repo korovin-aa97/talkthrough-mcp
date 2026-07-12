@@ -68,7 +68,7 @@ README_END = "<!-- /gen:install -->"
 
 
 def _jsonc(payload: dict) -> str:
-    return json.dumps(payload, indent=2) + "\n"
+    return json.dumps(payload, indent=2, ensure_ascii=False) + "\n"
 
 
 def _engine_readme(
@@ -423,6 +423,93 @@ def build_engine_docs() -> dict[str, str]:
     }
 
 
+def build_plugin_manifests() -> dict[str, str]:
+    """Claude Code plugin + marketplace + Claude Desktop (.mcpb) manifests.
+
+    Versions track pyproject so releases can't leave them behind (the 0.1.0→
+    0.1.3 launch weekend did exactly that before these were generated)."""
+    plugin = {
+        "name": "talkthrough",
+        "description": (
+            "Turn narrated screen recordings into filed bugs, specs, backlogs and "
+            "meeting actions. Bundles the talkthrough MCP server, five workflow "
+            "commands, a triage agent, and an agent skill."
+        ),
+        "version": PROJECT_VERSION,
+        "author": {"name": "korovin-aa97", "url": "https://github.com/korovin-aa97"},
+        "homepage": "https://github.com/korovin-aa97/talkthrough-mcp",
+        "repository": "https://github.com/korovin-aa97/talkthrough-mcp",
+        "license": "MIT",
+        "keywords": [
+            "mcp", "screen-recording", "transcription", "whisper", "ocr",
+            "feedback", "triage",
+        ],
+    }
+    marketplace = {
+        "name": "talkthrough",
+        "owner": {"name": "korovin-aa97", "url": "https://github.com/korovin-aa97"},
+        "metadata": {
+            "description": (
+                "Marketplace for the talkthrough plugin: narrated screen recordings "
+                "in, agent-ready evidence out."
+            ),
+            "version": PROJECT_VERSION,
+        },
+        "plugins": [
+            {
+                "name": "talkthrough",
+                "source": "./integrations/claude-code",
+                "description": (
+                    "Turn narrated screen recordings into filed bugs, specs, backlogs "
+                    "and meeting actions — local Whisper + keyframes + OCR + "
+                    "wall-clock via the talkthrough MCP server."
+                ),
+            }
+        ],
+    }
+    mcpb = {
+        "manifest_version": "0.2",
+        "name": "talkthrough",
+        "display_name": "Talkthrough — narrated recordings for your agent",
+        "version": PROJECT_VERSION,
+        "description": (
+            "Turn narrated screen recordings into structured evidence: local Whisper "
+            "transcript, scene keyframes, OCR, wall-clock anchoring. Record, talk — "
+            "Claude files the bugs."
+        ),
+        "author": {"name": "korovin-aa97", "url": "https://github.com/korovin-aa97"},
+        "license": "MIT",
+        "homepage": "https://github.com/korovin-aa97/talkthrough-mcp",
+        "server": {
+            "type": "binary",
+            "entry_point": "uvx",
+            "mcp_config": {
+                "command": "uvx",
+                "args": ["talkthrough-mcp"],
+                "env": {"TALKTHROUGH_WHISPER_MODEL": "${user_config.whisper_model}"},
+            },
+        },
+        "user_config": {
+            "whisper_model": {
+                "type": "string",
+                "title": "Whisper model",
+                "description": (
+                    "tiny | base | small | medium | large-v3 | large-v3-turbo "
+                    "(default small; large-v3-turbo recommended for non-English narration)"
+                ),
+                "default": "small",
+                "required": False,
+            }
+        },
+        "compatibility": {"platforms": ["darwin", "linux"]},
+    }
+    return {
+        "integrations/claude-code/.claude-plugin/plugin.json": _jsonc(plugin),
+        ".claude-plugin/marketplace.json": _jsonc(marketplace),
+        "integrations/claude-desktop/manifest.json": _jsonc(mcpb),
+    }
+
+
 def build_registry_manifest() -> dict[str, str]:
     manifest = {
         "$schema": "https://static.modelcontextprotocol.io/schemas/2025-09-29/server.schema.json",
@@ -576,6 +663,7 @@ def build_artifacts() -> dict[str, str]:
         build_agent_mirrors,
         build_mcp_configs,
         build_engine_docs,
+        build_plugin_manifests,
         build_registry_manifest,
         build_clawhub_skill,
         build_integrations_index,

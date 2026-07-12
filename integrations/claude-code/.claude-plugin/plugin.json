@@ -1,7 +1,7 @@
 {
   "name": "talkthrough",
   "description": "Turn narrated screen recordings into filed bugs, specs, backlogs and meeting actions. Bundles the talkthrough MCP server, five workflow commands, a triage agent, and an agent skill.",
-  "version": "0.1.0",
+  "version": "0.1.3",
   "author": {
     "name": "korovin-aa97",
     "url": "https://github.com/korovin-aa97"
