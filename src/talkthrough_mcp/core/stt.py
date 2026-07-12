@@ -38,6 +38,23 @@ class SttResult:
         return " ".join(segment.text for segment in self.segments if segment.text).strip()
 
 
+def _load_model(model_name: str) -> Any:
+    """Load whisper from the LOCAL cache first; touch the network only on a miss.
+
+    Without ``local_files_only`` huggingface_hub revalidates repo metadata
+    against huggingface.co on EVERY model load even when fully cached — which
+    would break the "no runtime network beyond one-time downloads" promise
+    (and any offline machine). Cache-first keeps warm loads at zero network.
+    """
+    from faster_whisper import WhisperModel
+
+    try:
+        return WhisperModel(model_name, device="cpu", compute_type="int8", local_files_only=True)
+    except Exception:
+        logger.info("whisper model %r not in local cache — downloading once", model_name)
+        return WhisperModel(model_name, device="cpu", compute_type="int8")
+
+
 def _renumber(segments: list[SttSegment]) -> list[SttSegment]:
     return [
         SttSegment(seq=index, t0_ms=segment.t0_ms, t1_ms=segment.t1_ms, text=segment.text)
@@ -59,11 +76,8 @@ def transcribe(
     names and jargon so they survive transcription. ``on_segment`` receives
     the end-ms of each decoded segment (progress reporting hook).
     """
-    from faster_whisper import WhisperModel
-
     started = time.monotonic()
-    logger.info("loading whisper model %r (auto-downloads once if missing)", model_name)
-    model = WhisperModel(model_name, device="cpu", compute_type="int8")
+    model = _load_model(model_name)
 
     transcribe_kwargs: dict[str, Any] = {"vad_filter": True}
     if vocabulary:

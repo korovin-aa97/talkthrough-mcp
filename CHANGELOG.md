@@ -4,6 +4,33 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions follow
 [SemVer](https://semver.org/).
 
+## [0.1.3] — 2026-07-12
+
+Hardening from a hostile-input test pass (silent recordings, odd containers,
+corrupt files, offline machines) ahead of the public announcement.
+
+### Fixed
+
+- **Warm runs are now zero-network.** faster-whisper loads the model from the
+  local cache first (`local_files_only=True`, one-time download only on a
+  cache miss); previously huggingface_hub revalidated repo metadata against
+  huggingface.co on every model load — even fully cached — contradicting the
+  "no runtime network beyond one-time downloads" promise. Verified by running
+  the full pipeline with all sockets blocked.
+- Tool-failure messages name the binary (`ffprobe failed: …`) instead of
+  leaking the full venv path; the static-ffmpeg fallback log no longer claims
+  a download on every run.
+
+### Docs
+
+- Quickstart names its one real prerequisite (uv) with install one-liners.
+
+Also verified in this pass (no changes needed): videos without an audio
+track process gracefully (`transcript.reason: "no audio stream"`, frames+OCR
+still work), `.webm`/`.mkv`/2-second/unicode-name inputs work, corrupt files
+fail cleanly with exit code 2, and Intel-mac installs resolve (onnxruntime
+1.23.2 ships x86_64 wheels).
+
 ## [0.1.2] — 2026-07-11
 
 ### Fixed

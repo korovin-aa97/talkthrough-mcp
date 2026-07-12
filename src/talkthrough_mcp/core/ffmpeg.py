@@ -14,6 +14,7 @@ import shutil
 import subprocess
 import sys
 from functools import lru_cache
+from pathlib import Path
 
 from .errors import ToolFailureError
 
@@ -26,7 +27,9 @@ def _resolved_binaries() -> tuple[str, str]:
     ffprobe = shutil.which("ffprobe")
     if ffmpeg and ffprobe:
         return ffmpeg, ffprobe
-    logger.info("system ffmpeg not found — falling back to static-ffmpeg (one-time download)")
+    logger.info(
+        "system ffmpeg not found — using bundled static-ffmpeg (downloads once on first use)"
+    )
     try:
         from static_ffmpeg import run as static_run
 
@@ -56,11 +59,12 @@ def run_tool(cmd: list[str], *, timeout: int) -> subprocess.CompletedProcess[str
         return subprocess.run(cmd, check=True, capture_output=True, text=True, timeout=timeout)
     except subprocess.CalledProcessError as exc:
         stderr_tail = (exc.stderr or "").strip().splitlines()[-8:]
+        tool = Path(cmd[0]).name  # full venv path is noise in a user-facing error
         raise ToolFailureError(
-            f"{cmd[0]} failed (rc={exc.returncode}): " + " | ".join(stderr_tail)
+            f"{tool} failed (rc={exc.returncode}): " + " | ".join(stderr_tail)
         ) from exc
     except subprocess.TimeoutExpired as exc:
-        raise ToolFailureError(f"{cmd[0]} timed out after {timeout}s") from exc
+        raise ToolFailureError(f"{Path(cmd[0]).name} timed out after {timeout}s") from exc
 
 
 @lru_cache(maxsize=1)
