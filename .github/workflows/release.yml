@@ -15,6 +15,11 @@ on:
   push:
     tags: ["v*"]
 
+# Least privilege by default; publish-pypi and github-release raise their
+# own job-level permissions explicitly below.
+permissions:
+  contents: read
+
 jobs:
   build:
     runs-on: ubuntu-latest
