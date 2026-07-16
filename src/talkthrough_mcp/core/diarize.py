@@ -333,16 +333,20 @@ EMBEDDING_MODELS: dict[str, ModelSpec] = {
         sha256="357a834f702b80161e5b981182c038e18553c1f2ca752ed6cec2052365d4129b",
         license="Apache-2.0",
     ),
+    # NGC model card: "covered by the license of the NeMo Toolkit" → Apache-2.0
     "nemo_en_titanet_small": ModelSpec(
         name="nemo_en_titanet_small",
         url=f"{_EMBEDDING_TAG}/nemo_en_titanet_small.onnx",
         sha256="ad4a1802485d8b34c722d2a9d04249662f2ece5d28a7a039063ca22f515a789e",
-        license="CC-BY-4.0",
+        license="Apache-2.0",
     ),
 }
 
 DEFAULT_SEGMENTATION_MODEL = "pyannote-segmentation-3-0"
-DEFAULT_EMBEDDING_MODEL = "wespeaker_en_voxceleb_resnet34_LM"
+# Accept-eval winner (v0.2.0, real 3-speaker meeting + RU/EN/ES synthetic set):
+# only model to isolate all three real voices at k=3, ~2.2x faster than
+# wespeaker (RTF 0.079 vs 0.19 on M-series, 4 threads), Apache-2.0 weights.
+DEFAULT_EMBEDDING_MODEL = "nemo_en_titanet_small"
 
 
 def models_root() -> Path:

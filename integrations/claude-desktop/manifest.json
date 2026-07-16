@@ -2,7 +2,7 @@
   "manifest_version": "0.2",
   "name": "talkthrough",
   "display_name": "Talkthrough — narrated recordings for your agent",
-  "version": "0.1.3",
+  "version": "0.2.0",
   "description": "Turn narrated screen recordings into structured evidence: local Whisper transcript, scene keyframes, OCR, wall-clock anchoring. Record, talk — Claude files the bugs.",
   "author": {
     "name": "korovin-aa97",

@@ -4,7 +4,12 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions follow
 [SemVer](https://semver.org/).
 
-## [Unreleased]
+## [0.2.0] — 2026-07-16
+
+Speaker diarization (#4) and absolute frame paths (#13). Additive minor:
+every 0.1.x call keeps working unchanged, non-diarized runs pay nothing for
+the new machinery (the engine is never even imported), and manifests only
+gain fields when diarization actually ran.
 
 ### Added
 
@@ -29,11 +34,14 @@ All notable changes to this project are documented here. The format follows
     with the install hint BEFORE transcription starts; `TALKTHROUGH_DIARIZE=on`
     without the extra warns and degrades; any engine/runtime failure records
     `diarization.available=false` + reason and keeps the transcript.
-  - Models (pyannote segmentation-3.0 ONNX, MIT + WeSpeaker VoxCeleb
-    ResNet34-LM, CC-BY-4.0 by default) download once from pinned k2-fsa
-    release URLs with sha256 verification into
-    `<TALKTHROUGH_HOME>/models/diarization/`; warm runs stay zero-network
-    (verified with blocked sockets). Env knobs: `TALKTHROUGH_DIARIZE`,
+  - Models (pyannote segmentation-3.0 ONNX, MIT + NeMo TitaNet-Small,
+    Apache-2.0, by default — the accept-eval winner on a real 3-speaker
+    meeting and RU/EN/ES clips; WeSpeaker ResNet34-LM and 3D-Speaker
+    CAM++ remain selectable) download once from pinned k2-fsa release URLs
+    with sha256 verification into `<TALKTHROUGH_HOME>/models/diarization/`;
+    warm runs stay zero-network (verified with blocked sockets). Measured on
+    an M-series CPU (4 threads): a 26-minute meeting diarizes in ~2 minutes
+    (RTF ≈ 0.08). Env knobs: `TALKTHROUGH_DIARIZE`,
     `TALKTHROUGH_DIARIZATION_THRESHOLD`, `_SEG_MODEL`/`_EMB_MODEL`
     (allowlist name or local `.onnx` path = offline preseed), `_THREADS`.
   - `meeting-actions` prompt now maps `S*` labels onto attendees via
@@ -42,7 +50,9 @@ All notable changes to this project are documented here. The format follows
     segments + a `transcript.diarization` block with compact
     `[t0_ms, t1_ms, "S1"]` turn triplets (kept for range queries and future
     word-level splitting). Manifests without diarization serialize
-    byte-identically to 0.1.x output.
+    byte-identically to 0.1.x output (modulo the now-correct version stamp
+    in `tool_versions` — see Fixed below); verified against a real v0.1.3
+    checkout on the same recordings.
 - `extract_frame` returns the absolute `path` of the extracted file, and
   `get_frames`/`get_moment` name each served frame's absolute `path` (#13) —
   "save this screenshot elsewhere" becomes the calling agent's own file copy,
@@ -55,6 +65,9 @@ All notable changes to this project are documented here. The format follows
   written by newer package versions load instead of raising `TypeError`.
   The inverse still holds: 0.1.x cannot read manifests that already contain
   diarization fields — noted here as the downgrade boundary.
+- `tool_versions["talkthrough-mcp"]` in manifests recorded a stale hardcoded
+  `0.1.0` on every release; `__version__` now derives from the installed
+  package metadata.
 
 ## [0.1.3] — 2026-07-12
 

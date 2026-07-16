@@ -67,7 +67,7 @@ extra — replace the package name in ANY config above with
 `S1`/`S2`/…. Pass `num_speakers` whenever the participant count is known —
 it is the main accuracy lever. Calling `diarize=true` on an
 already-processed job adds speakers without re-transcribing. Diarization
-models (~33 MB) download once, pinned and checksum-verified.
+models (~47 MB) download once, pinned and checksum-verified.
 
 ## Verify the installation
 

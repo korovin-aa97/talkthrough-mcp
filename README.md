@@ -422,16 +422,21 @@ torch, no accounts, no GPU):
   agent's job (self-introductions, vocatives, the `attendees` argument of the
   `meeting-actions` prompt). The server never guesses names.
 
-Models download once (~33 MB total) from pinned, checksum-verified URLs into
+Models download once (~47 MB total) from pinned, checksum-verified URLs into
 `~/.talkthrough/models/`; warm runs are zero-network like the rest of the
-pipeline. On an M-series CPU expect roughly 4 s per 30 s of audio (4 threads).
+pipeline. Speed on an M-series CPU (4 threads): a 26-minute meeting diarizes
+in about 2 minutes (RTF ≈ 0.08), on top of the transcription time.
 
 | Role | Model | Download | Weights license |
 |---|---|---|---|
 | Segmentation | [pyannote segmentation-3.0](https://huggingface.co/pyannote/segmentation-3.0) (ONNX export by k2-fsa) | 7 MB | MIT |
-| Embedding (default) | [WeSpeaker](https://github.com/wenet-e2e/wespeaker) `en_voxceleb_resnet34_LM` | 27 MB | CC-BY-4.0 |
+| Embedding (default) | [NeMo](https://github.com/NVIDIA/NeMo) `en_titanet_small` | 40 MB | Apache-2.0 (per its NGC model card, the NeMo Toolkit license) |
+| Embedding (alt) | [WeSpeaker](https://github.com/wenet-e2e/wespeaker) `en_voxceleb_resnet34_LM` | 27 MB | CC-BY-4.0 |
 | Embedding (alt) | [3D-Speaker](https://github.com/modelscope/3D-Speaker) `campplus_sv_en_voxceleb_16k` | 30 MB | Apache-2.0 |
-| Embedding (alt) | [NeMo](https://github.com/NVIDIA/NeMo) `en_titanet_small` | 40 MB | CC-BY-4.0 |
+
+The default won a real-meeting accept-eval (RU/EN/ES + a 3-speaker 26-minute
+meeting): it was the only candidate to isolate all three real voices at
+`num_speakers=3`, at 2× the speed of the runner-up.
 
 Pick an alternate embedding model (or point at your own `.onnx` file for
 offline machines) via `TALKTHROUGH_DIARIZATION_EMB_MODEL`; tune the
@@ -494,7 +499,7 @@ model downloads once. Spoken-language support is unaffected either way.
 | `TALKTHROUGH_DIARIZE` | `off` | set `on` to diarize by default (needs the `[diarization]` extra; degrades with a warning without it); an explicit `diarize` tool param always wins |
 | `TALKTHROUGH_DIARIZATION_THRESHOLD` | `0.5` | clustering sensitivity when `num_speakers` is unknown: fewer speakers than expected → lower it; more → raise it |
 | `TALKTHROUGH_DIARIZATION_SEG_MODEL` | `pyannote-segmentation-3-0` | segmentation model: allowlist name or a path to a local `.onnx` (offline preseed) |
-| `TALKTHROUGH_DIARIZATION_EMB_MODEL` | `wespeaker_en_voxceleb_resnet34_LM` | embedding model: allowlist name (see [Speakers](#speakers-optional-diarization)) or a local `.onnx` path |
+| `TALKTHROUGH_DIARIZATION_EMB_MODEL` | `nemo_en_titanet_small` | embedding model: allowlist name (see [Speakers](#speakers-optional-diarization)) or a local `.onnx` path |
 | `TALKTHROUGH_DIARIZATION_THREADS` | `min(4, cpus)` | ONNX threads for both diarization models |
 | `TALKTHROUGH_MAX_SECONDS` | `7200` | max media duration |
 | `TALKTHROUGH_MAX_FRAMES` | `600` | keyframe cap per job |
