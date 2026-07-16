@@ -23,11 +23,13 @@ from mcp.types import ToolAnnotations
 
 from . import guidance
 from .core import jobs, pipeline
+from .core.diarize import speakers_in_range
 from .core.errors import AudioOnlyJobError, TalkthroughError
 from .core.frames import extract_exact_frame
 from .core.manifest import (
     Manifest,
     format_srt,
+    format_text,
     frames_in_range,
     nearest_frames,
     representative_frame,
@@ -62,9 +64,11 @@ mcp = FastMCP(
         "slice + frames + OCR for one remark), get_frames (keyframe images), "
         "extract_frame (exact-instant full-res re-extract), list_jobs (what is already "
         "processed). Timestamps: t_ms is video-relative; t_wall is real wall-clock time "
-        "when the recording start could be resolved. Server prompts (triage-recording, "
-        "spec-from-workshop, backlog-from-demo, meeting-actions, correlate-with-logs) "
-        "package the common workflows."
+        "when the recording start could be resolved. Speaker diarization (optional "
+        "[diarization] extra): process_media(diarize=true, num_speakers=N when known) "
+        "labels who said what as S1/S2/… across the transcript tools. Server prompts "
+        "(triage-recording, spec-from-workshop, backlog-from-demo, meeting-actions, "
+        "correlate-with-logs) package the common workflows."
     ),
 )
 
@@ -93,6 +97,9 @@ def _frame_payload(manifest: Manifest, frame_ms: int, file: str) -> dict[str, An
         "t_ms": frame_ms,
         "t_wall": manifest.t_wall_iso(frame_ms),
         "file": file,
+        # absolute path (issue #13): copying the image elsewhere is the
+        # calling agent's job, under the user's own permission model
+        "path": str((jobs.frames_dir(manifest.job_id) / file).resolve()),
     }
 
 
@@ -114,6 +121,8 @@ async def process_media(
     vocabulary: str | None = None,
     language: str | None = None,
     model: str | None = None,
+    diarize: bool | None = None,
+    num_speakers: int | None = None,
     force: bool = False,
 ) -> dict[str, Any]:
     state = _ProgressState()
@@ -146,6 +155,8 @@ async def process_media(
                 vocabulary=vocabulary,
                 language=language,
                 model=model,
+                diarize_speakers=diarize,
+                num_speakers=num_speakers,
                 force=force,
                 progress=on_progress,
             )
@@ -175,7 +186,7 @@ def get_transcript(
     next_start_ms: int | None = None
     budget = TRANSCRIPT_CHAR_BUDGET
     for segment in picked:
-        cost = len(segment.text) + 64  # rough per-segment envelope (ids + timestamps)
+        cost = len(segment.text) + 80  # rough per-segment envelope (ids + timestamps + speaker)
         if budget - cost < 0 and served:
             truncated = True
             next_start_ms = segment.t0_ms
@@ -193,18 +204,26 @@ def get_transcript(
         "truncated": truncated,
         "next_start_ms": next_start_ms,
     }
+    diarization = manifest.transcript.diarization
+    if diarization is not None and diarization.available:
+        payload["diarized"] = True
+        payload["speakers"] = [
+            {"label": stat.label, "talk_time_ms": stat.talk_time_ms, "turn_count": stat.turn_count}
+            for stat in diarization.speakers
+        ]
     if format == "segments":
         payload["segments"] = [
             {
                 "seq": segment.seq,
                 "t_ms": segment.t0_ms,
                 "t_wall": manifest.t_wall_iso(segment.t0_ms),
+                **({"speaker": segment.speaker} if segment.speaker else {}),
                 "text": segment.text,
             }
             for segment in served
         ]
     elif format == "text":
-        payload["text"] = " ".join(segment.text for segment in served)
+        payload["text"] = format_text(served)
     else:
         payload["srt"] = format_srt(served)
     return payload
@@ -294,6 +313,7 @@ def get_moment(job_id: str, start_ms: int, end_ms: int) -> list[str | Image]:
                 "seq": segment.seq,
                 "t_ms": segment.t0_ms,
                 "t_wall": manifest.t_wall_iso(segment.t0_ms),
+                **({"speaker": segment.speaker} if segment.speaker else {}),
                 "text": segment.text,
             }
             for segment in segments
@@ -304,6 +324,9 @@ def get_moment(job_id: str, start_ms: int, end_ms: int) -> list[str | Image]:
             for frame in picked
         ],
     }
+    diarization = manifest.transcript.diarization
+    if diarization is not None and diarization.available:
+        payload["speakers_in_range"] = speakers_in_range(diarization.turns, start_ms, end_ms)
     if not manifest.media.has_video:
         payload["note"] = "audio-only job: transcript evidence only, no frames exist"
     elif fallback_note:
@@ -331,6 +354,7 @@ def search(job_id: str, query: str) -> dict[str, Any]:
                 "source": hit.source,
                 "t_ms": hit.t_ms,
                 "t_wall": hit.t_wall,
+                **({"speaker": hit.speaker} if hit.speaker else {}),
                 "text": hit.text,
                 "segment_seq": hit.seq,
                 "frame_ms": hit.frame_ms,
@@ -374,6 +398,7 @@ def extract_frame(
         "t_wall": manifest.t_wall_iso(at_ms),
         "source": manifest.media.path,
         "crop": crop,
+        "path": str(out_path.resolve()),  # issue #13: agents copy it with their own file tools
         "note": "full source resolution (stored keyframes are capped at 1568px wide)",
     }
     return [_json_block(meta), Image(path=out_path)]
@@ -398,6 +423,12 @@ def list_jobs() -> dict[str, Any]:
                 "segment_count": len(manifest.transcript.segments),
                 "frames_unique": manifest.frames.unique_count,
                 "frames_total": manifest.frames.count,
+                **(
+                    {"speakers": manifest.transcript.diarization.detected_num_speakers}
+                    if manifest.transcript.diarization is not None
+                    and manifest.transcript.diarization.available
+                    else {}
+                ),
             }
             for manifest in manifests[:LIST_JOBS_MAX]
         ],

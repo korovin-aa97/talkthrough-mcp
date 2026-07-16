@@ -154,12 +154,30 @@ def _srt_timestamp(t_ms: int) -> str:
 
 
 def format_srt(segments: list[SttSegment]) -> str:
-    """SubRip text: 1-based sequential index, HH:MM:SS,mmm ranges, blank-line separated."""
+    """SubRip text: 1-based sequential index, HH:MM:SS,mmm ranges, blank-line separated.
+
+    Diarized segments carry the conventional ``S1: `` speaker prefix in the
+    cue text — cues are standalone, so every labeled cue gets one.
+    """
     blocks = [
-        f"{index}\n{_srt_timestamp(seg.t0_ms)} --> {_srt_timestamp(seg.t1_ms)}\n{seg.text}"
+        f"{index}\n{_srt_timestamp(seg.t0_ms)} --> {_srt_timestamp(seg.t1_ms)}\n"
+        + (f"{seg.speaker}: {seg.text}" if seg.speaker else seg.text)
         for index, seg in enumerate(segments, start=1)
     ]
     return "\n\n".join(blocks) + ("\n" if blocks else "")
+
+
+def format_text(segments: list[SttSegment]) -> str:
+    """Plain prose; diarized runs are prefixed with ``S1: `` at speaker changes."""
+    parts: list[str] = []
+    current: str | None = None
+    for segment in segments:
+        if segment.speaker and segment.speaker != current:
+            parts.append(f"{segment.speaker}: {segment.text}")
+            current = segment.speaker
+        else:
+            parts.append(segment.text)
+    return " ".join(parts)
 
 
 def slice_segments(
@@ -251,6 +269,7 @@ class SearchHit:
     seq: int | None  # transcript segment seq (transcript hits)
     frame_ms: int | None  # frame position (ocr hits)
     nearest_frame_ms: int | None
+    speaker: str | None = None  # transcript hits on diarized jobs
 
 
 def search_manifest(manifest: Manifest, query: str) -> list[SearchHit]:
@@ -270,6 +289,7 @@ def search_manifest(manifest: Manifest, query: str) -> list[SearchHit]:
                     seq=segment.seq,
                     frame_ms=None,
                     nearest_frame_ms=nearest_frame_ms(manifest, segment.t0_ms),
+                    speaker=segment.speaker,
                 )
             )
     for frame in manifest.frames.items:

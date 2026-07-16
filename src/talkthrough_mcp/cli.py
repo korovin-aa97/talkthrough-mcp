@@ -38,6 +38,18 @@ def _build_parser() -> argparse.ArgumentParser:
         default=None,
         help="whisper model for this run (e.g. large-v3-turbo); default from env/small",
     )
+    process.add_argument(
+        "--diarize",
+        action="store_true",
+        help="label who said what (S1/S2/…); needs the [diarization] extra",
+    )
+    process.add_argument(
+        "--num-speakers",
+        type=int,
+        default=None,
+        metavar="N",
+        help="exact speaker count when known — the single best quality lever",
+    )
 
     gc = sub.add_parser("gc", help="delete old jobs from the local store")
     gc.add_argument("--keep-days", type=int, default=30, help="keep jobs newer than N days")
@@ -74,13 +86,27 @@ def _print_human_summary(summary: dict[str, object]) -> None:
     print(f"frames     : {frames['unique_count']} unique / {frames['count']} total")
     ocr_text_count = ocr["unique_frames_with_text"]
     print(f"ocr        : enabled={ocr['enabled']} frames_with_text={ocr_text_count}")
+    diarization = summary.get("diarization")
+    if isinstance(diarization, dict):
+        if diarization["available"]:
+            roster = ", ".join(
+                f"{speaker['label']} {speaker['talk_time_ms'] / 1000:.0f}s"
+                for speaker in diarization["speakers"]
+            )
+            amended = "  (amended existing job)" if summary.get("diarization_amended") else ""
+            print(
+                f"speakers   : {diarization['detected_num_speakers']} ({roster}){amended}"
+            )
+        else:
+            print(f"speakers   : unavailable — {diarization['reason']}")
     print(f"elapsed    : {summary['elapsed_s']}s")
     preview = transcript["preview_segments"]
     if isinstance(preview, list) and preview:
         print("preview    :")
         for segment in preview[:5]:
             assert isinstance(segment, dict)
-            print(f"  [{segment['t_ms']:>7} ms] {segment['text']}")
+            prefix = f"{segment['speaker']} " if segment.get("speaker") else ""
+            print(f"  [{segment['t_ms']:>7} ms] {prefix}{segment['text']}")
         if transcript["preview_truncated"] or len(preview) > 5:
             print("  … (use get_transcript for the rest)")
 
@@ -97,6 +123,8 @@ def _cmd_process(args: argparse.Namespace) -> int:
         vocabulary=args.vocabulary,
         language=args.language,
         model=args.model,
+        diarize_speakers=True if args.diarize else None,
+        num_speakers=args.num_speakers,
         force=args.force,
         progress=on_progress,
     )

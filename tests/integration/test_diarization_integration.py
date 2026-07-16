@@ -174,6 +174,61 @@ def test_non_diarize_call_keeps_the_superset(two_voice: ProcessResult) -> None:
     assert diarization is not None and diarization.available
 
 
+# --- server tool surface on the diarized job -----------------------------------
+
+
+def test_get_transcript_serves_speakers_roster_and_prefixes(two_voice: ProcessResult) -> None:
+    from talkthrough_mcp.server import get_transcript
+
+    job_id = two_voice.manifest.job_id
+    payload = get_transcript(job_id)
+    assert payload["diarized"] is True
+    assert [entry["label"] for entry in payload["speakers"]] == ["S1", "S2"]
+    assert {"label", "talk_time_ms", "turn_count"} == set(payload["speakers"][0])
+    speakers_seen = {entry.get("speaker") for entry in payload["segments"]}
+    assert {"S1", "S2"} <= speakers_seen
+
+    text = get_transcript(job_id, format="text")["text"]
+    assert "S1: " in text and "S2: " in text
+
+    srt = get_transcript(job_id, format="srt")["srt"]
+    assert "\nS1: " in srt and "\nS2: " in srt
+
+
+def test_get_moment_reports_speakers_in_range(two_voice: ProcessResult) -> None:
+    import json
+
+    from talkthrough_mcp.server import get_moment
+
+    start, end, label = TWO_VOICE_TURNS_MS[1]
+    content = get_moment(two_voice.manifest.job_id, start + 500, end - 500)
+    meta = json.loads(content[0])
+    assert meta["speakers_in_range"] == [label]
+    assert all(
+        entry.get("speaker") in {"S1", "S2", None} for entry in meta["transcript"]
+    )
+    assert any(entry.get("speaker") == label for entry in meta["transcript"])
+
+
+def test_search_hits_carry_speaker_labels(two_voice: ProcessResult) -> None:
+    from talkthrough_mcp.server import search
+
+    payload = search(two_voice.manifest.job_id, "the")
+    transcript_hits = [hit for hit in payload["hits"] if hit["source"] == "transcript"]
+    assert transcript_hits, "common word must hit the transcript"
+    assert any(hit.get("speaker") in {"S1", "S2"} for hit in transcript_hits)
+
+
+def test_list_jobs_shows_speaker_count_only_when_present(two_voice: ProcessResult) -> None:
+    from talkthrough_mcp.server import list_jobs
+
+    payload = list_jobs()
+    entry = next(
+        item for item in payload["jobs"] if item["job_id"] == two_voice.manifest.job_id
+    )
+    assert entry["speakers"] == TWO_VOICE_NUM_SPEAKERS
+
+
 # --- amend path (mutates its own job — meeting fixture, single voice) ----------
 
 

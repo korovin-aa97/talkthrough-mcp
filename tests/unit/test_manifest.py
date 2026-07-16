@@ -18,6 +18,7 @@ from talkthrough_mcp.core.manifest import (
     FrameIndex,
     Manifest,
     format_srt,
+    format_text,
     frames_in_range,
     load_manifest,
     nearest_frame_ms,
@@ -155,6 +156,37 @@ def test_diarized_round_trip(tmp_path: Path) -> None:
     assert diarization is not None
     assert diarization.turns == [Turn(0, 5000, "S1"), Turn(5000, 8000, "S2")]
     assert [stat.label for stat in diarization.speakers] == ["S1", "S2"]
+
+
+def test_srt_prefixes_every_diarized_cue() -> None:
+    manifest = _diarized_manifest()
+    srt = format_srt(manifest.transcript.segments)
+    assert "S1: This is the login page." in srt
+    assert "S2: Settings look fine." in srt
+    plain = format_srt(make_manifest().transcript.segments)
+    assert "S1:" not in plain  # non-diarized output byte-stable
+
+
+def test_format_text_prefixes_only_speaker_changes() -> None:
+    manifest = _diarized_manifest()
+    text = format_text(manifest.transcript.segments)
+    assert text == (
+        "S1: This is the login page. The dashboard shows an error message. "
+        "S2: Settings look fine."
+    )
+    assert format_text(make_manifest().transcript.segments) == (
+        "This is the login page. The dashboard shows an error message. Settings look fine."
+    )
+
+
+def test_search_hits_carry_speaker_on_diarized_jobs() -> None:
+    manifest = _diarized_manifest()
+    (hit,) = [h for h in search_manifest(manifest, "login") if h.source == "transcript"]
+    assert hit.speaker == "S1"
+    (plain,) = [
+        h for h in search_manifest(make_manifest(), "login") if h.source == "transcript"
+    ]
+    assert plain.speaker is None
 
 
 def test_from_dict_ignores_unknown_keys_from_newer_versions() -> None:

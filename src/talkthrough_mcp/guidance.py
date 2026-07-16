@@ -25,34 +25,36 @@ EXAMPLES_HEADER = "Examples:"
 TOOL_DESCRIPTIONS: dict[str, str] = {
     "process_media": """\
 Ingest a LOCAL video or audio file and make it queryable: validates the file, transcribes \
-speech locally (whisper), extracts scene-change keyframes, OCRs on-screen text, and resolves \
-the wall-clock start time. Returns a compact summary (job_id, media info, wall_clock, \
-transcript preview) — full data stays on disk and is served lazily by the other tools. \
+speech locally (whisper), extracts scene-change keyframes, OCRs on-screen text, resolves \
+the wall-clock start time, and (opt-in) labels who said what via local speaker diarization. \
+Returns a compact summary (job_id, media info, wall_clock, transcript preview, speaker \
+roster when diarized) — full data stays on disk and is served lazily by the other tools. \
 Idempotent by content hash: re-calling on an already-processed file returns instantly.
 When NOT to use: to re-fetch data you already processed (use the retrieval tools), or for \
 URLs — local file paths only.
 Examples:
 - process_media(path="/Users/sam/Desktop/bug-repro.mov") — narrated screencast, defaults are right
-- process_media(path="~/Videos/demo.mp4", language="en") — pin the language, skip auto-detect
 - process_media(path="/rec/interview.mov", model="large-v3-turbo") — best multilingual quality (1.5 GB, one-time)
 - process_media(path="/tmp/standup.m4a") — audio-only: transcript tools work, frame tools will error
+- process_media(path="/rec/team-sync.m4a", diarize=true) — who said what: segments get S1/S2/… + talk-time roster
+- process_media(path="/rec/panel.mov", diarize=true, num_speakers=4) — headcount known? ALWAYS pass it: best accuracy
+- job already processed + diarize=true → speakers are added in place, whisper does NOT re-run (fast amend)
+- error mentions [diarization] → the extra is missing: install via uvx "talkthrough-mcp[diarization]"
 - process_media(path="/rec/review.mov", vocabulary="OKR, PgBouncer, Kanban") — jargon survives STT
 - process_media(path="/rec/demo.mov", recorded_at="2026-07-10T12:03:00+02:00") — exact wall-clock anchor
-- process_media(path="/rec/demo.mov", recorded_at="2026-07-10T12:03:00+02:00", force=true) — re-anchor a done job
 - user: "I just recorded my screen, it's on my Desktop" → process_media(path="/Users/<user>/Desktop/<file>.mov")
-- user drops a browser tab capture → process_media(path="~/Downloads/tab-capture.webm")
 - summary shows wall_clock=null → ask when recording started, re-call with recorded_at=... and force=true
 - transcript garbled or language_probability low → re-call with model="large-v3-turbo" (or language="ru") + force=true
-- 30-min video is fine: progress notifications stream while whisper runs; expect minutes, not seconds
 - after success, do NOT dump everything — continue with get_transcript / get_moment / search on the job_id
 - anti-example: frames from an already-processed job → get_frames(job_id=...), never process_media again
 - anti-example: YouTube/URL input → unsupported in v1; have the user download the file first
 """,
     "get_transcript": """\
 Retrieve the transcript of a processed job, lazily and paginated. Formats: "segments" \
-(default — seq, t_ms, t_wall when known, text), "text" (plain prose), "srt" (subtitles). \
-Responses are capped (~8k tokens): when truncated=true, continue from the returned \
-next_start_ms.
+(default — seq, t_ms, t_wall when known, speaker when diarized, text), "text" (plain \
+prose; "S1:" prefixes at speaker changes), "srt" (subtitles, speaker-prefixed cues). \
+Diarized jobs also return the speaker roster (talk time, turns) in the header. Responses \
+are capped (~8k tokens): when truncated=true, continue from the returned next_start_ms.
 When NOT to use: to find one keyword (use search) or to inspect one moment with visuals \
 (use get_moment).
 Examples:
@@ -60,12 +62,15 @@ Examples:
 - get_transcript(job_id="a1b2c3d4e5f60718", start_ms=0, end_ms=120000) — just the first two minutes
 - get_transcript(job_id="...", format="text") — prose block for summarization
 - get_transcript(job_id="...", format="srt") — subtitle export the user asked for
+- diarized job: segments carry "speaker" and the header a roster — who dominated the meeting is one look away
+- "what did S2 say?" → format="segments", collect entries with speaker=="S2" (labels are in order of first voice)
 - got truncated=true with next_start_ms=421500 → get_transcript(job_id="...", start_ms=421500)
 - user: "what was said between 5:00 and 6:30?" → start_ms=300000, end_ms=390000
 - meeting recording (audio-only job): this tool is the main surface — frames don't exist there
 - correlate speech with logs: each segment's t_wall lines up with your log timestamps
 - wall_clock=null on the job → segments carry t_ms only (relative to video start)
 - 60-min video: page by ranges (e.g. 10-min windows), don't pull from 0 repeatedly
+- no speaker fields on a meeting job → re-run process_media with diarize=true (adds them without re-transcribing)
 - anti-example: "where did they mention checkout?" → search(job_id, "checkout"), not full paging
 - anti-example: screenshots around a remark → get_moment(job_id, start_ms, end_ms)
 """,
@@ -85,6 +90,7 @@ Examples:
 - walking a demo scene by scene → one ranged call per scene beats one giant range
 - frame files are named by video-ms (t00083500.jpg ↔ t_ms 83500) — stable refs for findings
 - keep max_frames at 2-4 unless you are truly comparing scenes; images are token-expensive
+- every frame entry carries "path" (absolute) — save/copy the image elsewhere with your own file tools
 - audio-only job → this tool errors by design; use get_transcript / get_moment instead
 - anti-example: need EXACTLY 12:34.500 between two keyframes → extract_frame(job_id, at_ms=754500)
 - anti-example: "find the screen with the red error banner" → search(job_id, "error") first, then jump
@@ -102,6 +108,8 @@ Examples:
 - user: "what was I showing when I said 'this button is broken'?" → search first, then get_moment at the hit
 - opening context of a meeting: get_moment(job_id, 0, 15000)
 - response includes the t_wall range when known → quote it in bug reports for log correlation
+- diarized job → speakers_in_range + speaker on each segment: who is talking in this window, at a glance
+- frame entries carry "path" (absolute) — copy the screenshot elsewhere with your own file tools
 - audio-only job → returns the transcript slice plus a no-frames note (that is expected)
 - anti-example: whole-video summary → get_transcript(format="text"), not a chain of get_moments
 - anti-example: need more than 3 frames of a range → get_frames(start_ms=..., end_ms=..., max_frames=6)
@@ -124,6 +132,7 @@ Examples:
 - no hits? shorten the stem: "notif" matches notification / notifications / notify
 - prefer one distinctive word ("checkout") over a whole sentence — substrings must match exactly
 - every hit has nearest_frame_ms → get_frames(job_id, at_ms=<that>) shows the moment
+- diarized job: transcript hits carry "speaker" — "who mentioned the deadline?" is answered by the hit itself
 - audio-only job → transcript hits only (there is no OCR index)
 - anti-example: "summarize the pricing discussion" → get_transcript(format="text") and read it
 - anti-example: finding an icon or layout glitch with no text → get_frames over the range; OCR sees text only
@@ -143,6 +152,7 @@ Examples:
 - verify a one-frame glitch: extract_frame at 12300, 12400, 12500 and compare
 - OCR missed small text → extract_frame with a tight crop, then read the returned image
 - crop coordinates are SOURCE pixels (a Retina screen recording may be 2940x1912) — not keyframe scale
+- response JSON carries "path" (absolute) — "save this screenshot next to my docs" = copy from path yourself
 - source file moved or deleted → clear error; stored keyframes via get_frames still work
 - audio-only job → always errors: there is no video stream to decode
 - anti-example: "show me around 5:00" → get_frames(job_id, at_ms=300000); extract_frame is for exact instants
@@ -162,6 +172,7 @@ Examples:
 - wall_clock.start answers "WHEN was this session?" — pick the job from "yesterday around 15:00"
 - after CLI batch pre-processing (`talkthrough-mcp process big.mov`) the job shows up here — query it
 - two jobs with the same filename → the newer created one is usually the re-recording
+- diarized jobs show "speakers": N — "the 4-person meeting from Tuesday" is findable at a glance
 - empty list → nothing processed on this machine yet; ask the user for a file path
 - job disappeared → likely `talkthrough-mcp gc` cleaned it; re-run process_media on the file (same id)
 - anti-example: checking whether a NEW file is processed → just call process_media, it is idempotent+instant
@@ -319,26 +330,37 @@ them, and that is fine.
 
 1. get_transcript(job_id="{job_id}", format="segments") — walk the whole meeting
    (paginate via next_start_ms when truncated).
-2. Collect: action items (who committed to what), decisions (what was agreed),
+2. Multi-person meeting without `speaker` labels on segments? Re-run
+   process_media(path=<original file>, diarize=true, num_speakers=<attendee
+   count when known>) — it adds S1/S2/… labels to the existing job without
+   re-transcribing, and minutes with owners need them.
+3. When segments carry speaker labels, map each label to a person before
+   writing minutes: self-introductions ("hi, this is Vera"), vocatives
+   ("thanks, Tom"), and the attendees list above are the evidence. State the
+   mapping first (e.g. `S1 = Vera, S2 = Tom, S3 = unidentified`) — never
+   guess beyond the evidence.
+4. Collect: action items (who committed to what), decisions (what was agreed),
    open questions (raised but unresolved). Keep exact quotes and t_ms for each.
-3. search(job_id="{job_id}", query="<name or topic>") to trace scattered
+5. search(job_id="{job_id}", query="<name or topic>") to trace scattered
    follow-ups on one topic before summarizing it.
-4. If the job has video (a screen-share was recorded), attach visual evidence to
+6. If the job has video (a screen-share was recorded), attach visual evidence to
    items that reference the screen via get_moment(job_id="{job_id}",
    start_ms=..., end_ms=...).
 
 ## Output
 
-Markdown with three sections:
+Markdown with three sections (open with the speaker mapping line when the job
+is diarized):
 
 1. **Action items** — `- [ ] <action> — owner: <name or "unassigned">, due:
    <date or "unspecified">, evidence: "<quote>" (t_ms, t_wall when known)`.
 2. **Decisions** — one bullet per decision with the deciding quote + timestamp.
 3. **Open questions** — what needs an answer, who raised it, timestamp.
 
-Owners and dates come ONLY from spoken words — never infer them. When unclear,
-write "unassigned"/"unspecified". Write the minutes in the meeting's language;
-quotes stay verbatim.
+Owners and dates come ONLY from spoken words — a commitment voiced by a mapped
+speaker counts ("I'll send it" spoken by S2 = Tom → owner: Tom); never infer
+beyond that. When unclear, write "unassigned"/"unspecified". Write the minutes
+in the meeting's language; quotes stay verbatim.
 """,
     "correlate-with-logs": """\
 You are debugging with two evidence streams: a narrated recording (talkthrough
