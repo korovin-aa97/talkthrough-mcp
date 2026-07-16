@@ -7,6 +7,12 @@ from pathlib import Path
 
 from tests.conftest import make_manifest
 
+from talkthrough_mcp.core.diarize import (
+    Diarization,
+    Turn,
+    attribute_segments,
+    speaker_roster,
+)
 from talkthrough_mcp.core.frames import Frame
 from talkthrough_mcp.core.manifest import (
     FrameIndex,
@@ -108,6 +114,58 @@ def test_from_dict_tolerates_extra_free_form_versions(tmp_path: Path) -> None:
     payload["tool_versions"]["ffmpeg"] = "ffmpeg version 7.0"
     rebuilt = Manifest.from_dict(payload)
     assert rebuilt.tool_versions["ffmpeg"] == "ffmpeg version 7.0"
+
+
+# --- diarization (additive schema) -------------------------------------------
+
+
+def _diarized_manifest() -> Manifest:
+    manifest = make_manifest(wall_clock=CLOCK)
+    turns = [Turn(0, 5000, "S1"), Turn(5000, 8000, "S2")]
+    manifest.transcript.segments = attribute_segments(manifest.transcript.segments, turns)
+    manifest.transcript.diarization = Diarization(
+        available=True,
+        reason="",
+        engine="sherpa-onnx",
+        engine_version="1.13.4",
+        segmentation_model="pyannote-segmentation-3.0",
+        embedding_model="wespeaker_en_voxceleb_resnet34_LM",
+        requested_num_speakers=2,
+        detected_num_speakers=2,
+        threshold=0.5,
+        speakers=speaker_roster(turns),
+        turns=turns,
+    )
+    return manifest
+
+
+def test_non_diarized_manifest_serializes_exactly_like_v01x() -> None:
+    payload = make_manifest().to_dict()
+    assert "diarization" not in payload["transcript"]
+    assert all("speaker" not in segment for segment in payload["transcript"]["segments"])
+
+
+def test_diarized_round_trip(tmp_path: Path) -> None:
+    manifest = _diarized_manifest()
+    save_manifest(manifest, tmp_path)
+    loaded = load_manifest(tmp_path)
+    assert loaded == manifest
+    assert [s.speaker for s in loaded.transcript.segments] == ["S1", "S1", "S2"]
+    diarization = loaded.transcript.diarization
+    assert diarization is not None
+    assert diarization.turns == [Turn(0, 5000, "S1"), Turn(5000, 8000, "S2")]
+    assert [stat.label for stat in diarization.speakers] == ["S1", "S2"]
+
+
+def test_from_dict_ignores_unknown_keys_from_newer_versions() -> None:
+    payload = _diarized_manifest().to_dict()
+    payload["transcript"]["segments"][0]["confidence"] = 0.93
+    payload["transcript"]["word_stats"] = {"total": 40}
+    payload["frames"]["items"][0]["blurhash"] = "LEHV6nWB2yk8"
+    payload["caps"]["max_speakers"] = 16
+    rebuilt = Manifest.from_dict(payload)
+    assert rebuilt.transcript.segments[0].speaker == "S1"
+    assert rebuilt.caps.max_seconds == 7200
 
 
 def _long_static_manifest() -> Manifest:

@@ -4,6 +4,25 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions follow
 [SemVer](https://semver.org/).
 
+## [Unreleased]
+
+### Added
+
+- Speaker-diarization groundwork (#4, lands in v0.2.0): `core/diarize.py`
+  with deterministic `S1`/`S2` labels ordered by first appearance,
+  whisperX-style segment attribution (max total overlap, ties to the lower
+  label), speaker roster and range queries; additive `speaker` field on
+  transcript segments and `transcript.diarization` manifest block. Schema
+  stays `talkthrough-manifest/v1`; manifests without diarization serialize
+  byte-identically to 0.1.x output.
+
+### Fixed
+
+- `Manifest.from_dict` now ignores unknown dataclass keys, so manifests
+  written by newer package versions load instead of raising `TypeError`.
+  The inverse still holds: 0.1.x cannot read manifests that already contain
+  diarization fields — noted here as the downgrade boundary.
+
 ## [0.1.3] — 2026-07-12
 
 Hardening from a hostile-input test pass (silent recordings, odd containers,

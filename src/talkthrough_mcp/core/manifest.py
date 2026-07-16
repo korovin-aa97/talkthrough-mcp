@@ -12,6 +12,7 @@ from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any
 
+from .diarize import Diarization, known_fields
 from .frames import Frame
 from .stt import SttSegment
 from .wallclock import WallClock
@@ -43,6 +44,7 @@ class Transcript:
     model: str | None
     language_probability: float | None = None
     segments: list[SttSegment] = field(default_factory=list)
+    diarization: Diarization | None = None
 
     def full_text(self) -> str:
         return " ".join(segment.text for segment in self.segments if segment.text).strip()
@@ -85,26 +87,45 @@ class Manifest:
     def to_dict(self) -> dict[str, Any]:
         payload = asdict(self)
         payload["wall_clock"] = self.wall_clock.to_dict() if self.wall_clock else None
+        # Additive diarization fields never serialize as null: non-diarized
+        # manifests stay byte-identical to the ones 0.1.x wrote.
+        transcript_payload = payload["transcript"]
+        for segment_payload in transcript_payload["segments"]:
+            if segment_payload.get("speaker") is None:
+                del segment_payload["speaker"]
+        if self.transcript.diarization is None:
+            del transcript_payload["diarization"]
+        else:
+            transcript_payload["diarization"] = self.transcript.diarization.to_dict()
         return payload
 
     @staticmethod
     def from_dict(payload: dict[str, Any]) -> Manifest:
-        media = MediaMeta(**payload["media"])
+        # known_fields() everywhere: unknown keys from NEWER package versions
+        # are ignored instead of raising TypeError (additive-schema tolerance).
+        media = MediaMeta(**known_fields(MediaMeta, payload["media"]))
         transcript_raw = dict(payload["transcript"])
         transcript_raw["segments"] = [
-            SttSegment(**segment) for segment in transcript_raw.get("segments", [])
+            SttSegment(**known_fields(SttSegment, segment))
+            for segment in transcript_raw.get("segments", [])
         ]
+        diarization_raw = transcript_raw.get("diarization")
+        transcript_raw["diarization"] = (
+            Diarization.from_dict(diarization_raw) if isinstance(diarization_raw, dict) else None
+        )
         frames_raw = dict(payload["frames"])
-        frames_raw["items"] = [Frame(**item) for item in frames_raw.get("items", [])]
+        frames_raw["items"] = [
+            Frame(**known_fields(Frame, item)) for item in frames_raw.get("items", [])
+        ]
         return Manifest(
             schema=str(payload["schema"]),
             job_id=str(payload["job_id"]),
             created_at=str(payload["created_at"]),
             media=media,
             wall_clock=WallClock.from_dict(payload.get("wall_clock")),
-            transcript=Transcript(**transcript_raw),
-            frames=FrameIndex(**frames_raw),
-            caps=Caps(**payload["caps"]),
+            transcript=Transcript(**known_fields(Transcript, transcript_raw)),
+            frames=FrameIndex(**known_fields(FrameIndex, frames_raw)),
+            caps=Caps(**known_fields(Caps, payload["caps"])),
             tool_versions={str(k): str(v) for k, v in payload.get("tool_versions", {}).items()},
         )
 
