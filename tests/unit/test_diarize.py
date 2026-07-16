@@ -1,22 +1,40 @@
-"""Attribution math, label determinism, roster/range queries, env parsing."""
+"""Attribution math, label determinism, roster/range queries, env, model cache."""
 
 from __future__ import annotations
 
+import hashlib
+import sys
+import tarfile
+import wave
+from pathlib import Path
+
 import pytest
 
+from talkthrough_mcp.core import diarize
 from talkthrough_mcp.core.diarize import (
+    DEFAULT_EMBEDDING_MODEL,
+    DEFAULT_SEGMENTATION_MODEL,
     DEFAULT_THRESHOLD,
+    EMBEDDING_MODELS,
+    SEGMENTATION_MODELS,
     Diarization,
+    ModelSpec,
     SpeakerStat,
     Turn,
     attribute_segments,
     clustering_threshold,
+    create_diarizer,
     diarization_threads,
     diarize_default,
+    ensure_model_file,
+    load_wav_float32,
+    models_root,
     relabel_turns,
+    resolve_model,
     speaker_roster,
     speakers_in_range,
 )
+from talkthrough_mcp.core.errors import ToolFailureError, ValidationError
 from talkthrough_mcp.core.stt import SttSegment
 
 
@@ -206,3 +224,255 @@ def test_threads_default_override_and_invalid(monkeypatch: pytest.MonkeyPatch) -
     for bad in ("0", "-3", "many"):
         monkeypatch.setenv("TALKTHROUGH_DIARIZATION_THREADS", bad)
         assert diarization_threads() == default
+
+
+# --- model cache ------------------------------------------------------------
+
+
+def spec_for(payload: bytes, tmp_path: Path, *, archive_member: str | None = None) -> ModelSpec:
+    return ModelSpec(
+        name="test-model",
+        url="https://example.invalid/assets/test-model.onnx",
+        sha256=hashlib.sha256(payload).hexdigest(),
+        license="MIT",
+        archive_member=archive_member,
+    )
+
+
+def serve_bytes(monkeypatch: pytest.MonkeyPatch, payload: bytes) -> list[str]:
+    """Replace the downloader with one writing ``payload``; returns the URL log."""
+    calls: list[str] = []
+
+    def fake_download(url: str, dest: Path) -> None:
+        calls.append(url)
+        dest.write_bytes(payload)
+
+    monkeypatch.setattr(diarize, "_download", fake_download)
+    return calls
+
+
+def forbid_network(monkeypatch: pytest.MonkeyPatch) -> None:
+    def no_network(url: str, dest: Path) -> None:
+        raise AssertionError(f"network touched for {url}")
+
+    monkeypatch.setattr(diarize, "_download", no_network)
+
+
+def test_models_root_respects_talkthrough_home(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.setenv("TALKTHROUGH_HOME", str(tmp_path))
+    assert models_root() == tmp_path / "models" / "diarization"
+
+
+def test_warm_cache_is_zero_network(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    monkeypatch.setenv("TALKTHROUGH_HOME", str(tmp_path))
+    forbid_network(monkeypatch)
+    spec = spec_for(b"weights", tmp_path)
+    cached = tmp_path / "models" / "diarization" / spec.name / "model.onnx"
+    cached.parent.mkdir(parents=True)
+    cached.write_bytes(b"weights")
+    assert ensure_model_file(spec) == cached
+
+
+def test_cold_download_verifies_sha_and_installs(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.setenv("TALKTHROUGH_HOME", str(tmp_path))
+    payload = b"onnx-bytes"
+    calls = serve_bytes(monkeypatch, payload)
+    spec = spec_for(payload, tmp_path)
+    target = ensure_model_file(spec)
+    assert target.read_bytes() == payload
+    assert calls == [spec.url]
+    assert list(target.parent.glob("*.part")) == []
+    # second call is a pure cache hit
+    forbid_network(monkeypatch)
+    assert ensure_model_file(spec) == target
+
+
+def test_sha_mismatch_fails_and_leaves_no_artifacts(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.setenv("TALKTHROUGH_HOME", str(tmp_path))
+    serve_bytes(monkeypatch, b"tampered-bytes")
+    spec = spec_for(b"expected-bytes", tmp_path)
+    with pytest.raises(ToolFailureError, match="sha256"):
+        ensure_model_file(spec)
+    model_dir = tmp_path / "models" / "diarization" / spec.name
+    assert not (model_dir / "model.onnx").exists()
+    assert list(model_dir.glob("*.part")) == []
+
+
+def test_tar_asset_extracts_single_member(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.setenv("TALKTHROUGH_HOME", str(tmp_path))
+    inner = tmp_path / "model.onnx"
+    inner.write_bytes(b"segmentation-weights")
+    archive = tmp_path / "asset.tar.bz2"
+    with tarfile.open(archive, "w:bz2") as tar:
+        tar.add(inner, arcname="release-dir/model.onnx")
+        tar.add(inner, arcname="release-dir/README.md")
+    payload = archive.read_bytes()
+    serve_bytes(monkeypatch, payload)
+    spec = spec_for(payload, tmp_path, archive_member="release-dir/model.onnx")
+    target = ensure_model_file(spec)
+    assert target.read_bytes() == b"segmentation-weights"
+    assert list(target.parent.glob("*.part")) == []
+    assert list(target.parent.glob("*.tar.bz2")) == []
+
+
+def test_tar_asset_missing_member_is_actionable(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.setenv("TALKTHROUGH_HOME", str(tmp_path))
+    inner = tmp_path / "other.onnx"
+    inner.write_bytes(b"x")
+    archive = tmp_path / "asset.tar.bz2"
+    with tarfile.open(archive, "w:bz2") as tar:
+        tar.add(inner, arcname="release-dir/other.onnx")
+    payload = archive.read_bytes()
+    serve_bytes(monkeypatch, payload)
+    spec = spec_for(payload, tmp_path, archive_member="release-dir/model.onnx")
+    with pytest.raises(ToolFailureError, match="re-download"):
+        ensure_model_file(spec)
+
+
+def test_download_stall_retries_once(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    monkeypatch.setenv("TALKTHROUGH_HOME", str(tmp_path))
+    payload = b"weights-after-retry"
+    attempts: list[int] = []
+
+    class StallingResponse:
+        def __enter__(self) -> StallingResponse:
+            return self
+
+        def __exit__(self, *args: object) -> None:
+            return None
+
+        def read(self, size: int = -1) -> bytes:
+            raise TimeoutError("The read operation timed out")
+
+    class ServingResponse(StallingResponse):
+        served = False
+
+        def read(self, size: int = -1) -> bytes:
+            if self.served:
+                return b""
+            self.served = True
+            return payload
+
+    def urlopen(request: object, timeout: float = 0) -> StallingResponse:
+        attempts.append(1)
+        return StallingResponse() if len(attempts) == 1 else ServingResponse()
+
+    monkeypatch.setattr(diarize.urllib.request, "urlopen", urlopen)
+    spec = spec_for(payload, tmp_path)
+    target = ensure_model_file(spec)
+    assert target.read_bytes() == payload
+    assert len(attempts) == 2
+
+
+def test_pinned_specs_are_wellformed() -> None:
+    assert DEFAULT_SEGMENTATION_MODEL in SEGMENTATION_MODELS
+    assert DEFAULT_EMBEDDING_MODEL in EMBEDDING_MODELS
+    for spec in [*SEGMENTATION_MODELS.values(), *EMBEDDING_MODELS.values()]:
+        assert spec.url.startswith("https://github.com/k2-fsa/sherpa-onnx/releases/download/")
+        assert len(spec.sha256) == 64
+        assert spec.license
+    # reverb models are non-commercial — they must never enter the allowlist
+    assert not any("reverb" in name for name in SEGMENTATION_MODELS)
+
+
+# --- model resolution (env) ---------------------------------------------------
+
+
+def test_resolve_model_default_and_allowlist(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    resolved: list[ModelSpec] = []
+
+    def fake_ensure(spec: ModelSpec) -> Path:
+        resolved.append(spec)
+        return tmp_path / spec.name / "model.onnx"
+
+    monkeypatch.setattr(diarize, "ensure_model_file", fake_ensure)
+    monkeypatch.delenv("TALKTHROUGH_DIARIZATION_EMB_MODEL", raising=False)
+    label, _ = resolve_model(
+        "TALKTHROUGH_DIARIZATION_EMB_MODEL", EMBEDDING_MODELS, DEFAULT_EMBEDDING_MODEL
+    )
+    assert label == DEFAULT_EMBEDDING_MODEL
+    monkeypatch.setenv("TALKTHROUGH_DIARIZATION_EMB_MODEL", "nemo_en_titanet_small")
+    label, _ = resolve_model(
+        "TALKTHROUGH_DIARIZATION_EMB_MODEL", EMBEDDING_MODELS, DEFAULT_EMBEDDING_MODEL
+    )
+    assert label == "nemo_en_titanet_small"
+    assert [spec.name for spec in resolved] == [DEFAULT_EMBEDDING_MODEL, "nemo_en_titanet_small"]
+
+
+def test_resolve_model_local_path_is_offline_preseed(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    forbid_network(monkeypatch)
+    preseed = tmp_path / "custom.onnx"
+    preseed.write_bytes(b"weights")
+    monkeypatch.setenv("TALKTHROUGH_DIARIZATION_EMB_MODEL", str(preseed))
+    label, path = resolve_model(
+        "TALKTHROUGH_DIARIZATION_EMB_MODEL", EMBEDDING_MODELS, DEFAULT_EMBEDDING_MODEL
+    )
+    assert path == preseed
+    assert label == str(preseed)
+
+
+def test_resolve_model_unknown_name_lists_allowlist(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("TALKTHROUGH_DIARIZATION_EMB_MODEL", "no-such-model")
+    with pytest.raises(ValidationError, match="nemo_en_titanet_small"):
+        resolve_model(
+            "TALKTHROUGH_DIARIZATION_EMB_MODEL", EMBEDDING_MODELS, DEFAULT_EMBEDDING_MODEL
+        )
+
+
+# --- engine plumbing ----------------------------------------------------------
+
+
+def test_create_diarizer_without_extra_returns_none(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setitem(sys.modules, "sherpa_onnx", None)
+    assert create_diarizer() is None
+
+
+def write_wav(path: Path, *, channels: int = 1, rate: int = 16_000, width: int = 2) -> None:
+    with wave.open(str(path), "wb") as handle:
+        handle.setnchannels(channels)
+        handle.setsampwidth(width)
+        handle.setframerate(rate)
+        frame = b"\x00\x40" * channels  # 16384 per channel
+        handle.writeframes(frame * 4)
+
+
+def test_load_wav_float32_scales_and_reports_rate(tmp_path: Path) -> None:
+    wav = tmp_path / "mono.wav"
+    write_wav(wav)
+    samples, rate = load_wav_float32(wav)
+    assert rate == 16_000
+    assert len(samples) == 4
+    assert abs(float(samples[0]) - 0.5) < 1e-4  # 16384 / 32768
+
+
+def test_load_wav_float32_downmixes_stereo(tmp_path: Path) -> None:
+    wav = tmp_path / "stereo.wav"
+    write_wav(wav, channels=2)
+    samples, _ = load_wav_float32(wav)
+    assert len(samples) == 4
+    assert abs(float(samples[0]) - 0.5) < 1e-4
+
+
+def test_load_wav_float32_rejects_non_16bit(tmp_path: Path) -> None:
+    wav = tmp_path / "eight.wav"
+    with wave.open(str(wav), "wb") as handle:
+        handle.setnchannels(1)
+        handle.setsampwidth(1)
+        handle.setframerate(16_000)
+        handle.writeframes(b"\x40" * 8)
+    with pytest.raises(ToolFailureError, match="16-bit"):
+        load_wav_float32(wav)
