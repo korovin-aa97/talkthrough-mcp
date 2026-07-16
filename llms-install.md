@@ -52,6 +52,23 @@ for non-English narration — the `process_media` tool also accepts a per-call
 `model` parameter), `TALKTHROUGH_OCR` (`off` to disable),
 `TALKTHROUGH_HOME` (job store root, default `~/.talkthrough`).
 
+## Optional: speaker diarization (who said what)
+
+If the user wants speaker labels on meetings/interviews, install with the
+extra — replace the package name in ANY config above with
+`talkthrough-mcp[diarization]`:
+
+```json
+"args": ["talkthrough-mcp[diarization]"]
+```
+
+(Shell commands need quotes: `uvx "talkthrough-mcp[diarization]"`.) Then
+`process_media(path=..., diarize=true, num_speakers=<count>)` labels segments
+`S1`/`S2`/…. Pass `num_speakers` whenever the participant count is known —
+it is the main accuracy lever. Calling `diarize=true` on an
+already-processed job adds speakers without re-transcribing. Diarization
+models (~33 MB) download once, pinned and checksum-verified.
+
 ## Verify the installation
 
 1. The client should list 7 tools: `process_media`, `get_transcript`,

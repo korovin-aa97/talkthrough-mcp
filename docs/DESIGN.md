@@ -12,10 +12,14 @@ exact instants.
              process_media(path)
                     │
    ┌────────────────▼─────────────────────────────────────────┐
-   │ 1 sha256(file) → job_id      (idempotence: hit → return)  │
+   │ 1 sha256(file) → job_id      (idempotence: hit → return;  │
+   │     explicit diarize on a stored job → amend: stage 4b    │
+   │     only, whisper untouched)                              │
    │ 2 ffprobe: streams, duration, tags   → caps + disk check  │
    │ 3 wall-clock resolver (override > qt tag > tag > mtime)   │
    │ 4 ffmpeg → 16 kHz mono WAV → faster-whisper segments      │
+   │ 4b (opt-in) sherpa-onnx diarization on the same WAV       │
+   │     → S1/S2 turns → segment attribution by max overlap    │
    │ 5 ffmpeg ONE pass: select(scene>0.10 ∨ Δt≥1s)             │
    │     + scale ≤1568px + showinfo pts → t<ms>.jpg            │
    │ 6 dHash dedup (consecutive, Hamming ≤4 → duplicate_of)    │
@@ -40,6 +44,7 @@ exact instants.
 | `core/probe.py` | ffprobe → `MediaInfo` (streams, duration, container tags) |
 | `core/wallclock.py` | The resolver ladder + `t_wall` rendering |
 | `core/audio.py` / `core/stt.py` | WAV extraction; faster-whisper (CPU int8, VAD) |
+| `core/diarize.py` | Speaker diarization: sherpa-onnx engine behind the `[diarization]` extra (pinned-URL+sha256 model cache, zero-network warm loads) + pure attribution math (S1/S2 by first appearance, max-overlap segment assignment, roster). Vendors a second ONNX Runtime (~30 MB RSS) — accepted trade-off vs. sharing rapidocr's |
 | `core/frames.py` | One-pass keyframe extraction + showinfo parsing + exact re-extract |
 | `core/dedup.py` | Pillow-only dHash (9×8) + Hamming marking |
 | `core/ocr.py` | RapidOCR wrapper; `TALKTHROUGH_OCR=off` or import failure → graceful off |
@@ -74,7 +79,15 @@ the second call on the same bytes returns the stored summary in milliseconds.
              "has_audio", "has_video" },
   "wall_clock": { "start_utc", "tz_offset_min", "source", "confidence" } | null,
   "transcript": { "available", "reason", "language", "model",
-                  "segments": [{ "seq", "t0_ms", "t1_ms", "text" }] },
+                  "segments": [{ "seq", "t0_ms", "t1_ms", "text", "speaker"? }],
+                  "diarization"?: { "available", "reason", "engine",
+                                    "engine_version", "segmentation_model",
+                                    "embedding_model", "requested_num_speakers",
+                                    "detected_num_speakers", "threshold",
+                                    "speakers": [{ "label", "talk_time_ms",
+                                                   "turn_count", "first_ms",
+                                                   "last_ms" }],
+                                    "turns": [[t0_ms, t1_ms, "S1"], …] } },
   "frames": { "count", "unique_count", "cap_hit",
               "items": [{ "ms", "file", "duplicate_of"?, "ocr_text"? }] },
   "caps": { "max_seconds", "max_frames", "scene_threshold", "ocr" },
@@ -131,11 +144,16 @@ Models use tools far better when the server ships usage guidance:
 
 - **unit** — pure logic, no ffmpeg/model downloads: pts regex, wall-clock
   ladder (incl. captured ffprobe JSON), dHash pairs, manifest round-trip,
-  SRT, job hashing/gc, the guidance quality gate.
+  SRT, job hashing/gc, the guidance quality gate, diarization attribution
+  math + model-cache resolver (faked downloads) + the diarize request
+  matrix.
 - **integration** — real ffmpeg + whisper `tiny` + RapidOCR over committed
   synthetic fixtures (3-scene screencast with known `creation_time`;
-  audio-only meeting): keyword survival, scene-boundary frames, wall-clock
-  math, OCR content, dual-source search, caps, idempotence, force re-anchor.
+  audio-only meeting; two-voice meeting for diarization — always with an
+  explicit `num_speakers` in CI, threshold mode is the flaky path): keyword
+  survival, scene-boundary frames, wall-clock math, OCR content, dual-source
+  search, caps, idempotence, force re-anchor, diarization attribution
+  against fixture facts + the whisper-untouched amend path.
 - **e2e** — a real MCP stdio client session against `uv run talkthrough-mcp`:
   discovery (schemas + examples on the wire), prompts, processing, image
   content blocks, search with `t_wall`, SRT.

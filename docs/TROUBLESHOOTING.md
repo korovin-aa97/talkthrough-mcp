@@ -61,6 +61,57 @@ same file is an instant re-call, and `list_jobs()` finds the job.
   `extract_frame(job_id, at_ms, crop=...)` to hand your model the
   native-resolution pixels instead.
 
+## Diarization finds the wrong number of speakers
+
+- **Pass `num_speakers` first.** If the headcount is known, an exact k
+  removes the failure mode entirely — unknown-count clustering is the
+  fragile part, not the voice fingerprints.
+- No headcount? Tune `TALKTHROUGH_DIARIZATION_THRESHOLD` (default `0.5`):
+  **too few** speakers detected (voices merged) → **lower** it (try `0.4`);
+  **too many** (one voice split) → **raise** it (try `0.6`). Re-run with
+  `diarize=true` — an explicit request re-clusters the stored job in seconds
+  without re-transcribing.
+- Sub-second interjections ("yeah", "mhm") being absorbed into the other
+  speaker's segment is expected at segment-level attribution — see README →
+  Limitations.
+
+## `diarize=true` fails with "[diarization]" in the error
+
+The optional engine isn't installed. Use
+`uvx "talkthrough-mcp[diarization]"` as the server command (JSON configs:
+`"args": ["talkthrough-mcp[diarization]"]`), restart the client, retry.
+
+If you installed into your own uv **project** (`uv add
+"talkthrough-mcp[diarization]"`) and `import sherpa_onnx` fails with a
+`libonnxruntime` dlopen error: sherpa-onnx 1.13.4's sdist metadata omits its
+`sherpa-onnx-core` dependency, and uv's universal (lockfile) resolution
+trusts the sdist — the package with the vendored ONNX Runtime silently never
+installs. Add this override to your project's `pyproject.toml` and re-lock:
+
+```toml
+[[tool.uv.dependency-metadata]]
+name = "sherpa-onnx"
+version = "1.13.4"
+requires-dist = ["sherpa-onnx-core==1.13.4"]
+```
+
+`uvx` and `pip` installs are unaffected (they read the wheel metadata).
+
+## Diarization on an offline machine
+
+Model downloads are one-time and pinned (URL + sha256); warm runs are
+zero-network. To preseed a machine with no network at all: copy the two
+`.onnx` files from a machine that has them
+(`~/.talkthrough/models/diarization/<name>/model.onnx`) — or download the
+pinned assets yourself — and point the env vars at the files:
+
+```bash
+TALKTHROUGH_DIARIZATION_SEG_MODEL=/models/segmentation.onnx
+TALKTHROUGH_DIARIZATION_EMB_MODEL=/models/embedding.onnx
+```
+
+Paths are used verbatim, no network is touched.
+
 ## `t_wall` is null or looks wrong
 
 - The recorder wrote no usable metadata — pass
@@ -88,3 +139,9 @@ Nothing is written anywhere else, and there is no telemetry to opt out of.
 Best-effort but CI-smoked (lint + unit + a real CLI run). Quote paths with
 spaces; the per-job lock degrades to a no-op — fine on a single-user machine.
 Details: README → Windows.
+
+Diarization caveat: sherpa-onnx vendors its own ONNX Runtime, but a stray
+`onnxruntime.dll` in `C:\Windows\System32` (left there by some installers)
+takes precedence in the DLL search order and can shadow the vendored one
+with a version-mismatch crash (upstream k2-fsa/sherpa-onnx#3059). Fix:
+remove/rename that stray DLL — it does not belong in System32.
