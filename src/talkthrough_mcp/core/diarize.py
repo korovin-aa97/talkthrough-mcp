@@ -461,6 +461,16 @@ def resolve_model(
 # --- engine (sherpa-onnx, behind the optional [diarization] extra) ------------
 
 
+def engine_available() -> bool:
+    """Cheap importability probe — lets the pipeline fail fast on an explicit
+    diarize request BEFORE spending minutes on whisper."""
+    try:
+        import sherpa_onnx  # noqa: F401
+    except Exception:
+        return False
+    return True
+
+
 def load_wav_float32(wav_path: Path) -> tuple[NDArray[np.float32], int]:
     """16-bit PCM WAV → float32 samples in [-1, 1] + sample rate.
 
