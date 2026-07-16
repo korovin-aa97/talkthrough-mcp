@@ -32,3 +32,19 @@ MEETING_KEYWORDS = ("action", "report", "team")
 # TRANSCRIPTION, but language DETECTION on clean speech is reliable.
 RU_M4A = FIXTURES_DIR / "multilang-ru-demo.m4a"
 RU_LANGUAGE = "ru"
+
+# Two-voice meeting: Samantha speaks first (=> S1 by first appearance),
+# Daniel is S2. Boundaries were measured from the per-turn say clips at
+# generation time; the AAC encode shifts the real edges by a few tens of ms,
+# so tests must attribute by overlap majority, never assert exact edges.
+TWO_VOICE_M4A = FIXTURES_DIR / "meeting-two-voices.m4a"
+TWO_VOICE_NUM_SPEAKERS = 2
+TWO_VOICE_TURNS_MS = (
+    (0, 5621, "S1"),
+    (5621, 11999, "S2"),
+    (11999, 17071, "S1"),
+    (17071, 24290, "S2"),
+    (24290, 29754, "S1"),
+)
+# Narration keywords that must survive whisper `tiny` (>=1 required).
+TWO_VOICE_KEYWORDS = ("release", "database", "issue")

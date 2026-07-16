@@ -9,13 +9,17 @@ Outputs (committed, consumed as-is by CI — `say` is macOS-only):
 - ``meeting-demo.m4a`` — a short say-only audio recording (no video stream).
 - ``multilang-ru-demo.m4a`` — a short Russian narration (Milena voice) for
   the language-detection test.
+- ``meeting-two-voices.m4a`` — five alternating turns spoken by two clearly
+  different voices (Samantha en_US / Daniel en_GB), every turn well above
+  the sub-second-backchannel weakness of diarization models; the builder
+  prints the measured turn boundaries to paste into ``fixture_facts.py``.
 
 Scene boundaries and the script keywords are mirrored in
 ``tests/integration/fixture_facts.py`` — update both together.
 
 Rebuild selectively: ``python make_fixtures.py ru`` (targets: demo, meeting,
-ru; default all) — so adding a fixture never rewrites the committed bytes of
-the others.
+ru, two-voice; default all) — so adding a fixture never rewrites the
+committed bytes of the others.
 """
 
 from __future__ import annotations
@@ -50,6 +54,37 @@ RU_SCRIPT = (
     "Волшебное слово — карбюратор."
 )
 
+# Two-voice meeting: labels are assigned by first appearance, so Samantha
+# (turn 1) is S1 and Daniel is S2. Turns are 5+ s each — far above the
+# min_duration_on smoothing and the <0.8 s backchannel weakness.
+TWO_VOICE_TURNS = [
+    (
+        "Samantha",
+        "Welcome everyone to the weekly planning meeting. Today we need to "
+        "decide on the release date for the new version.",
+    ),
+    (
+        "Daniel",
+        "Thanks for having me. I reviewed the deployment checklist yesterday "
+        "and found two open issues we should discuss.",
+    ),
+    (
+        "Samantha",
+        "That sounds important. Please walk us through the first issue and "
+        "tell us how long the fix would take.",
+    ),
+    (
+        "Daniel",
+        "The first issue is about the database migration script. It fails on "
+        "large tables and needs at least three more days of work.",
+    ),
+    (
+        "Samantha",
+        "Understood. Then let us move the release to next Thursday and review "
+        "the progress again on Monday morning.",
+    ),
+]
+
 SCENES = [
     {"color": "0x1E3A5F", "title": "SCENE LOGIN PAGE", "subtitle": ""},
     {"color": "0x6B1D1D", "title": "SCENE DASHBOARD ERROR", "subtitle": "Something went wrong"},
@@ -62,6 +97,23 @@ def _ffmpeg() -> str:
     from talkthrough_mcp.core.ffmpeg import ffmpeg_path
 
     return ffmpeg_path()
+
+
+def _ffprobe() -> str:
+    sys.path.insert(0, str(FIXTURES_DIR.parents[1] / "src"))
+    from talkthrough_mcp.core.ffmpeg import ffprobe_path
+
+    return ffprobe_path()
+
+
+def _duration_s(ffprobe: str, path: Path) -> float:
+    result = subprocess.run(
+        [ffprobe, "-v", "error", "-show_entries", "format=duration", "-of", "csv=p=0", str(path)],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    return float(result.stdout.strip())
 
 
 def _say(text: str, out_aiff: Path, *, voice: str = "Samantha") -> None:
@@ -190,6 +242,53 @@ def build_ru_m4a(ffmpeg: str) -> Path:
     return out
 
 
+def build_two_voice_m4a(ffmpeg: str) -> Path:
+    """Alternating two-voice meeting + printed turn boundaries for fixture_facts."""
+    out = FIXTURES_DIR / "meeting-two-voices.m4a"
+    ffprobe = _ffprobe()
+
+    clips: list[Path] = []
+    durations_ms: list[int] = []
+    for index, (voice, text) in enumerate(TWO_VOICE_TURNS):
+        clip = BUILD_DIR / f"two-voice-{index}.aiff"
+        # No default-voice fallback here on purpose: a silently substituted
+        # voice would produce a single-speaker file that still LOOKS valid.
+        subprocess.run(
+            ["/usr/bin/say", "-r", SAY_RATE, "-v", voice, "-o", str(clip), text],
+            check=True,
+            capture_output=True,
+        )
+        clips.append(clip)
+        durations_ms.append(round(_duration_s(ffprobe, clip) * 1000))
+
+    cmd = [ffmpeg, "-y", "-hide_banner", "-loglevel", "error"]
+    for clip in clips:
+        cmd += ["-i", str(clip)]
+    streams = "".join(f"[{i}:a]" for i in range(len(clips)))
+    cmd += [
+        "-filter_complex",
+        f"{streams}concat=n={len(clips)}:v=0:a=1[a]",
+        "-map",
+        "[a]",
+        "-c:a",
+        "aac",
+        "-b:a",
+        "96k",
+        "-metadata",
+        f"creation_time={CREATION_TIME}",
+        str(out),
+    ]
+    subprocess.run(cmd, check=True, capture_output=True, text=True)
+
+    labels = {"Samantha": "S1", "Daniel": "S2"}
+    cursor = 0
+    print("paste into fixture_facts.py TWO_VOICE_TURNS_MS:")
+    for (voice, _), duration_ms in zip(TWO_VOICE_TURNS, durations_ms, strict=True):
+        print(f"    ({cursor}, {cursor + duration_ms}, {labels[voice]!r}),")
+        cursor += duration_ms
+    return out
+
+
 def build_meeting_m4a(ffmpeg: str) -> Path:
     out = FIXTURES_DIR / "meeting-demo.m4a"
     speech = BUILD_DIR / "meeting-speech.aiff"
@@ -222,6 +321,7 @@ BUILDERS = {
     "demo": build_demo_mp4,
     "meeting": build_meeting_m4a,
     "ru": build_ru_m4a,
+    "two-voice": build_two_voice_m4a,
 }
 
 
