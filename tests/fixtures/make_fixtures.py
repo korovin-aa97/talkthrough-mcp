@@ -13,12 +13,16 @@ Outputs (committed, consumed as-is by CI — `say` is macOS-only):
   different voices (Samantha en_US / Daniel en_GB), every turn well above
   the sub-second-backchannel weakness of diarization models; the builder
   prints the measured turn boundaries to paste into ``fixture_facts.py``.
+- ``multilang-ja-demo.mp4`` — one scene with a katakana-heavy heading,
+  narrated in Japanese (Kyoko voice): the auto-OCR-pack fixture. Helvetica
+  carries no CJK glyphs, so the heading renders with the first installed
+  font from ``CJK_FONT_CANDIDATES`` (Hiragino Sans first).
 
 Scene boundaries and the script keywords are mirrored in
 ``tests/integration/fixture_facts.py`` — update both together.
 
 Rebuild selectively: ``python make_fixtures.py ru`` (targets: demo, meeting,
-ru, two-voice; default all) — so adding a fixture never rewrites the
+ru, two-voice, ja; default all) — so adding a fixture never rewrites the
 committed bytes of the others.
 """
 
@@ -91,6 +95,24 @@ SCENES = [
     {"color": "0x1F5F2E", "title": "SCENE SETTINGS", "subtitle": ""},
 ]
 
+# Japanese fixture: whisper tiny detects the language reliably on clean
+# speech; the heading is katakana-heavy ON PURPOSE — the default
+# Latin+Chinese recognition model cannot read kana, so an OCR hit on it
+# proves the japan pack was actually engaged.
+JA_SCRIPT = (
+    "これはテスト録画です。ログインボタンが動作しません。"
+    "エラーメッセージが表示されています。設定画面を確認してください。"
+)
+JA_SCENE = {"color": "0x3B1E5F", "title": "ログイン画面", "subtitle": "エラーが発生しました"}
+
+# Helvetica.ttc has no CJK glyphs — first installed candidate wins.
+CJK_FONT_CANDIDATES = (
+    "/System/Library/Fonts/ヒラギノ角ゴシック W3.ttc",  # Hiragino Sans W3
+    "/System/Library/Fonts/ヒラギノ角ゴシック W6.ttc",
+    "/System/Library/Fonts/Hiragino Sans GB.ttc",
+    "/Library/Fonts/Arial Unicode.ttf",
+)
+
 
 def _ffmpeg() -> str:
     sys.path.insert(0, str(FIXTURES_DIR.parents[1] / "src"))
@@ -124,12 +146,28 @@ def _say(text: str, out_aiff: Path, *, voice: str = "Samantha") -> None:
         subprocess.run(cmd, check=True, capture_output=True)  # default voice fallback
 
 
-def _title_png(title: str, subtitle: str, out_png: Path) -> None:
+def _cjk_font_path() -> str:
+    for candidate in CJK_FONT_CANDIDATES:
+        if Path(candidate).is_file():
+            return candidate
+    raise SystemExit(
+        "no CJK-capable font found — install Hiragino Sans or Arial Unicode "
+        f"(looked for: {', '.join(CJK_FONT_CANDIDATES)})"
+    )
+
+
+def _title_png(
+    title: str,
+    subtitle: str,
+    out_png: Path,
+    *,
+    font_path: str = "/System/Library/Fonts/Helvetica.ttc",
+) -> None:
     from PIL import Image, ImageDraw, ImageFont
 
     def font(size: int):
         try:
-            return ImageFont.truetype("/System/Library/Fonts/Helvetica.ttc", size)
+            return ImageFont.truetype(font_path, size)
         except OSError:
             return ImageFont.load_default(size=size)
 
@@ -289,6 +327,60 @@ def build_two_voice_m4a(ffmpeg: str) -> Path:
     return out
 
 
+def build_ja_mp4(ffmpeg: str) -> Path:
+    """One-scene Japanese screencast: Kyoko narration + kana/kanji heading."""
+    out = FIXTURES_DIR / "multilang-ja-demo.mp4"
+    speech = BUILD_DIR / "ja-speech.aiff"
+    # No default-voice fallback on purpose: an English voice cannot read the
+    # script, and a silently substituted voice would break language detection.
+    subprocess.run(
+        ["/usr/bin/say", "-r", SAY_RATE, "-v", "Kyoko", "-o", str(speech), JA_SCRIPT],
+        check=True,
+        capture_output=True,
+    )
+    png = BUILD_DIR / "ja-title.png"
+    _title_png(JA_SCENE["title"], JA_SCENE["subtitle"], png, font_path=_cjk_font_path())
+    cmd = [
+        ffmpeg,
+        "-y",
+        "-hide_banner",
+        "-loglevel",
+        "error",
+        "-i",
+        str(speech),
+        "-f",
+        "lavfi",
+        "-i",
+        f"color=c={JA_SCENE['color']}:s={FRAME_SIZE[0]}x{FRAME_SIZE[1]}:r=25:d=60",
+        "-i",
+        str(png),
+        "-filter_complex",
+        "[1:v][2:v]overlay=(W-w)/2:(H-h)/2[v]",
+        "-map",
+        "[v]",
+        "-map",
+        "0:a",
+        "-c:v",
+        "libx264",
+        "-preset",
+        "veryfast",
+        "-crf",
+        "28",
+        "-pix_fmt",
+        "yuv420p",
+        "-c:a",
+        "aac",
+        "-b:a",
+        "96k",
+        "-shortest",
+        "-metadata",
+        f"creation_time={CREATION_TIME}",
+        str(out),
+    ]
+    subprocess.run(cmd, check=True, capture_output=True, text=True)
+    return out
+
+
 def build_meeting_m4a(ffmpeg: str) -> Path:
     out = FIXTURES_DIR / "meeting-demo.m4a"
     speech = BUILD_DIR / "meeting-speech.aiff"
@@ -322,6 +414,7 @@ BUILDERS = {
     "meeting": build_meeting_m4a,
     "ru": build_ru_m4a,
     "two-voice": build_two_voice_m4a,
+    "ja": build_ja_mp4,
 }
 
 

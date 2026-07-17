@@ -7,6 +7,7 @@ first processing result.
 
 from __future__ import annotations
 
+import itertools
 import json
 import os
 from collections.abc import Iterator
@@ -172,6 +173,50 @@ def test_get_moment_bundles_slice_frames_ocr(demo: ProcessResult) -> None:
         assert Path(frame["path"]).is_absolute()
         assert Path(frame["path"]).is_file()
         assert frame["path"].endswith(frame["file"])
+        assert frame["valid_from_ms"] <= frame["t_ms"] < frame["valid_to_ms"]  # issue #14
+
+
+def test_validity_spans_align_with_scene_boundaries(demo: ProcessResult) -> None:
+    """Issue #14 acceptance: on the 3-scene fixture the serve-time spans tile
+    the recording — each unique frame's span ends where the next begins, and
+    the last span ends at the recording end (cap_hit is false here)."""
+    from talkthrough_mcp.core.manifest import frame_validity_ms
+
+    manifest = demo.manifest
+    assert manifest.frames.cap_hit is False
+    uniques = manifest.unique_frames()
+    spans = [frame_validity_ms(manifest, frame) for frame in uniques]
+    assert all(span is not None for span in spans)
+    for (_, to_ms), (next_from_ms, _) in itertools.pairwise(spans):
+        assert to_ms == next_from_ms, f"spans must tile: {spans}"
+    assert spans[-1][1] == int(manifest.media.duration_s * 1000)
+    for boundary in SCENE_BOUNDARIES_MS[1:]:
+        nearest_edge = min(abs(from_ms - boundary) for from_ms, _ in spans)
+        assert nearest_edge <= SCENE_TOLERANCE_MS, (
+            f"no span edge within {SCENE_TOLERANCE_MS}ms of scene boundary {boundary}: {spans}"
+        )
+
+
+def test_get_moment_fallback_note_is_secondary_to_spans(demo: ProcessResult) -> None:
+    """A range with no unique keyframe inside still serves the representative
+    frame; its span STRUCTURALLY proves coverage — the prose note stays, but
+    as the secondary explanation (issue #14)."""
+    from talkthrough_mcp.server import get_moment
+
+    manifest = demo.manifest
+    uniques = [frame.ms for frame in manifest.unique_frames()]
+    # A narrow window strictly between two unique keyframes (static stretch).
+    left = max(ms for ms in uniques if ms < max(uniques))
+    right = min(ms for ms in uniques if ms > left)
+    start, end = left + (right - left) // 2, left + (right - left) // 2 + 200
+    assert all(not (start <= ms <= end) for ms in uniques), (uniques, start, end)
+    meta = json.loads(get_moment(manifest.job_id, start, end)[0])
+    assert meta["frames"], "fallback must still serve the representative frame"
+    frame = meta["frames"][0]
+    assert frame["valid_from_ms"] <= start and end <= frame["valid_to_ms"], (
+        f"span {frame['valid_from_ms']}-{frame['valid_to_ms']} must cover [{start}, {end}]"
+    )
+    assert "no unique keyframe" in meta.get("note", "")
 
 
 def test_extract_frame_full_resolution_and_crop(demo: ProcessResult, tmp_path: Path) -> None:
@@ -231,6 +276,8 @@ def test_audio_only_frame_tools_error_clearly(meeting: ProcessResult) -> None:
 def test_russian_narration_detected_and_reported(integration_home: Path) -> None:
     from tests.integration.fixture_facts import RU_LANGUAGE, RU_M4A
 
+    from talkthrough_mcp.core import ocr
+
     result = pipeline.process_media(str(RU_M4A))
     transcript = result.manifest.transcript
     assert transcript.language == RU_LANGUAGE
@@ -239,6 +286,27 @@ def test_russian_narration_detected_and_reported(integration_home: Path) -> None
     summary = pipeline.summarize(result)
     assert summary["transcript"]["language"] == RU_LANGUAGE
     assert summary["transcript"]["language_probability"] == transcript.language_probability
+    # v0.2.1 auto-OCR: the detected language would pick the eslav pack (the
+    # fixture is audio-only, so the decision is all there is to check here —
+    # the CJK fixture below proves the full chain on real frames).
+    assert ocr.engine_params(transcript.language)["Rec.lang_type"] == "eslav"
+
+
+def test_japanese_narration_autoselects_the_japan_ocr_pack(integration_home: Path) -> None:
+    """The full v0.2.1 auto-OCR chain on a non-Cyrillic script: speech
+    detected as ja → japan recognition pack engaged → the katakana heading
+    (unreadable by the default Latin+Chinese model) is found via search."""
+    from tests.integration.fixture_facts import JA_LANGUAGE, JA_MP4, JA_OCR_TITLE_WORD
+
+    result = pipeline.process_media(str(JA_MP4))
+    transcript = result.manifest.transcript
+    assert transcript.language == JA_LANGUAGE
+    assert result.manifest.caps.ocr, "OCR must have run on the video fixture"
+    hits = search_manifest(result.manifest, JA_OCR_TITLE_WORD)
+    assert any(hit.source == "ocr" for hit in hits), (
+        f"katakana heading not OCR-indexed — japan pack not engaged? "
+        f"frame texts: {[frame.ocr_text for frame in result.manifest.unique_frames()]}"
+    )
 
 
 # --- mutating tests: keep these LAST -----------------------------------------
@@ -285,3 +353,18 @@ def test_explicit_model_mismatch_triggers_reprocess(
     with pytest.raises(RuntimeError, match="reprocess attempted"):
         pipeline.process_media(str(DEMO_MP4), model="base")
     assert calls == ["transcribe"]
+
+
+def test_eslav_pack_still_reads_latin_titles(
+    demo: ProcessResult, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """RU speech over an EN interface is the common real case — switching to
+    the eslav pack must not lose Latin on-screen text (v0.2.1 auto-OCR
+    stop-condition: if this degrades, auto-selection needs a confidence
+    gate)."""
+    monkeypatch.setenv("TALKTHROUGH_OCR_LANG", "ru")
+    result = pipeline.process_media(str(DEMO_MP4), force=True)
+    texts = [frame.ocr_text or "" for frame in result.manifest.unique_frames()]
+    assert any(OCR_SCENE_WORD.lower() in text.lower() for text in texts), (
+        f"eslav pack lost the Latin scene titles: {texts}"
+    )
