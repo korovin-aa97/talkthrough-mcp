@@ -20,7 +20,9 @@ exact instants.
    │ 4 ffmpeg → 16 kHz mono WAV → faster-whisper segments      │
    │ 4b (opt-in) sherpa-onnx diarization on the same WAV       │
    │     → S1/S2 turns → segment attribution by max overlap    │
-   │ 5 ffmpeg ONE pass: select(scene>0.10 ∨ Δt≥1s)             │
+   │ 5 ffmpeg ONE pass: select(scene>0.10 ∨ Δt≥floor);         │
+   │     floor = max(1s, duration/max_frames) — the frame      │
+   │     budget covers the WHOLE recording, head never wins    │
    │     + scale ≤1568px + showinfo pts → t<ms>.jpg            │
    │ 6 dHash dedup (consecutive, Hamming ≤4 → duplicate_of)    │
    │ 7 RapidOCR over unique frames → ocr_text                  │

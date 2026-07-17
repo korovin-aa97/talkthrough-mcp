@@ -68,6 +68,14 @@ gain fields when diarization actually ran.
 - `tool_versions["talkthrough-mcp"]` in manifests recorded a stale hardcoded
   `0.1.0` on every release; `__version__` now derives from the installed
   package metadata.
+- Long recordings no longer lose their tail frames: the fixed 1 s keyframe
+  selection floor meant the 600-frame budget covered only the first ~10
+  minutes of a meeting (a 73-minute real meeting surfaced it — slides shown
+  after minute 10 were invisible to `get_frames`/OCR search). The floor now
+  adapts to `max(1 s, duration / max_frames)`, spreading the same budget
+  across the entire recording; scene changes still capture at any instant.
+  Videos short enough for the budget at 1 fps are extracted byte-identically
+  to before.
 
 ## [0.1.3] — 2026-07-12
 
