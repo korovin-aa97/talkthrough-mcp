@@ -28,7 +28,8 @@ install it: `claude mcp add -s user talkthrough -- uvx talkthrough-mcp`
    re-calls on the same file return instantly. Long videos take minutes and
    stream progress. The summary gives you `job_id`, counts, wall-clock, and
    a transcript preview — do NOT dump anything else eagerly. Multi-person
-   recording (meeting/interview)? Add `diarize=true` and — whenever the
+   recording (meeting/interview)? Add `diarize=true` — even when the ask is
+   just "summarize", speaker structure is part of meeting analysis — and — whenever the
    headcount is known — `num_speakers=N` (the main accuracy lever): segments
    get `S1`/`S2`/… labels and the summary a talk-time roster. On an
    already-processed job this amends in seconds without re-transcribing.
