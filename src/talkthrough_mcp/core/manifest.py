@@ -13,7 +13,7 @@ from pathlib import Path
 from typing import Any
 
 from .diarize import Diarization, known_fields
-from .frames import Frame
+from .frames import Frame, frame_floor_s
 from .stt import SttSegment
 from .wallclock import WallClock
 
@@ -255,6 +255,32 @@ def representative_frame(manifest: Manifest, at_ms: int) -> Frame | None:
 def nearest_frame_ms(manifest: Manifest, at_ms: int) -> int | None:
     frame = representative_frame(manifest, at_ms)
     return frame.ms if frame else None
+
+
+def frame_validity_ms(manifest: Manifest, frame: Frame) -> tuple[int, int] | None:
+    """``[valid_from_ms, valid_to_ms)`` — when the screen looked like this frame (#14).
+
+    Computed at serve time from the ordered frame list, so existing manifests
+    get it for free. A duplicate proves its ``duplicate_of`` keyframe still
+    matched the screen, so duplicates share their unique frame's span, and the
+    span runs to the NEXT unique frame (exclusive). The last span runs to the
+    end of the recording — extraction samples all the way there — unless
+    ``cap_hit`` stopped it early, in which case evidence (and the claim) ends
+    at the last extracted sample plus one sampling step, never at media end.
+    """
+    items = manifest.frames.items
+    if not items:
+        return None
+    anchor_ms = frame.ms if frame.duplicate_of is None else frame.duplicate_of
+    later_uniques = [f.ms for f in items if f.duplicate_of is None and f.ms > anchor_ms]
+    if later_uniques:
+        return anchor_ms, min(later_uniques)
+    duration_ms = int(manifest.media.duration_s * 1000)
+    if not manifest.frames.cap_hit:
+        return anchor_ms, max(anchor_ms, duration_ms)
+    step_ms = round(frame_floor_s(manifest.media.duration_s, manifest.caps.max_frames) * 1000)
+    last_sample_ms = max(item.ms for item in items)
+    return anchor_ms, max(anchor_ms, min(duration_ms, last_sample_ms + step_ms))
 
 
 # --- search -----------------------------------------------------------------
