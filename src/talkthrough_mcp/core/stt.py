@@ -11,7 +11,7 @@ from __future__ import annotations
 import logging
 import time
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any
 
@@ -24,6 +24,7 @@ class SttSegment:
     t0_ms: int
     t1_ms: int
     text: str
+    speaker: str | None = None  # "S1"/"S2"/… once diarized; never serialized as null
 
 
 @dataclass(frozen=True)
@@ -56,10 +57,7 @@ def _load_model(model_name: str) -> Any:
 
 
 def _renumber(segments: list[SttSegment]) -> list[SttSegment]:
-    return [
-        SttSegment(seq=index, t0_ms=segment.t0_ms, t1_ms=segment.t1_ms, text=segment.text)
-        for index, segment in enumerate(segments, start=1)
-    ]
+    return [replace(segment, seq=index) for index, segment in enumerate(segments, start=1)]
 
 
 def transcribe(

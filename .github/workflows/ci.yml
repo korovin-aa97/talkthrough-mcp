@@ -28,7 +28,13 @@ jobs:
             ~/.cache/huggingface
             .venv
           key: ${{ runner.os }}-talkthrough-${{ hashFiles('uv.lock') }}
-      - run: uv sync --frozen
+      - name: Cache diarization models (URLs + sha256 are pinned, assets immutable)
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
+        with:
+          path: ~/.cache/talkthrough-test-models
+          # v2: default embedding model switched to nemo_en_titanet_small
+          key: ${{ runner.os }}-diarize-models-v2
+      - run: uv sync --frozen --extra diarization
       - run: uv run ruff check
       - run: uv run mypy src
       - run: uv run pytest tests/unit -q

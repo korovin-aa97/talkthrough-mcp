@@ -3,8 +3,9 @@
 Spawns the server with ``uv run talkthrough-mcp serve`` (fresh TALKTHROUGH_HOME,
 whisper ``tiny``), then exercises the full loop: tool discovery with guidance
 examples on the wire, prompt discovery + rendering, processing the committed
-fixture, moment retrieval with real image content, search with wall-clock, and
-SRT export.
+fixture, moment retrieval with real image content, search with wall-clock,
+SRT export, speaker diarization (or its actionable error without the extra),
+and the absolute frame paths of issue #13.
 """
 
 from __future__ import annotations
@@ -19,12 +20,42 @@ from typing import Any
 import pytest
 from mcp import ClientSession, StdioServerParameters, types
 from mcp.client.stdio import stdio_client
-from tests.integration.fixture_facts import DEMO_MP4
+from tests.integration.fixture_facts import DEMO_MP4, TWO_VOICE_M4A, TWO_VOICE_NUM_SPEAKERS
 
 from talkthrough_mcp import guidance
+from talkthrough_mcp.core import diarize
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 PROCESS_TIMEOUT = timedelta(seconds=600)
+
+
+def _preseed_model_env() -> dict[str, str]:
+    """Resolve engine models into the stable test cache; env paths for the server.
+
+    Same cache the integration suite uses (actions/cache persists it in CI),
+    so the spawned server process never downloads.
+    """
+    cache = os.environ.get(
+        "TALKTHROUGH_TEST_MODEL_CACHE", str(Path.home() / ".cache" / "talkthrough-test-models")
+    )
+    saved = os.environ.get("TALKTHROUGH_HOME")
+    os.environ["TALKTHROUGH_HOME"] = cache
+    try:
+        seg = diarize.ensure_model_file(
+            diarize.SEGMENTATION_MODELS[diarize.DEFAULT_SEGMENTATION_MODEL]
+        )
+        emb = diarize.ensure_model_file(
+            diarize.EMBEDDING_MODELS[diarize.DEFAULT_EMBEDDING_MODEL]
+        )
+    finally:
+        if saved is None:
+            os.environ.pop("TALKTHROUGH_HOME", None)
+        else:
+            os.environ["TALKTHROUGH_HOME"] = saved
+    return {
+        "TALKTHROUGH_DIARIZATION_SEG_MODEL": str(seg),
+        "TALKTHROUGH_DIARIZATION_EMB_MODEL": str(emb),
+    }
 
 
 def _server_params(home: Path) -> StdioServerParameters:
@@ -33,6 +64,9 @@ def _server_params(home: Path) -> StdioServerParameters:
         "TALKTHROUGH_HOME": str(home),
         "TALKTHROUGH_WHISPER_MODEL": "tiny",
     }
+    env.pop("TALKTHROUGH_DIARIZE", None)  # keep the spawned server's defaults canonical
+    if diarize.engine_available():
+        env.update(_preseed_model_env())
     return StdioServerParameters(
         command="uv",
         args=["run", "--no-sync", "--directory", str(REPO_ROOT), "talkthrough-mcp", "serve"],
@@ -134,6 +168,60 @@ async def _run_session(home: Path) -> None:
         jobs_result = await session.call_tool("list_jobs", {})
         jobs_payload = _payload(jobs_result)
         assert any(job["job_id"] == job_id for job in jobs_payload["jobs"])
+
+        # 8. Issue #13 on the wire: every served frame + extract carries an
+        # absolute path that exists on this machine.
+        for frame in moment_meta["frames"]:
+            assert Path(frame["path"]).is_absolute()
+            assert Path(frame["path"]).is_file(), frame["path"]
+        extract_result = await session.call_tool(
+            "extract_frame", {"job_id": job_id, "at_ms": 6500}
+        )
+        assert not extract_result.isError
+        extract_text = next(
+            block for block in extract_result.content if isinstance(block, types.TextContent)
+        )
+        extract_meta = json.loads(extract_text.text)
+        assert Path(extract_meta["path"]).is_absolute()
+        assert Path(extract_meta["path"]).is_file(), extract_meta["path"]
+
+        # 9. Diarization over the wire — or its actionable error without the extra.
+        if diarize.engine_available():
+            diarized_result = await session.call_tool(
+                "process_media",
+                {
+                    "path": str(TWO_VOICE_M4A),
+                    "diarize": True,
+                    "num_speakers": TWO_VOICE_NUM_SPEAKERS,
+                },
+                read_timeout_seconds=PROCESS_TIMEOUT,
+            )
+            diarized_summary = _payload(diarized_result)
+            block = diarized_summary["diarization"]
+            assert block["available"] is True
+            assert block["detected_num_speakers"] == TWO_VOICE_NUM_SPEAKERS
+            assert [speaker["label"] for speaker in block["speakers"]] == ["S1", "S2"]
+            assert any(
+                segment.get("speaker")
+                for segment in diarized_summary["transcript"]["preview_segments"]
+            )
+            srt_diarized = _payload(
+                await session.call_tool(
+                    "get_transcript",
+                    {"job_id": diarized_summary["job_id"], "format": "srt"},
+                )
+            )
+            assert "S1: " in srt_diarized["srt"]
+        else:
+            failed = await session.call_tool(
+                "process_media",
+                {"path": str(TWO_VOICE_M4A), "diarize": True},
+                read_timeout_seconds=PROCESS_TIMEOUT,
+            )
+            assert failed.isError, "explicit diarize without the extra must error"
+            error_text = failed.content[0]
+            assert isinstance(error_text, types.TextContent)
+            assert "[diarization]" in error_text.text
 
 
 @pytest.mark.timeout(900)

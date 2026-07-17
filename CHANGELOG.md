@@ -4,6 +4,71 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions follow
 [SemVer](https://semver.org/).
 
+## [0.2.0] — 2026-07-16
+
+Speaker diarization (#4) and absolute frame paths (#13). Additive minor:
+every 0.1.x call keeps working unchanged, non-diarized runs pay nothing for
+the new machinery (the engine is never even imported), and manifests only
+gain fields when diarization actually ran.
+
+### Added
+
+- **Speaker diarization** (#4) — opt-in, fully local, via the new
+  `[diarization]` extra (`uvx "talkthrough-mcp[diarization]"`,
+  sherpa-onnx ≥ 1.13.4, no torch/accounts/GPU):
+  - `process_media(diarize=true, num_speakers=N?)` and CLI
+    `process --diarize [--num-speakers N]`. Speakers are labeled `S1`/`S2`/…
+    by first appearance; every transcript segment gets a `speaker` by
+    dominant time-overlap against the diarized turns (whisperX-style,
+    segment-level).
+  - Surfaced everywhere: roster (talk time, turn count) in the
+    `process_media` summary and the `get_transcript` header; `speaker` on
+    segments and `search` hits; `S1:` prefixes in the `text` (at speaker
+    changes) and `srt` (every cue) formats; `speakers_in_range` in
+    `get_moment`; a `speakers` count in `list_jobs`. New fields appear only
+    on diarized jobs.
+  - **Amend path:** `diarize=true` (or a differing explicit `num_speakers`)
+    on an already-processed job re-runs only diarization — whisper is not
+    re-run, labels land in the stored manifest in seconds.
+  - Degradation matrix: explicit `diarize=true` without the extra fails fast
+    with the install hint BEFORE transcription starts; `TALKTHROUGH_DIARIZE=on`
+    without the extra warns and degrades; any engine/runtime failure records
+    `diarization.available=false` + reason and keeps the transcript.
+  - Models (pyannote segmentation-3.0 ONNX, MIT + NeMo TitaNet-Small,
+    Apache-2.0, by default — the accept-eval winner on a real 3-speaker
+    meeting and RU/EN/ES clips; WeSpeaker ResNet34-LM and 3D-Speaker
+    CAM++ remain selectable) download once from pinned k2-fsa release URLs
+    with sha256 verification into `<TALKTHROUGH_HOME>/models/diarization/`;
+    warm runs stay zero-network (verified with blocked sockets). Measured on
+    an M-series CPU (4 threads): a 26-minute meeting diarizes in ~2 minutes
+    (RTF ≈ 0.08). Env knobs: `TALKTHROUGH_DIARIZE`,
+    `TALKTHROUGH_DIARIZATION_THRESHOLD`, `_SEG_MODEL`/`_EMB_MODEL`
+    (allowlist name or local `.onnx` path = offline preseed), `_THREADS`.
+  - `meeting-actions` prompt now maps `S*` labels onto attendees via
+    self-introductions/vocatives and puts owners on action items.
+  - Manifest schema stays `talkthrough-manifest/v1` (additive): `speaker` on
+    segments + a `transcript.diarization` block with compact
+    `[t0_ms, t1_ms, "S1"]` turn triplets (kept for range queries and future
+    word-level splitting). Manifests without diarization serialize
+    byte-identically to 0.1.x output (modulo the now-correct version stamp
+    in `tool_versions` — see Fixed below); verified against a real v0.1.3
+    checkout on the same recordings.
+- `extract_frame` returns the absolute `path` of the extracted file, and
+  `get_frames`/`get_moment` name each served frame's absolute `path` (#13) —
+  "save this screenshot elsewhere" becomes the calling agent's own file copy,
+  and the server's write boundary stays `TALKTHROUGH_HOME` (no `output_path`
+  parameter by design).
+
+### Fixed
+
+- `Manifest.from_dict` now ignores unknown dataclass keys, so manifests
+  written by newer package versions load instead of raising `TypeError`.
+  The inverse still holds: 0.1.x cannot read manifests that already contain
+  diarization fields — noted here as the downgrade boundary.
+- `tool_versions["talkthrough-mcp"]` in manifests recorded a stale hardcoded
+  `0.1.0` on every release; `__version__` now derives from the installed
+  package metadata.
+
 ## [0.1.3] — 2026-07-12
 
 Hardening from a hostile-input test pass (silent recordings, odd containers,

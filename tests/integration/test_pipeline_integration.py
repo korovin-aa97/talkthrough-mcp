@@ -144,6 +144,10 @@ def test_get_moment_bundles_slice_frames_ocr(demo: ProcessResult) -> None:
     assert meta["frames"], "moment must include frame refs"
     assert 1 <= len(images) <= 3
     assert meta["range"]["t_wall_start"] == "2026-07-10T10:00:05+00:00"
+    for frame in meta["frames"]:  # issue #13: absolute, existing path per frame
+        assert Path(frame["path"]).is_absolute()
+        assert Path(frame["path"]).is_file()
+        assert frame["path"].endswith(frame["file"])
 
 
 def test_extract_frame_full_resolution_and_crop(demo: ProcessResult, tmp_path: Path) -> None:
@@ -157,6 +161,9 @@ def test_extract_frame_full_resolution_and_crop(demo: ProcessResult, tmp_path: P
     with Image.open(extract_path) as image:
         assert (image.width, image.height) == (1280, 720)  # native, not keyframe-scaled
     assert len(content) == 2
+    meta = json.loads(content[0])  # issue #13: the response names its file on disk
+    assert Path(meta["path"]).is_absolute()
+    assert Path(meta["path"]) == extract_path.resolve()
 
     extract_frame(demo.manifest.job_id, at_ms=6500, crop={"x": 0, "y": 0, "w": 200, "h": 100})
     extracts_dir = jobs.job_dir(demo.manifest.job_id) / "extracts"

@@ -12,6 +12,7 @@ from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any
 
+from .diarize import Diarization, known_fields
 from .frames import Frame
 from .stt import SttSegment
 from .wallclock import WallClock
@@ -43,6 +44,7 @@ class Transcript:
     model: str | None
     language_probability: float | None = None
     segments: list[SttSegment] = field(default_factory=list)
+    diarization: Diarization | None = None
 
     def full_text(self) -> str:
         return " ".join(segment.text for segment in self.segments if segment.text).strip()
@@ -85,26 +87,45 @@ class Manifest:
     def to_dict(self) -> dict[str, Any]:
         payload = asdict(self)
         payload["wall_clock"] = self.wall_clock.to_dict() if self.wall_clock else None
+        # Additive diarization fields never serialize as null: non-diarized
+        # manifests stay byte-identical to the ones 0.1.x wrote.
+        transcript_payload = payload["transcript"]
+        for segment_payload in transcript_payload["segments"]:
+            if segment_payload.get("speaker") is None:
+                del segment_payload["speaker"]
+        if self.transcript.diarization is None:
+            del transcript_payload["diarization"]
+        else:
+            transcript_payload["diarization"] = self.transcript.diarization.to_dict()
         return payload
 
     @staticmethod
     def from_dict(payload: dict[str, Any]) -> Manifest:
-        media = MediaMeta(**payload["media"])
+        # known_fields() everywhere: unknown keys from NEWER package versions
+        # are ignored instead of raising TypeError (additive-schema tolerance).
+        media = MediaMeta(**known_fields(MediaMeta, payload["media"]))
         transcript_raw = dict(payload["transcript"])
         transcript_raw["segments"] = [
-            SttSegment(**segment) for segment in transcript_raw.get("segments", [])
+            SttSegment(**known_fields(SttSegment, segment))
+            for segment in transcript_raw.get("segments", [])
         ]
+        diarization_raw = transcript_raw.get("diarization")
+        transcript_raw["diarization"] = (
+            Diarization.from_dict(diarization_raw) if isinstance(diarization_raw, dict) else None
+        )
         frames_raw = dict(payload["frames"])
-        frames_raw["items"] = [Frame(**item) for item in frames_raw.get("items", [])]
+        frames_raw["items"] = [
+            Frame(**known_fields(Frame, item)) for item in frames_raw.get("items", [])
+        ]
         return Manifest(
             schema=str(payload["schema"]),
             job_id=str(payload["job_id"]),
             created_at=str(payload["created_at"]),
             media=media,
             wall_clock=WallClock.from_dict(payload.get("wall_clock")),
-            transcript=Transcript(**transcript_raw),
-            frames=FrameIndex(**frames_raw),
-            caps=Caps(**payload["caps"]),
+            transcript=Transcript(**known_fields(Transcript, transcript_raw)),
+            frames=FrameIndex(**known_fields(FrameIndex, frames_raw)),
+            caps=Caps(**known_fields(Caps, payload["caps"])),
             tool_versions={str(k): str(v) for k, v in payload.get("tool_versions", {}).items()},
         )
 
@@ -133,12 +154,30 @@ def _srt_timestamp(t_ms: int) -> str:
 
 
 def format_srt(segments: list[SttSegment]) -> str:
-    """SubRip text: 1-based sequential index, HH:MM:SS,mmm ranges, blank-line separated."""
+    """SubRip text: 1-based sequential index, HH:MM:SS,mmm ranges, blank-line separated.
+
+    Diarized segments carry the conventional ``S1: `` speaker prefix in the
+    cue text — cues are standalone, so every labeled cue gets one.
+    """
     blocks = [
-        f"{index}\n{_srt_timestamp(seg.t0_ms)} --> {_srt_timestamp(seg.t1_ms)}\n{seg.text}"
+        f"{index}\n{_srt_timestamp(seg.t0_ms)} --> {_srt_timestamp(seg.t1_ms)}\n"
+        + (f"{seg.speaker}: {seg.text}" if seg.speaker else seg.text)
         for index, seg in enumerate(segments, start=1)
     ]
     return "\n\n".join(blocks) + ("\n" if blocks else "")
+
+
+def format_text(segments: list[SttSegment]) -> str:
+    """Plain prose; diarized runs are prefixed with ``S1: `` at speaker changes."""
+    parts: list[str] = []
+    current: str | None = None
+    for segment in segments:
+        if segment.speaker and segment.speaker != current:
+            parts.append(f"{segment.speaker}: {segment.text}")
+            current = segment.speaker
+        else:
+            parts.append(segment.text)
+    return " ".join(parts)
 
 
 def slice_segments(
@@ -230,6 +269,7 @@ class SearchHit:
     seq: int | None  # transcript segment seq (transcript hits)
     frame_ms: int | None  # frame position (ocr hits)
     nearest_frame_ms: int | None
+    speaker: str | None = None  # transcript hits on diarized jobs
 
 
 def search_manifest(manifest: Manifest, query: str) -> list[SearchHit]:
@@ -249,6 +289,7 @@ def search_manifest(manifest: Manifest, query: str) -> list[SearchHit]:
                     seq=segment.seq,
                     frame_ms=None,
                     nearest_frame_ms=nearest_frame_ms(manifest, segment.t0_ms),
+                    speaker=segment.speaker,
                 )
             )
     for frame in manifest.frames.items:

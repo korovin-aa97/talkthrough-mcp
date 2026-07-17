@@ -18,10 +18,11 @@ does the rest — files the bugs, writes the spec, builds the backlog.
 
 `talkthrough-mcp` is a local-first MCP server that turns a narrated screen
 recording (or any video/audio file) into agent-ready structured data:
-timestamped transcript segments, scene-change keyframes, OCR'd on-screen text,
-and wall-clock anchoring. Everything is served through lazy retrieval tools, so
-a 30-minute recording never floods the model context — the agent pulls exactly
-the transcript slice, moment bundle, or frame it needs.
+timestamped transcript segments, optional who-said-what speaker labels,
+scene-change keyframes, OCR'd on-screen text, and wall-clock anchoring.
+Everything is served through lazy retrieval tools, so a 30-minute recording
+never floods the model context — the agent pulls exactly the transcript
+slice, moment bundle, or frame it needs.
 
 There is no LLM inside the server and no cloud anywhere in the path: ffmpeg,
 faster-whisper, and RapidOCR run on your machine, and the calling agent brings
@@ -316,6 +317,20 @@ in [`integrations/`](integrations/); agents can self-install via
 
 <!-- /gen:install -->
 
+### Optional: who said what (speaker diarization)
+
+Multi-person recordings (meetings, interviews, panels) can carry `S1`/`S2`/…
+speaker labels. It's an opt-in extra — the base install stays lean:
+
+```bash
+uvx "talkthrough-mcp[diarization]"
+```
+
+Use that as the server command in any client config above (in JSON configs:
+`"args": ["talkthrough-mcp[diarization]"]`), then ask for it per call:
+`process_media(path=..., diarize=true, num_speakers=<count if known>)`.
+Details in [Speakers](#speakers-optional-diarization).
+
 ### Local checkout (development)
 
 ```bash
@@ -332,13 +347,13 @@ Then, in your agent:
 
 | Tool | What it does |
 |---|---|
-| `process_media(path, recorded_at?, vocabulary?, language?, model?, force?)` | Ingest a video/audio file: local STT, keyframes, OCR, wall-clock. Returns a compact summary. Idempotent by content hash — re-calls are instant. |
-| `get_transcript(job_id, start_ms?, end_ms?, format?)` | Paginated transcript as `segments`, `text`, or `srt`; truncation returns `next_start_ms`. |
-| `get_frames(job_id, at_ms? \| start_ms?+end_ms?, max_frames?, include_duplicates?)` | Keyframe images nearest a timestamp or evenly thinned across a range (unique frames by default, max 6/call). |
-| `get_moment(job_id, start_ms, end_ms)` | The "one remark" bundle: transcript slice + up to 3 frames + their OCR text + wall-clock range. |
-| `search(job_id, query)` | Substring search over the transcript AND on-screen OCR text; hits carry `t_ms`/`t_wall` and frame refs. |
-| `extract_frame(job_id, at_ms, crop?)` | Exact-timestamp full-resolution re-extract from the source video (optional crop) when keyframes miss the instant. |
-| `list_jobs()` | Recent processed recordings with durations, wall-clock starts, and counts. |
+| `process_media(path, recorded_at?, vocabulary?, language?, model?, diarize?, num_speakers?, force?)` | Ingest a video/audio file: local STT, keyframes, OCR, wall-clock, opt-in speaker labels. Returns a compact summary. Idempotent by content hash — re-calls are instant; `diarize=true` on a processed job adds speakers without re-transcribing. |
+| `get_transcript(job_id, start_ms?, end_ms?, format?)` | Paginated transcript as `segments`, `text`, or `srt` (speaker-prefixed when diarized, plus a roster header); truncation returns `next_start_ms`. |
+| `get_frames(job_id, at_ms? \| start_ms?+end_ms?, max_frames?, include_duplicates?)` | Keyframe images nearest a timestamp or evenly thinned across a range (unique frames by default, max 6/call); each frame names its absolute `path`. |
+| `get_moment(job_id, start_ms, end_ms)` | The "one remark" bundle: transcript slice + up to 3 frames + their OCR text + wall-clock range (+ `speakers_in_range` when diarized). |
+| `search(job_id, query)` | Substring search over the transcript AND on-screen OCR text; hits carry `t_ms`/`t_wall`, frame refs, and the speaker when diarized. |
+| `extract_frame(job_id, at_ms, crop?)` | Exact-timestamp full-resolution re-extract from the source video (optional crop) when keyframes miss the instant; returns the file's absolute `path`. |
+| `list_jobs()` | Recent processed recordings with durations, wall-clock starts, counts, and speaker counts when diarized. |
 
 Every tool description ships 10+ usage examples, so agents pick the right tool
 without extra prompting.
@@ -383,12 +398,61 @@ Every timestamped result carries both `t_ms` (video-relative) and `t_wall`
 Why it matters: "the upload spinner froze *here*" becomes a ±30 s grep window
 in your server logs.
 
+## Speakers (optional diarization)
+
+With the `[diarization]` extra installed (see
+[Quickstart](#optional-who-said-what-speaker-diarization)),
+`process_media(diarize=true)` labels who said what — locally, like everything
+else here ([sherpa-onnx](https://github.com/k2-fsa/sherpa-onnx) runtime, no
+torch, no accounts, no GPU):
+
+- Speakers become `S1`, `S2`, … **in order of first appearance**; every
+  transcript segment gets a `speaker`, and the tools surface it everywhere —
+  roster with talk time in `get_transcript`, `speakers_in_range` in
+  `get_moment`, `speaker` on `search` hits, `S1:` prefixes in the text/SRT
+  formats, a speaker count in `list_jobs`.
+- **Know the headcount? Pass `num_speakers`.** Clustering to an exact k
+  removes the main failure mode of unknown-count mode (similar voices merging
+  or one voice splitting). Agents are instructed to do this via the tool
+  guidance; do the same in your own calls.
+- **Already processed a recording?** Calling `process_media(diarize=true)` on
+  it re-runs *only* diarization — whisper is not re-run, and labels appear in
+  the existing job in seconds. Same for changing `num_speakers`.
+- Labels are anonymous by design; mapping `S1` → "Alice" is the calling
+  agent's job (self-introductions, vocatives, the `attendees` argument of the
+  `meeting-actions` prompt). The server never guesses names.
+
+Models download once (~47 MB total) from pinned, checksum-verified URLs into
+`~/.talkthrough/models/`; warm runs are zero-network like the rest of the
+pipeline. Speed on an M-series CPU (4 threads): a 26-minute meeting diarizes
+in about 2 minutes (RTF ≈ 0.08), on top of the transcription time.
+
+| Role | Model | Download | Weights license |
+|---|---|---|---|
+| Segmentation | [pyannote segmentation-3.0](https://huggingface.co/pyannote/segmentation-3.0) (ONNX export by k2-fsa) | 7 MB | MIT |
+| Embedding (default) | [NeMo](https://github.com/NVIDIA/NeMo) `en_titanet_small` | 40 MB | Apache-2.0 (per its NGC model card, the NeMo Toolkit license) |
+| Embedding (alt) | [WeSpeaker](https://github.com/wenet-e2e/wespeaker) `en_voxceleb_resnet34_LM` | 27 MB | CC-BY-4.0 |
+| Embedding (alt) | [3D-Speaker](https://github.com/modelscope/3D-Speaker) `campplus_sv_en_voxceleb_16k` | 30 MB | Apache-2.0 |
+
+The default won a real-meeting accept-eval (RU/EN/ES + a 3-speaker 26-minute
+meeting): it was the only candidate to isolate all three real voices at
+`num_speakers=3`, at 2× the speed of the runner-up.
+
+Pick an alternate embedding model (or point at your own `.onnx` file for
+offline machines) via `TALKTHROUGH_DIARIZATION_EMB_MODEL`; tune the
+unknown-count sensitivity via `TALKTHROUGH_DIARIZATION_THRESHOLD` (see
+[docs/TROUBLESHOOTING.md](docs/TROUBLESHOOTING.md)). Honest quality notes
+live in [Limitations](#limitations).
+
 ## Privacy
 
 Everything runs locally: your recordings never leave your machine, speech is
-transcribed by a local whisper model, OCR is local ONNX inference, and there is
-no telemetry. The only network access is one-time tool/model downloads (ffmpeg
-build, whisper model, OCR models).
+transcribed by a local whisper model, OCR and speaker diarization are local
+ONNX inference, and there is no telemetry. The only network access is one-time
+tool/model downloads (ffmpeg build, whisper model, OCR models, diarization
+models — the latter pinned by URL + sha256). Diarization keeps no voiceprint
+database: voice embeddings live only in process memory, and only anonymous
+turn labels (`S1`/`S2`) land on disk.
 
 ## Languages
 
@@ -396,7 +460,9 @@ Narration in any of Whisper's ~99 languages works: the language is
 auto-detected per recording, and the summary reports both `language` and
 `language_probability` so agents can tell a confident detection from a shaky
 one (silence or music at the start can fool the detector — pin it with
-`language="ru"` and `force=true` when that happens).
+`language="ru"` and `force=true` when that happens). Speaker diarization is
+acoustic — it fingerprints voices, not words — so it is language-independent
+and works across all of those languages unchanged.
 
 Pick the model for your languages — per call (`model=` parameter, agents do
 this themselves when a transcript comes back garbled) or as the server
@@ -430,6 +496,11 @@ model downloads once. Spoken-language support is unaffected either way.
 | `TALKTHROUGH_OCR` | `on` | set `off` to skip OCR |
 | `TALKTHROUGH_OCR_LANG` | Latin+Chinese | recognition script for on-screen text: a language code (`ru`, `ja`, `ko`, `ar`, `hi`, …) or a RapidOCR pack name (`eslav`, `cyrillic`, `latin`, …); the model downloads once |
 | `TALKTHROUGH_OCR_PARAMS` | — | advanced: JSON object of raw RapidOCR params merged over the derived ones, e.g. `{"Rec.lang_type": "cyrillic"}` |
+| `TALKTHROUGH_DIARIZE` | `off` | set `on` to diarize by default (needs the `[diarization]` extra; degrades with a warning without it); an explicit `diarize` tool param always wins |
+| `TALKTHROUGH_DIARIZATION_THRESHOLD` | `0.5` | clustering sensitivity when `num_speakers` is unknown: fewer speakers than expected → lower it; more → raise it |
+| `TALKTHROUGH_DIARIZATION_SEG_MODEL` | `pyannote-segmentation-3-0` | segmentation model: allowlist name or a path to a local `.onnx` (offline preseed) |
+| `TALKTHROUGH_DIARIZATION_EMB_MODEL` | `nemo_en_titanet_small` | embedding model: allowlist name (see [Speakers](#speakers-optional-diarization)) or a local `.onnx` path |
+| `TALKTHROUGH_DIARIZATION_THREADS` | `min(4, cpus)` | ONNX threads for both diarization models |
 | `TALKTHROUGH_MAX_SECONDS` | `7200` | max media duration |
 | `TALKTHROUGH_MAX_FRAMES` | `600` | keyframe cap per job |
 | `TALKTHROUGH_HOME` | `~/.talkthrough` | job store root |
@@ -443,6 +514,7 @@ same job instantly):
 ```bash
 talkthrough-mcp process ~/Videos/long-session.mov   # prints the summary
 talkthrough-mcp process demo.mov --json             # machine-readable
+talkthrough-mcp process sync.m4a --diarize --num-speakers 3   # who said what
 talkthrough-mcp gc --keep-days 30                   # clean the job store
 talkthrough-mcp serve                               # stdio MCP server (default)
 ```
@@ -474,8 +546,15 @@ Local files only.
 
 Honest edges, so you can decide fast:
 
-- **One speaker stream.** No diarization yet — "who said it" isn't tracked
-  ([#4](https://github.com/korovin-aa97/talkthrough-mcp/issues/4)).
+- **Speaker labels are segment-level and opt-in.** Diarization assigns each
+  whisper segment ONE speaker by dominant overlap — a segment spanning a fast
+  exchange gets the majority voice, sub-second interjections ("yeah", "mhm")
+  can be absorbed, and heavy crosstalk degrades clustering (the segmentation
+  model tracks at most 2 simultaneous voices). Quality is
+  pyannote-3.x-generation. The comfort zone without hints is roughly 2–8
+  speakers; **pass `num_speakers` whenever the headcount is known** — it
+  removes the worst failure mode at any size, and it is the way to go for
+  large meetings (10+).
 - **Local files only.** No URL/YouTube ingestion
   ([#5](https://github.com/korovin-aa97/talkthrough-mcp/issues/5)) — download
   first.
@@ -497,6 +576,7 @@ Honest edges, so you can decide fast:
 | Runs fully locally | ✅ | ❌ | ❌ | varies |
 | Any local video/audio file | ✅ | browser/app captures | meetings only | ✅ |
 | Wall-clock anchoring (log correlation) | ✅ | ❌ | ❌ | ❌ |
+| Who-said-what speaker labels | ✅ local, opt-in | some | ✅ cloud | ❌ |
 | Ships agent workflows (prompts, skill, findings contract) | ✅ | ❌ | ❌ | ❌ |
 | OCR of on-screen text, searchable | ✅ | some | ❌ | rare |
 
@@ -536,8 +616,8 @@ findings contract. One `uvx` command instead of an afternoon of glue.
 
 **Is it really local? What leaves my machine?**
 Nothing at runtime. The network is used only for one-time downloads (ffmpeg
-build, whisper/OCR models). No telemetry. See [Privacy](#privacy) — and
-[SECURITY.md](SECURITY.md) treats a violation of this promise as a
+build, whisper/OCR/diarization models). No telemetry. See [Privacy](#privacy)
+— and [SECURITY.md](SECURITY.md) treats a violation of this promise as a
 vulnerability.
 
 ## For agents & tooling
@@ -552,10 +632,11 @@ without a human reading docs:
 - [`server.json`](server.json) — MCP registry manifest
 - [`integrations/`](integrations/) — per-engine adapters, all generated from one source of truth and drift-tested (incl. the Claude Code plugin under [`integrations/claude-code/`](integrations/claude-code/))
 
-## Roadmap (not in v1)
+## Roadmap
 
-URL/YouTube ingestion · speaker diarization · cloud STT · embeddings/semantic
-search · hosted/remote mode · `.mcpb` bundle · whisper.cpp backend
+URL/YouTube ingestion · persistent speaker-name labels (`label_speakers`) ·
+word-level speaker splitting · cloud STT · embeddings/semantic search ·
+hosted/remote mode · `.mcpb` bundle · whisper.cpp backend
 
 ## License
 

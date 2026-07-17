@@ -27,7 +27,11 @@ install it: `claude mcp add -s user talkthrough -- uvx talkthrough-mcp`
 1. **Ingest once**: `process_media(path)` — idempotent by content hash;
    re-calls on the same file return instantly. Long videos take minutes and
    stream progress. The summary gives you `job_id`, counts, wall-clock, and
-   a transcript preview — do NOT dump anything else eagerly.
+   a transcript preview — do NOT dump anything else eagerly. Multi-person
+   recording (meeting/interview)? Add `diarize=true` and — whenever the
+   headcount is known — `num_speakers=N` (the main accuracy lever): segments
+   get `S1`/`S2`/… labels and the summary a talk-time roster. On an
+   already-processed job this amends in seconds without re-transcribing.
 2. **Orient**: `get_transcript(job_id)` (paginate via `next_start_ms` when
    `truncated`) or `search(job_id, "<distinctive word>")` to jump straight
    to the relevant moments (searches speech AND on-screen OCR text).
@@ -63,6 +67,11 @@ method: `triage-recording` (screencast → findings JSON per the contract in
 
 - Audio-only jobs (.m4a/.mp3/…): transcript tools work; frame tools error
   by design — that error is expected, not a failure.
+- Speaker labels are anonymous (`S1`/`S2`, ordered by first voice). Mapping
+  them to names is YOUR job: self-introductions, vocatives, the attendees
+  list. State the mapping explicitly and mark unmapped labels
+  "unidentified". `diarize=true` needs the `[diarization]` extra — its
+  absence produces an actionable install-hint error.
 - Findings/quotes must cite the narrator's exact words + `t_ms` (+ `t_wall`
   when known) + the frame files you actually inspected.
 - Low STT/vision confidence → surface a question; never silently guess.

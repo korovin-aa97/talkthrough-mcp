@@ -6,4 +6,9 @@ OCR text, and wall-clock anchoring — with lazy retrieval tools so long
 videos never flood the model context.
 """
 
-__version__ = "0.1.0"
+try:
+    from importlib.metadata import version as _version
+
+    __version__ = _version("talkthrough-mcp")
+except Exception:  # pragma: no cover - source checkout without install metadata
+    __version__ = "0.0.0.dev0"
