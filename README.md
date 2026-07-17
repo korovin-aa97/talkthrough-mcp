@@ -612,6 +612,9 @@ evidence. talkthrough covers what a browser extension can't — desktop apps,
 mobile screencasts, ops incidents, meetings, any file — with no account, and
 correlates with *server-side* logs via wall-clock time.
 
+**Which agent model do I need to drive this?**
+We ran a 150-run battery against v0.2.0 — 6 model configs (Claude haiku/sonnet/opus, Codex gpt-5.5 at two reasoning efforts + gpt-5.4-mini) × 10 verbatim-identical task prompts × 5 real recordings (30 s–73 min, RU/EN, 1–5 speakers), scored by a strict LLM judge plus mechanical evidence checks. Short version: point lookups and search ("who said X and when") worked on **every** tier tested; minutes-with-owners and evidence-disciplined name mapping want the top tiers; reasoning effort moved results more than model family. Full matrices — score × time × tokens on every intersection — in [docs/MODEL-NOTES.md](docs/MODEL-NOTES.md).
+
 **Can't I just script ffmpeg + whisper myself?**
 Yes — that's exactly this pipeline. What you'd be rebuilding: scene-change
 detection with perceptual dedup, OCR, transcript+OCR search, the wall-clock
