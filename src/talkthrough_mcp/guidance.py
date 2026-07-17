@@ -36,13 +36,13 @@ Examples:
 - process_media(path="/Users/sam/Desktop/bug-repro.mov") — narrated screencast, defaults are right
 - process_media(path="/rec/interview.mov", model="large-v3-turbo") — best multilingual quality (1.5 GB, one-time)
 - process_media(path="/tmp/standup.m4a") — audio-only: transcript tools work, frame tools will error
-- process_media(path="/rec/team-sync.m4a", diarize=true) — who said what: segments get S1/S2/… + talk-time roster
 - process_media(path="/rec/panel.mov", diarize=true, num_speakers=4) — headcount known? ALWAYS pass it: best accuracy
 - job already processed + diarize=true → speakers are added in place, whisper does NOT re-run (fast amend)
 - error mentions [diarization] → the extra is missing: install via uvx "talkthrough-mcp[diarization]"
-- process_media(path="/rec/review.mov", vocabulary="OKR, PgBouncer, Kanban") — jargon survives STT
+- know the attendees? process_media(path=..., vocabulary="Anastasia, Evgenii, OKR") — names+jargon survive STT
 - user: "analyze/summarize this meeting" → include diarize=true — speaker structure is not optional extra credit
 - threshold mode counts VOICE CLUSTERS, not people — report speakers_with_30s_plus, or re-run with num_speakers
+- cap_hit or sampling_interval_s in summary → for slide hunts raise TALKTHROUGH_MAX_FRAMES or use extract_frame
 - summary shows wall_clock=null → ask when recording started, re-call with recorded_at=... and force=true
 - transcript garbled or language_probability low → re-call with model="large-v3-turbo" (or language="ru") + force=true
 - after success, do NOT dump everything — continue with get_transcript / get_moment / search on the job_id
@@ -89,6 +89,7 @@ Examples:
 - transcript hit at t_ms=421500 → get_frames(job_id, at_ms=421500) for the visual evidence
 - walking a demo scene by scene → one ranged call per scene beats one giant range
 - frame files are named by video-ms (t00083500.jpg ↔ t_ms 83500) — stable refs for findings
+- valid_from_ms/valid_to_ms on each frame = when the screen looked like this — check the span covers your moment
 - keep max_frames at 2-4 unless you are truly comparing scenes; images are token-expensive
 - every frame entry carries "path" (absolute) — save/copy the image elsewhere with your own file tools
 - audio-only job → this tool errors by design; use get_transcript / get_moment instead
@@ -110,6 +111,7 @@ Examples:
 - response includes the t_wall range when known → quote it in bug reports for log correlation
 - diarized job → speakers_in_range + speaker on each segment: who is talking in this window, at a glance
 - frame entries carry "path" (absolute) — copy the screenshot elsewhere with your own file tools
+- "was X on screen at t?" → yes iff some frame's valid_from_ms <= t < valid_to_ms — no extra calls needed
 - audio-only job → returns the transcript slice plus a no-frames note (that is expected)
 - anti-example: whole-video summary → get_transcript(format="text"), not a chain of get_moments
 - anti-example: need more than 3 frames of a range → get_frames(start_ms=..., end_ms=..., max_frames=6)
@@ -334,16 +336,20 @@ them, and that is fine.
    process_media(path=<original file>, diarize=true, num_speakers=<attendee
    count when known>) — it adds S1/S2/… labels to the existing job without
    re-transcribing, and minutes with owners need them.
-3. When segments carry speaker labels, map each label to a person before
+3. Attendees are listed above and the file is not processed yet (or you are
+   re-running process_media anyway)? Pass vocabulary="<the attendees' names>"
+   in that call — names survive transcription instead of degrading into
+   look-alike words, and owner attribution depends on them.
+4. When segments carry speaker labels, map each label to a person before
    writing minutes: self-introductions ("hi, this is Vera"), vocatives
    ("thanks, Tom"), and the attendees list above are the evidence. State the
    mapping first (e.g. `S1 = Vera, S2 = Tom, S3 = unidentified`) — never
    guess beyond the evidence.
-4. Collect: action items (who committed to what), decisions (what was agreed),
+5. Collect: action items (who committed to what), decisions (what was agreed),
    open questions (raised but unresolved). Keep exact quotes and t_ms for each.
-5. search(job_id="{job_id}", query="<name or topic>") to trace scattered
+6. search(job_id="{job_id}", query="<name or topic>") to trace scattered
    follow-ups on one topic before summarizing it.
-6. If the job has video (a screen-share was recorded), attach visual evidence to
+7. If the job has video (a screen-share was recorded), attach visual evidence to
    items that reference the screen via get_moment(job_id="{job_id}",
    start_ms=..., end_ms=...).
 
