@@ -29,7 +29,7 @@ speech locally (whisper), extracts scene-change keyframes, OCRs on-screen text, 
 the wall-clock start time, and (opt-in) labels who said what via local speaker diarization. \
 Returns a compact summary (job_id, media info, wall_clock, transcript preview, speaker \
 roster when diarized) — full data stays on disk and is served lazily by the other tools. \
-Idempotent by content hash: re-calling on an already-processed file returns instantly.
+Idempotent by content hash: re-calling on an already-processed file returns instantly. For MULTI-PERSON recordings (meetings, interviews, calls) diarize=true is part of a proper analysis — pass it even when the user only asks for a summary.
 When NOT to use: to re-fetch data you already processed (use the retrieval tools), or for \
 URLs — local file paths only.
 Examples:
@@ -41,7 +41,7 @@ Examples:
 - job already processed + diarize=true → speakers are added in place, whisper does NOT re-run (fast amend)
 - error mentions [diarization] → the extra is missing: install via uvx "talkthrough-mcp[diarization]"
 - process_media(path="/rec/review.mov", vocabulary="OKR, PgBouncer, Kanban") — jargon survives STT
-- process_media(path="/rec/demo.mov", recorded_at="2026-07-10T12:03:00+02:00") — exact wall-clock anchor
+- user: "analyze/summarize this meeting" → include diarize=true — speaker structure is not optional extra credit
 - user: "I just recorded my screen, it's on my Desktop" → process_media(path="/Users/<user>/Desktop/<file>.mov")
 - summary shows wall_clock=null → ask when recording started, re-call with recorded_at=... and force=true
 - transcript garbled or language_probability low → re-call with model="large-v3-turbo" (or language="ru") + force=true

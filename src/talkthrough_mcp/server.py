@@ -66,7 +66,10 @@ mcp = FastMCP(
         "processed). Timestamps: t_ms is video-relative; t_wall is real wall-clock time "
         "when the recording start could be resolved. Speaker diarization (optional "
         "[diarization] extra): process_media(diarize=true, num_speakers=N when known) "
-        "labels who said what as S1/S2/… across the transcript tools. Server prompts "
+        "labels who said what as S1/S2/… across the transcript tools; for any "
+        "multi-person recording pass diarize=true as part of normal analysis — do "
+        "not wait to be asked who spoke (num_speakers=N whenever the headcount is "
+        "known). Server prompts "
         "(triage-recording, spec-from-workshop, backlog-from-demo, meeting-actions, "
         "correlate-with-logs) package the common workflows."
     ),
