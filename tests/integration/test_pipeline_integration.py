@@ -119,6 +119,30 @@ def test_idempotent_rerun_is_instant(demo: ProcessResult) -> None:
     assert rerun.manifest == demo.manifest
 
 
+def test_frame_budget_spreads_across_the_whole_video(tmp_path: Path) -> None:
+    """A budget smaller than duration x 1 fps must cover the WHOLE video, not
+    its head. With max_frames=4 on the ~18.5 s demo the old fixed 1 s floor
+    grabbed the first 4 seconds and stopped; the adaptive floor (~4.6 s)
+    reaches the last scene."""
+    from talkthrough_mcp.core import frames as frames_mod
+    from talkthrough_mcp.core.probe import probe_media
+
+    duration_s = probe_media(Path(DEMO_MP4)).duration_s
+    extracted, _cap_hit = frames_mod.extract_keyframes(
+        Path(DEMO_MP4),
+        tmp_path / "frames",
+        max_frames=4,
+        timeout=120,
+        duration_s=duration_s,
+    )
+    assert len(extracted) <= 4
+    last_ms = extracted[-1].ms
+    assert last_ms >= duration_s * 1000 * 0.6, (
+        f"budgeted frames stop at {last_ms}ms of {duration_s * 1000:.0f}ms — "
+        f"head-truncation regressed: {[f.ms for f in extracted]}"
+    )
+
+
 # --- server tool layer on the processed job ---------------------------------
 
 

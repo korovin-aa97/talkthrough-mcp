@@ -502,7 +502,7 @@ model downloads once. Spoken-language support is unaffected either way.
 | `TALKTHROUGH_DIARIZATION_EMB_MODEL` | `nemo_en_titanet_small` | embedding model: allowlist name (see [Speakers](#speakers-optional-diarization)) or a local `.onnx` path |
 | `TALKTHROUGH_DIARIZATION_THREADS` | `min(4, cpus)` | ONNX threads for both diarization models |
 | `TALKTHROUGH_MAX_SECONDS` | `7200` | max media duration |
-| `TALKTHROUGH_MAX_FRAMES` | `600` | keyframe cap per job |
+| `TALKTHROUGH_MAX_FRAMES` | `600` | keyframe budget per job, spread across the whole duration (the 1 s selection floor auto-grows to `duration/budget` on long recordings) |
 | `TALKTHROUGH_HOME` | `~/.talkthrough` | job store root |
 
 ## CLI

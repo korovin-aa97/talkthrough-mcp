@@ -1,9 +1,16 @@
-"""Keyframe extraction: ONE decode pass, scene-change OR 1 fps floor.
+"""Keyframe extraction: ONE decode pass, scene-change OR time floor.
 
 The select expression keeps a frame when any of these holds:
 - it is the first frame (``isnan(prev_selected_t)``),
 - the scene-change score exceeds the threshold,
-- at least 1 s passed since the last selected frame (floor for static scenes).
+- the adaptive time floor passed since the last selected frame.
+
+The floor is 1 s for short videos and grows to ``duration / max_frames``
+for long ones, so the frame budget covers the WHOLE recording instead of
+truncating at the head (600 frames at a fixed 1 fps floor used to mean
+"the first 10 minutes of a meeting"). Scene changes still fire at any
+instant; ``-frames:v`` stays as the hard backstop, so a scene-dense video
+can still hit the cap early — ``cap_hit`` reports it.
 
 Frames are scaled to <=1568 px wide in the SAME filter chain (vision-model
 sweet spot; the source video is never re-read for normal frame serving) and
@@ -48,6 +55,18 @@ def frame_filename(ms: int) -> str:
     return f"t{ms:08d}.jpg"
 
 
+def frame_floor_s(duration_s: float | None, max_frames: int) -> float:
+    """Seconds that must pass between selected frames (absent a scene change).
+
+    ``max(1, duration / max_frames)``: videos short enough for the budget
+    keep the historical 1 s floor byte-for-byte; longer ones stretch the
+    same budget across their entire duration.
+    """
+    if not duration_s or duration_s <= 0 or max_frames <= 0:
+        return 1.0
+    return max(1.0, duration_s / max_frames)
+
+
 def extract_keyframes(
     media: Path,
     frames_dir: Path,
@@ -55,10 +74,15 @@ def extract_keyframes(
     scene_threshold: float = DEFAULT_SCENE_THRESHOLD,
     max_frames: int,
     timeout: int,
+    duration_s: float | None = None,
 ) -> tuple[list[Frame], bool]:
-    """One-pass scene-change + 1 fps floor extraction, renamed to video-ms."""
+    """One-pass scene-change + adaptive-floor extraction, renamed to video-ms."""
     frames_dir.mkdir(parents=True, exist_ok=True)
-    select_expr = f"isnan(prev_selected_t)+gt(scene\\,{scene_threshold})+gte(t-prev_selected_t\\,1)"
+    floor_s = frame_floor_s(duration_s, max_frames)
+    select_expr = (
+        f"isnan(prev_selected_t)+gt(scene\\,{scene_threshold})"
+        f"+gte(t-prev_selected_t\\,{floor_s:.3f})"
+    )
     vf = f"select='{select_expr}',scale='min({MAX_FRAME_WIDTH},iw)':-2,showinfo"
     try:
         proc = subprocess.run(

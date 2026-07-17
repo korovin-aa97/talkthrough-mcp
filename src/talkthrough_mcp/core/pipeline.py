@@ -452,6 +452,7 @@ def process_media(
                 frames_directory,
                 max_frames=max_frames_cap(),
                 timeout=tool_timeout,
+                duration_s=info.duration_s,
             )
             report("deduplicating frames", 0.82)
             dedup.mark_duplicates(extracted, frames_directory)
