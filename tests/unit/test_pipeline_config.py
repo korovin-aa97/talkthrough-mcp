@@ -193,3 +193,51 @@ def test_whisper_loads_from_local_cache_first(monkeypatch: pytest.MonkeyPatch) -
     cache_miss[0] = True
     stt._load_model("small")
     assert calls == [True, None], "cache miss must fall back to a one-time download"
+
+
+# --- dusty-roster budget (threshold-mode honesty) ------------------------------
+
+
+def dusty_diarization(majors: int, dust: int) -> Diarization:
+    from talkthrough_mcp.core.diarize import SpeakerStat
+
+    speakers = [
+        SpeakerStat(label=f"S{i+1}", talk_time_ms=60_000 + i, turn_count=5,
+                    first_ms=0, last_ms=1000)
+        for i in range(majors)
+    ] + [
+        SpeakerStat(label=f"S{majors+i+1}", talk_time_ms=2_000, turn_count=1,
+                    first_ms=0, last_ms=1000)
+        for i in range(dust)
+    ]
+    return Diarization(
+        available=True, reason="", detected_num_speakers=majors + dust,
+        speakers=speakers,
+    )
+
+
+def test_roster_payload_caps_and_counts_hidden() -> None:
+    from talkthrough_mcp.core.pipeline import SUMMARY_ROSTER_CAP, roster_payload
+
+    entries, hidden = roster_payload(dusty_diarization(majors=5, dust=118))
+    assert len(entries) == SUMMARY_ROSTER_CAP
+    assert hidden == 5 + 118 - SUMMARY_ROSTER_CAP
+    # top-by-talk-time, but label order preserved in the output
+    assert [e["label"] for e in entries][:5] == ["S1", "S2", "S3", "S4", "S5"]
+
+    small_entries, small_hidden = roster_payload(dusty_diarization(majors=3, dust=0))
+    assert len(small_entries) == 3 and small_hidden == 0
+
+
+def test_summary_threshold_mode_flags_dust() -> None:
+    from talkthrough_mcp.core.pipeline import _summarize_diarization
+
+    block = _summarize_diarization(dusty_diarization(majors=5, dust=118))
+    assert block["speakers_with_30s_plus"] == 5
+    assert "threshold clustering" in block["note"]
+    assert block["speakers_truncated"] == 111
+
+    exact = dusty_diarization(majors=5, dust=0)
+    exact.requested_num_speakers = 5
+    block = _summarize_diarization(exact)
+    assert "note" not in block and "speakers_with_30s_plus" not in block

@@ -42,7 +42,7 @@ Examples:
 - error mentions [diarization] → the extra is missing: install via uvx "talkthrough-mcp[diarization]"
 - process_media(path="/rec/review.mov", vocabulary="OKR, PgBouncer, Kanban") — jargon survives STT
 - user: "analyze/summarize this meeting" → include diarize=true — speaker structure is not optional extra credit
-- user: "I just recorded my screen, it's on my Desktop" → process_media(path="/Users/<user>/Desktop/<file>.mov")
+- threshold mode counts VOICE CLUSTERS, not people — report speakers_with_30s_plus, or re-run with num_speakers
 - summary shows wall_clock=null → ask when recording started, re-call with recorded_at=... and force=true
 - transcript garbled or language_probability low → re-call with model="large-v3-turbo" (or language="ru") + force=true
 - after success, do NOT dump everything — continue with get_transcript / get_moment / search on the job_id
@@ -62,7 +62,7 @@ Examples:
 - get_transcript(job_id="a1b2c3d4e5f60718", start_ms=0, end_ms=120000) — just the first two minutes
 - get_transcript(job_id="...", format="text") — prose block for summarization
 - get_transcript(job_id="...", format="srt") — subtitle export the user asked for
-- diarized job: segments carry "speaker" and the header a roster — who dominated the meeting is one look away
+- diarized job: segments carry "speaker" + a roster header (top-12 by talk time; speakers_truncated counts the rest)
 - "what did S2 say?" → format="segments", collect entries with speaker=="S2" (labels are in order of first voice)
 - got truncated=true with next_start_ms=421500 → get_transcript(job_id="...", start_ms=421500)
 - user: "what was said between 5:00 and 6:30?" → start_ms=300000, end_ms=390000

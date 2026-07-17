@@ -210,10 +210,9 @@ def get_transcript(
     diarization = manifest.transcript.diarization
     if diarization is not None and diarization.available:
         payload["diarized"] = True
-        payload["speakers"] = [
-            {"label": stat.label, "talk_time_ms": stat.talk_time_ms, "turn_count": stat.turn_count}
-            for stat in diarization.speakers
-        ]
+        payload["speakers"], hidden = pipeline.roster_payload(diarization)
+        if hidden:
+            payload["speakers_truncated"] = hidden
     if format == "segments":
         payload["segments"] = [
             {
