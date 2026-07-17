@@ -426,7 +426,10 @@ torch, no accounts, no GPU):
 Models download once (~47 MB total) from pinned, checksum-verified URLs into
 `~/.talkthrough/models/`; warm runs are zero-network like the rest of the
 pipeline. Speed on an M-series CPU (4 threads): a 26-minute meeting diarizes
-in about 2 minutes (RTF ≈ 0.08), on top of the transcription time.
+in about 2 minutes (RTF ≈ 0.08), on top of the transcription time. Memory:
+expect on the order of 1–1.5 GB peak RSS while an hour-plus meeting is being
+diarized (measured on a real 73-minute recording); it is released when the
+stage completes.
 
 | Role | Model | Download | Weights license |
 |---|---|---|---|

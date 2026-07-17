@@ -75,6 +75,18 @@ gain fields when diarization actually ran.
 - `tool_versions["talkthrough-mcp"]` in manifests recorded a stale hardcoded
   `0.1.0` on every release; `__version__` now derives from the installed
   package metadata.
+- Tool guidance now teaches two rules the agent-battery test pass proved
+  necessary: any multi-person recording gets `diarize=true` as part of normal
+  analysis (a naive "summarize this meeting" prompt previously left speakers
+  off in 9 of 12 model runs), and threshold-mode cluster counts are voices,
+  not people. Threshold-mode responses also carry `speakers_with_30s_plus`
+  plus a one-line note pointing at `num_speakers`.
+- Diarization rosters in tool responses are capped at the top 12 speakers by
+  talk time (`speakers_truncated` reports the rest; the manifest keeps all) —
+  a real 43-minute workshop in threshold mode produced 123 clusters, which
+  would have flooded every `get_transcript` response.
+- `TALKTHROUGH_DIARIZATION_THRESHOLD` now rejects non-positive values with a
+  warning instead of passing them into the native clustering.
 - Long recordings no longer lose their tail frames: the fixed 1 s keyframe
   selection floor meant the 600-frame budget covered only the first ~10
   minutes of a meeting (a 73-minute real meeting surfaced it — slides shown
