@@ -130,23 +130,26 @@ def test_readme_install_region_is_generated() -> None:
     )
 
 
-def test_install_buttons_encode_the_pypi_command() -> None:
-    """Flip-day deeplink buttons (INSTALL_PHASE='pypi') round-trip to `uvx talkthrough-mcp`."""
+def test_install_buttons_encode_the_batteries_included_command() -> None:
+    """Deeplink buttons round-trip to the generated uvx args — which carry the
+    [diarization] extra (v0.2.0 decision: one-click installs are batteries-
+    included; `uvx talkthrough-mcp` stays the documented minimal path)."""
     import base64
     import json
     import re
     import urllib.parse
 
-    from scripts.gen_integrations import _install_buttons
+    from scripts.gen_integrations import UVX_ARGS, _install_buttons
 
-    block = _install_buttons(["talkthrough-mcp"])
+    assert UVX_ARGS == ["talkthrough-mcp[diarization]"]
+    block = _install_buttons(UVX_ARGS)
     cursor = re.search(r"cursor\.com/en/install-mcp\?name=talkthrough&config=([^)]+)\)", block)
     assert cursor is not None
     decoded = json.loads(base64.b64decode(urllib.parse.unquote(cursor.group(1))))
-    assert decoded == {"command": "uvx", "args": ["talkthrough-mcp"]}
+    assert decoded == {"command": "uvx", "args": UVX_ARGS}
     vscode = re.search(r"vscode\.dev/redirect/mcp/install\?name=talkthrough&config=([^)&]+)", block)
     assert vscode is not None
-    assert json.loads(urllib.parse.unquote(vscode.group(1)))["args"] == ["talkthrough-mcp"]
+    assert json.loads(urllib.parse.unquote(vscode.group(1)))["args"] == UVX_ARGS
     assert "quality=insiders" in block
 
 

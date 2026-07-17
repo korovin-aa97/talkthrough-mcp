@@ -16,7 +16,7 @@
     "mcp_config": {
       "command": "uvx",
       "args": [
-        "talkthrough-mcp"
+        "talkthrough-mcp[diarization]"
       ],
       "env": {
         "TALKTHROUGH_WHISPER_MODEL": "${user_config.whisper_model}"

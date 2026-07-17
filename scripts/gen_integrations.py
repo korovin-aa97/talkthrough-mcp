@@ -36,12 +36,26 @@ from talkthrough_mcp import guidance  # noqa: E402
 
 INSTALL_PHASE = "pypi"  # "git" (private/pre-PyPI) | "pypi"
 
+# Generated configs are batteries-included: they carry the [diarization]
+# extra so a user who installed via any one-click button / plugin / snippet
+# can ask "who said what" without reinstalling (v0.2.0 decision). The
+# PACKAGE default stays lean — `uvx talkthrough-mcp` remains the documented
+# minimal install — and diarization itself is still off per call.
+_PYPI_SPEC = "talkthrough-mcp[diarization]"
+_GIT_SPEC = "talkthrough-mcp[diarization] @ git+https://github.com/korovin-aa97/talkthrough-mcp"
 _UVX_ARGS = {
-    "git": ["--from", "git+https://github.com/korovin-aa97/talkthrough-mcp", "talkthrough-mcp"],
-    "pypi": ["talkthrough-mcp"],
+    "git": ["--from", _GIT_SPEC, "talkthrough-mcp"],
+    "pypi": [_PYPI_SPEC],
 }
 UVX_ARGS: list[str] = _UVX_ARGS[INSTALL_PHASE]
-UVX_CMDLINE = "uvx " + " ".join(UVX_ARGS)
+
+
+def _shell_quoted(arg: str) -> str:
+    """Quote args for shell one-liners (zsh globs bare [] patterns)."""
+    return f'"{arg}"' if any(ch in arg for ch in "[] @") else arg
+
+
+UVX_CMDLINE = "uvx " + " ".join(_shell_quoted(arg) for arg in UVX_ARGS)
 
 PROJECT_VERSION: str = tomllib.loads((REPO / "pyproject.toml").read_text(encoding="utf-8"))[
     "project"
@@ -52,7 +66,10 @@ ENV_DOC = (
     "`large-v3-turbo` for non-English narration — agents can also pass "
     "`model=` per call), TALKTHROUGH_OCR (`off` to disable), "
     "TALKTHROUGH_OCR_LANG (on-screen-text script, e.g. `ru`, `ja`, `ko`), "
-    "TALKTHROUGH_HOME (job store root, default `~/.talkthrough`)."
+    "TALKTHROUGH_HOME (job store root, default `~/.talkthrough`). "
+    "Speaker diarization is included but off per call — agents pass "
+    "`diarize=true` (plus `num_speakers` when known); the minimal server "
+    "without the diarization engine is `uvx talkthrough-mcp`."
 )
 
 VERIFY_DOC = (
@@ -401,7 +418,10 @@ def build_mcp_configs() -> dict[str, str]:
                 "mcpServers": {
                     "talkthrough-dev": {
                         "command": "uv",
-                        "args": ["run", "--directory", ".", "talkthrough-mcp"],
+                        "args": [
+                            "run", "--extra", "diarization", "--directory", ".",
+                            "talkthrough-mcp",
+                        ],
                     }
                 }
             }
@@ -485,7 +505,7 @@ def build_plugin_manifests() -> dict[str, str]:
             "entry_point": "uvx",
             "mcp_config": {
                 "command": "uvx",
-                "args": ["talkthrough-mcp"],
+                "args": UVX_ARGS,
                 "env": {"TALKTHROUGH_WHISPER_MODEL": "${user_config.whisper_model}"},
             },
         },

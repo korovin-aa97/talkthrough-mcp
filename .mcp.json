@@ -4,6 +4,8 @@
       "command": "uv",
       "args": [
         "run",
+        "--extra",
+        "diarization",
         "--directory",
         ".",
         "talkthrough-mcp"

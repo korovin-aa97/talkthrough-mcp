@@ -16,11 +16,14 @@ turns narrated screen recordings / audio files into queryable structured data
 ## Server command (stdio)
 
 ```
-uvx talkthrough-mcp
+uvx "talkthrough-mcp[diarization]"
 ```
 
-(To run the latest unreleased main instead:
-`uvx --from git+https://github.com/korovin-aa97/talkthrough-mcp talkthrough-mcp`)
+This is the batteries-included form (adds local who-said-what speaker
+labeling; ~20 MB extra wheels, models download only on first use). The
+minimal server without the diarization engine is `uvx talkthrough-mcp`.
+(Latest unreleased main instead: `uvx --from "talkthrough-mcp[diarization] @
+git+https://github.com/korovin-aa97/talkthrough-mcp" talkthrough-mcp`)
 
 ## Client configuration
 
@@ -52,22 +55,17 @@ for non-English narration — the `process_media` tool also accepts a per-call
 `model` parameter), `TALKTHROUGH_OCR` (`off` to disable),
 `TALKTHROUGH_HOME` (job store root, default `~/.talkthrough`).
 
-## Optional: speaker diarization (who said what)
+## Speaker diarization (who said what) — already included above
 
-If the user wants speaker labels on meetings/interviews, install with the
-extra — replace the package name in ANY config above with
-`talkthrough-mcp[diarization]`:
-
-```json
-"args": ["talkthrough-mcp[diarization]"]
-```
-
-(Shell commands need quotes: `uvx "talkthrough-mcp[diarization]"`.) Then
-`process_media(path=..., diarize=true, num_speakers=<count>)` labels segments
-`S1`/`S2`/…. Pass `num_speakers` whenever the participant count is known —
-it is the main accuracy lever. Calling `diarize=true` on an
-already-processed job adds speakers without re-transcribing. Diarization
-models (~47 MB) download once, pinned and checksum-verified.
+The configs on this page carry the `[diarization]` extra, so
+`process_media(path=..., diarize=true, num_speakers=<count>)` labels
+segments `S1`/`S2`/… out of the box. Pass `num_speakers` whenever the
+participant count is known — it is the main accuracy lever. Calling
+`diarize=true` on an already-processed job adds speakers without
+re-transcribing. Diarization models (~47 MB) download once, pinned and
+checksum-verified. If the user explicitly wants the minimal install
+(`uvx talkthrough-mcp`, no diarization engine), an explicit `diarize=true`
+will answer with the one-line reinstall hint — relay it verbatim.
 
 ## Verify the installation
 

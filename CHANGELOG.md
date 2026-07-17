@@ -53,6 +53,13 @@ gain fields when diarization actually ran.
     byte-identically to 0.1.x output (modulo the now-correct version stamp
     in `tool_versions` — see Fixed below); verified against a real v0.1.3
     checkout on the same recordings.
+- Generated install configs are batteries-included: every one-click button,
+  per-engine snippet, the Claude Code plugin, and the Claude Desktop bundle
+  now launch `uvx "talkthrough-mcp[diarization]"`, so "who said what" works
+  without a reinstall for users who never read the docs. The PyPI package
+  itself is unchanged — `uvx talkthrough-mcp` (and the MCP registry entry)
+  remain the lean, diarization-free install, and diarization still runs
+  only when a call asks for it.
 - `extract_frame` returns the absolute `path` of the extracted file, and
   `get_frames`/`get_moment` name each served frame's absolute `path` (#13) —
   "save this screenshot elsewhere" becomes the calling agent's own file copy,
