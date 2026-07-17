@@ -6,7 +6,7 @@
   },
   "metadata": {
     "description": "Marketplace for the talkthrough plugin: narrated screen recordings in, agent-ready evidence out.",
-    "version": "0.2.0"
+    "version": "0.2.1"
   },
   "plugins": [
     {

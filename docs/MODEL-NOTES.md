@@ -5,6 +5,33 @@ models drift, sample sizes are small (n in every cell), and the corpus
 is one team's real recordings. Read it as "what tier of agent reliably
 drives this MCP for which job".*
 
+## v0.2.1 addendum (mini-battery, 2026-07-18)
+
+A 9-run subset re-ran on the v0.2.1 server (haiku, sonnet, gpt-5.5-medium ×
+{T5 slide-hunt on the 73-min RU meeting and the 43-min EN workshop; T0s
+naive bug-screencast triage}), same prompts and mechanical checks as the
+v0.2.0 battery. No regressions; three behavior deltas, all payload-driven:
+
+- **T5, 6/6 runs returned an existing screenshot path** (v0.2.0: sonnet was
+  the weak cell at 1.0 on this task). One run (sonnet, RU meeting) cited the
+  new validity span verbatim — picked the summary slide *because* it "stays
+  on screen for ~6.6 minutes (3283500–3681375 ms) — the longest of any
+  slide" — turning what used to be a `duplicate_of`-chain inference into a
+  payload lookup. gpt-5.5 used `extract_frame` for an exact instant.
+- **T0s, 3/3 runs quote the on-screen Russian text** («Я готовлю вашу
+  заявку…», «Выбери поезд») in their findings — strings that were absent
+  from the OCR index before the auto-selected `eslav` pack, so no v0.2.0
+  agent could have cited them. The inverse invariant held in the same runs:
+  3/3 left the single-narrator screencast undiarized.
+- **Vocabulary honesty note** (engine-level, no agents): re-transcribing the
+  73-min RU meeting on `small` with attendee names in `vocabulary` kept
+  every ground-truth name verbatim at its reference point («Влад, Дим,
+  дайте какую-то обратную связь», «Меня зовут Александр Коровин») with zero
+  look-alike substitutions — but whisper echoed the name list into the
+  first ~60 s of quiet opening chatter (a known `initial_prompt` trait,
+  present since 0.1.0). If you pass `vocabulary`, treat the opening seconds
+  of the transcript with suspicion before quoting them.
+
 ## Method
 
 132 agent runs: 6 runner configs (3 Claude models, Codex
