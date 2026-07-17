@@ -508,20 +508,55 @@ def process_media(
     return ProcessResult(manifest=manifest, reused=False, elapsed_s=time.monotonic() - started)
 
 
+SUMMARY_ROSTER_CAP = 12
+SUBSTANTIAL_TALK_MS = 30_000
+
+
+def roster_payload(diarization: Diarization) -> tuple[list[dict[str, Any]], int]:
+    """Top speakers by talk time, capped for the token budget.
+
+    Threshold-mode clustering on real meetings produces dozens of sub-30 s
+    micro-clusters; serving all of them in every response both floods the
+    context and invites agents to read the cluster count as a headcount.
+    Returns ``(entries, hidden_count)`` — entries stay in label order.
+    """
+    ranked = sorted(diarization.speakers, key=lambda s: -s.talk_time_ms)[:SUMMARY_ROSTER_CAP]
+    kept = {stat.label for stat in ranked}
+    entries = [
+        {"label": stat.label, "talk_time_ms": stat.talk_time_ms, "turn_count": stat.turn_count}
+        for stat in diarization.speakers
+        if stat.label in kept
+    ]
+    return entries, len(diarization.speakers) - len(entries)
+
+
 def _summarize_diarization(diarization: Diarization) -> dict[str, Any]:
     """Compact summary block: roster without first/last timestamps."""
     if not diarization.available:
         return {"available": False, "reason": diarization.reason}
+    speakers, hidden = roster_payload(diarization)
     payload: dict[str, Any] = {
         "available": True,
         "detected_num_speakers": diarization.detected_num_speakers,
-        "speakers": [
-            {"label": stat.label, "talk_time_ms": stat.talk_time_ms, "turn_count": stat.turn_count}
-            for stat in diarization.speakers
-        ],
+        "speakers": speakers,
     }
+    if hidden:
+        payload["speakers_truncated"] = hidden
     if diarization.requested_num_speakers is not None:
         payload["requested_num_speakers"] = diarization.requested_num_speakers
+    else:
+        substantial = sum(
+            1 for s in diarization.speakers if s.talk_time_ms >= SUBSTANTIAL_TALK_MS
+        )
+        if substantial < (diarization.detected_num_speakers or 0):
+            # threshold-mode honesty: clusters != people; give agents the
+            # number worth reporting and the lever that fixes it
+            payload["speakers_with_30s_plus"] = substantial
+            payload["note"] = (
+                "threshold clustering over-detects on real meetings — treat "
+                "speakers_with_30s_plus as the likely headcount, or re-run "
+                "with num_speakers for an exact roster"
+            )
     return payload
 
 
