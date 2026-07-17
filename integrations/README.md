@@ -3,7 +3,7 @@
 The talkthrough MCP server is engine-agnostic (stdio MCP). Server command:
 
 ```
-uvx talkthrough-mcp
+uvx "talkthrough-mcp[diarization]"
 ```
 
 One folder per engine with the exact config to paste:
