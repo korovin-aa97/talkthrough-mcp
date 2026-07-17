@@ -211,8 +211,9 @@ def test_threshold_default_override_and_invalid(monkeypatch: pytest.MonkeyPatch)
     assert clustering_threshold() == DEFAULT_THRESHOLD
     monkeypatch.setenv("TALKTHROUGH_DIARIZATION_THRESHOLD", "0.72")
     assert clustering_threshold() == 0.72
-    monkeypatch.setenv("TALKTHROUGH_DIARIZATION_THRESHOLD", "not-a-float")
-    assert clustering_threshold() == DEFAULT_THRESHOLD
+    for junk in ("not-a-float", "0", "-1", "-0.5"):
+        monkeypatch.setenv("TALKTHROUGH_DIARIZATION_THRESHOLD", junk)
+        assert clustering_threshold() == DEFAULT_THRESHOLD
 
 
 def test_threads_default_override_and_invalid(monkeypatch: pytest.MonkeyPatch) -> None:

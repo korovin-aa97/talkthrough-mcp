@@ -69,7 +69,7 @@ def clustering_threshold() -> float:
     if not raw:
         return DEFAULT_THRESHOLD
     try:
-        return float(raw)
+        value = float(raw)
     except ValueError:
         logger.warning(
             "ignoring invalid TALKTHROUGH_DIARIZATION_THRESHOLD=%r, using %s",
@@ -77,6 +77,16 @@ def clustering_threshold() -> float:
             DEFAULT_THRESHOLD,
         )
         return DEFAULT_THRESHOLD
+    if value <= 0:
+        # a non-positive distance threshold would go straight into the native
+        # clustering with undefined results — same treatment as unparseable
+        logger.warning(
+            "ignoring non-positive TALKTHROUGH_DIARIZATION_THRESHOLD=%s, using %s",
+            value,
+            DEFAULT_THRESHOLD,
+        )
+        return DEFAULT_THRESHOLD
+    return value
 
 
 def diarization_threads() -> int:
