@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from pathlib import Path
+
 import pytest
 from tests.conftest import make_manifest
 
@@ -241,8 +243,9 @@ def test_resolved_embedding_label_never_touches_network(
     monkeypatch.setenv("TALKTHROUGH_DIARIZATION_EMB_MODEL", "nemo_en_titanet_small")
     assert diarize.resolved_embedding_label() == "nemo_en_titanet_small"
     monkeypatch.setenv("TALKTHROUGH_DIARIZATION_EMB_MODEL", "~/models/x.onnx")
-    assert diarize.resolved_embedding_label().endswith("/models/x.onnx")
-    assert "~" not in diarize.resolved_embedding_label()
+    label = diarize.resolved_embedding_label()
+    assert label == str(Path("~/models/x.onnx").expanduser())  # platform-native
+    assert "~" not in label
 
 
 # --- diarization_amended reflects the OUTCOME (v0.2.2 honesty fix) -------------
