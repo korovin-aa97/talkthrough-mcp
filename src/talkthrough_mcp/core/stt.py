@@ -54,6 +54,14 @@ def _echo_tokens(text: str) -> list[str]:
     return [t for t in re.split(r"[\W_]+", text.casefold().replace("ё", "е")) if t]
 
 
+def _ordered_vocab_run(tokens: list[str], vocab_tokens: list[str], vocab_set: set[str]) -> int:
+    """Longest count of the segment's vocabulary tokens that appear in
+    vocabulary ORDER (subsequence; non-vocab tokens are skipped)."""
+    in_vocab = [t for t in tokens if t in vocab_set]
+    iterator = iter(vocab_tokens)
+    return sum(1 for token in in_vocab if token in iterator)
+
+
 def trim_vocabulary_echo(
     segments: Sequence[SttSegment], vocabulary: str
 ) -> tuple[list[SttSegment], list[SttSegment]]:
@@ -61,12 +69,16 @@ def trim_vocabulary_echo(
 
     Whisper replays the vocabulary over quiet opening seconds (a known
     ``initial_prompt`` trait, documented in MODEL-NOTES since v0.2.1) — on a
-    real meeting the echo swallowed the actual opening words. A segment
-    inside the first ~90 s is treated as echo when (a) at least ~80% of its
-    tokens come from the vocabulary AND (b) one token repeats 3+ times OR
-    the text is a near-verbatim prefix of the vocabulary itself. A live
-    roll-call ("на встрече присутствуют Анастасия, Диана и Влад") carries
-    verbs/prepositions, fails (a), and survives.
+    real meeting the echo swallowed the actual opening words. The echo's
+    shape varies between decodes: verbatim repeats of the list, or a single
+    pass with names dropped — but it always keeps the VOCABULARY ORDER,
+    which real speech has no reason to follow. A segment inside the first
+    ~90 s is treated as echo when (a) at least ~80% of its tokens come from
+    the vocabulary AND (b) one token repeats 3+ times OR 3+ of its tokens
+    follow the vocabulary's own order (an ordered subsequence — a verbatim
+    prefix is the special case). A live roll-call ("на встрече присутствуют
+    Анастасия, Диана и Влад") carries verbs/prepositions, fails (a), and
+    survives.
 
     Returns ``(kept, trimmed)``; timing of kept segments is untouched.
     """
@@ -89,13 +101,8 @@ def trim_vocabulary_echo(
             kept.append(segment)
             continue
         max_repeat = max(tokens.count(t) for t in set(tokens))
-        prefix = vocab_tokens[: len(tokens)]
-        near_verbatim_prefix = (
-            len(tokens) >= VOCAB_ECHO_MIN_PREFIX_TOKENS
-            and len(tokens) == len(prefix)
-            and sum(1 for got, want in zip(tokens, prefix, strict=True) if got != want) <= 1
-        )
-        if max_repeat >= VOCAB_ECHO_MIN_REPEATS or near_verbatim_prefix:
+        ordered_run = _ordered_vocab_run(tokens, vocab_tokens, vocab_set)
+        if max_repeat >= VOCAB_ECHO_MIN_REPEATS or ordered_run >= VOCAB_ECHO_MIN_PREFIX_TOKENS:
             trimmed.append(segment)
         else:
             kept.append(segment)

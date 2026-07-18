@@ -42,6 +42,29 @@ def test_verbatim_vocabulary_prefix_is_trimmed() -> None:
     assert len(trimmed) == 1
 
 
+def test_vocab_order_subsequence_echo_is_trimmed() -> None:
+    """The REAL echo shape observed on the 73-min meeting re-run: one pass
+    over the list with names dropped — no repeats, not a strict prefix, but
+    the vocabulary's own order, which live speech has no reason to follow."""
+    vocabulary = "Анастасия, Евгений, Владислав, Дмитрий, Алексей, Диана"
+    segments = [
+        seg(1, 1680, "Анастасия, Дмитрий, Алексей, Диана"),
+        seg(2, 61680, "Дальше про строительные блоки."),
+    ]
+    kept, trimmed = trim_vocabulary_echo(segments, vocabulary)
+    assert [s.seq for s in kept] == [2]
+    assert [s.seq for s in trimmed] == [1]
+
+
+def test_names_out_of_vocabulary_order_survive() -> None:
+    # Live addressing lists people in the speaker's order, not the list's —
+    # a reversed-order trio must NOT look like an echo.
+    segments = [seg(1, 2000, "Влад, Диана, Анастасия?")]
+    kept, trimmed = trim_vocabulary_echo(segments, VOCABULARY)
+    assert kept == segments
+    assert trimmed == []
+
+
 def test_live_roll_call_with_connecting_words_survives() -> None:
     """The mandatory guard: real speech listing the same names is NOT echo —
     verbs/prepositions push the vocabulary fraction under the bar."""
