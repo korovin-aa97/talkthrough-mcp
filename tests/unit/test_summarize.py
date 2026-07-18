@@ -32,3 +32,15 @@ def test_audio_only_summary_never_carries_the_frame_note() -> None:
     frames = _summary(duration_s=4380.0, kind="audio")["frames"]
     assert "sampling_interval_s" not in frames
     assert "note" not in frames
+
+
+def test_vocabulary_echo_count_appears_only_when_segments_were_dropped() -> None:
+    manifest = make_manifest()
+    plain = summarize(ProcessResult(manifest=manifest, reused=False, elapsed_s=1.0))
+    assert "vocabulary_echo_trimmed" not in plain["transcript"]
+    trimmed = summarize(
+        ProcessResult(
+            manifest=manifest, reused=False, elapsed_s=1.0, vocabulary_echo_trimmed=2
+        )
+    )
+    assert trimmed["transcript"]["vocabulary_echo_trimmed"] == 2

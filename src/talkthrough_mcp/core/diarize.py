@@ -451,6 +451,22 @@ def ensure_model_file(spec: ModelSpec) -> Path:
     return target
 
 
+def resolved_embedding_label() -> str:
+    """The label ``create_diarizer`` would record for the embedding model —
+    WITHOUT touching the network or the disk cache.
+
+    Mirrors ``resolve_model``'s labeling: allowlist name (or the default),
+    else the env value read as a local path, verbatim. Used by the amend
+    gate to compare against ``diarization.embedding_model`` in a stored
+    manifest; an invalid env value simply compares unequal and the engine
+    reports the real error when the amend actually runs.
+    """
+    raw = os.environ.get("TALKTHROUGH_DIARIZATION_EMB_MODEL", "").strip()
+    if not raw or raw in EMBEDDING_MODELS:
+        return raw or DEFAULT_EMBEDDING_MODEL
+    return str(Path(raw).expanduser())
+
+
 def resolve_model(
     env_var: str, models: Mapping[str, ModelSpec], default_name: str
 ) -> tuple[str, Path]:

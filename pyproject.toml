@@ -1,6 +1,6 @@
 [project]
 name = "talkthrough-mcp"
-version = "0.2.1"
+version = "0.2.2"
 description = "Local-first MCP server that turns narrated screen recordings into agent-ready structured data: timestamped transcript, scene keyframes, OCR text, and wall-clock anchoring."
 readme = "README.md"
 authors = [
@@ -83,10 +83,19 @@ select = ["E", "F", "W", "I", "UP", "B", "SIM", "RUF"]
 # captured ffmpeg stderr sample lines are long by nature
 "tests/unit/test_frames.py" = ["E501"]
 # tool-description example one-liners are allowed up to 120 chars by the
-# guidance contract (enforced in tests/unit/test_guidance.py)
-"src/talkthrough_mcp/guidance.py" = ["E501"]
+# guidance contract (enforced in tests/unit/test_guidance.py); Cyrillic
+# ё/е examples are the point of the search guidance
+"src/talkthrough_mcp/guidance.py" = ["E501", "RUF001"]
 # generator templates carry one-line skill descriptions and markdown tables
 "scripts/gen_integrations.py" = ["E501"]
+# Cyrillic ё→е folding literals and RU sample strings are the FEATURE here
+# (#16 search normalization + vocabulary-echo trimming), not lookalike typos
+"src/talkthrough_mcp/core/manifest.py" = ["RUF001", "RUF002"]
+"src/talkthrough_mcp/core/stt.py" = ["RUF001", "RUF002"]
+"tests/unit/test_manifest.py" = ["RUF001", "RUF003"]
+"tests/unit/test_stt_echo.py" = ["RUF001", "RUF002"]
+"tests/integration/fixture_facts.py" = ["RUF003"]
+"tests/integration/test_pipeline_integration.py" = ["RUF001", "RUF002"]
 
 [tool.mypy]
 # 3.12 (the pinned dev/CI interpreter): transitive numpy stubs use py3.12

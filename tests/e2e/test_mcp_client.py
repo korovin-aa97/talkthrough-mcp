@@ -155,7 +155,23 @@ async def _run_session(home: Path) -> None:
             "search hits must carry t_wall when the wall clock is known"
         )
 
-        # 6. SRT export is well-formed.
+        # 5b. v0.2.2: multi-word AND-search on the wire; speaker= on an
+        # undiarized job answers honestly instead of erroring.
+        multiword = _payload(
+            await session.call_tool(
+                "search", {"job_id": job_id, "query": "page login"}
+            )
+        )
+        assert multiword["hit_count"] >= 1, "order-free multi-word query must hit"
+        undiarized_filter = _payload(
+            await session.call_tool(
+                "search", {"job_id": job_id, "query": "login", "speaker": "S1"}
+            )
+        )
+        assert undiarized_filter["hits"] == []
+        assert "not diarized" in undiarized_filter["note"]
+
+        # 6. SRT export is well-formed; v0.2.2: the payload names the media kind.
         srt_result = await session.call_tool(
             "get_transcript", {"job_id": job_id, "format": "srt"}
         )
@@ -163,6 +179,7 @@ async def _run_session(home: Path) -> None:
         srt = srt_payload["srt"]
         assert srt.startswith("1\n00:00:0")
         assert " --> " in srt
+        assert srt_payload["media_kind"] == "video"
 
         # 7. list_jobs sees the processed job.
         jobs_result = await session.call_tool("list_jobs", {})
@@ -213,6 +230,24 @@ async def _run_session(home: Path) -> None:
                 )
             )
             assert "S1: " in srt_diarized["srt"]
+            assert srt_diarized["media_kind"] == "audio"
+
+            # v0.2.2: speaker= filter on the wire — one voice, case-normalized,
+            # with the ocr-exclusion note in the payload.
+            s1_hits = _payload(
+                await session.call_tool(
+                    "search",
+                    {
+                        "job_id": diarized_summary["job_id"],
+                        "query": "the",
+                        "speaker": "s1",
+                    },
+                )
+            )
+            assert s1_hits["speaker"] == "S1"
+            assert s1_hits["hits"], "S1 speaks first — 'the' must hit her turns"
+            assert all(hit["speaker"] == "S1" for hit in s1_hits["hits"])
+            assert "ocr hits are excluded" in s1_hits["note"]
         else:
             failed = await session.call_tool(
                 "process_media",

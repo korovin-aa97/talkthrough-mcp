@@ -15,10 +15,13 @@ them, and that is fine.
    in that call — names survive transcription instead of degrading into
    look-alike words, and owner attribution depends on them.
 4. When segments carry speaker labels, map each label to a person before
-   writing minutes: self-introductions ("hi, this is Vera"), vocatives
-   ("thanks, Tom"), and the attendees list above are the evidence. State the
-   mapping first (e.g. `S1 = Vera, S2 = Tom, S3 = unidentified`) — never
-   guess beyond the evidence.
+   writing minutes. Evidence: self-introductions ("hi, this is Vera"),
+   vocatives ("thanks, Tom"), the attendees list above — and, on video
+   jobs, the SCREEN: meeting-app name plates, the recording's title card
+   (who started/organized it), and the active-speaker highlight during that
+   speaker's t_ms all name people (get_moment at the moment, read frames +
+   OCR). State the mapping first (e.g. `S1 = Vera, S2 = Tom,
+   S3 = unidentified`) — never guess beyond the evidence.
 5. Collect: action items (who committed to what), decisions (what was agreed),
    open questions (raised but unresolved). Keep exact quotes and t_ms for each.
 6. search(job_id="<job_id>", query="<name or topic>") to trace scattered

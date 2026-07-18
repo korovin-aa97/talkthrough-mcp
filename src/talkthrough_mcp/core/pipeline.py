@@ -87,7 +87,11 @@ class ProcessResult:
     manifest: Manifest
     reused: bool
     elapsed_s: float
-    amended: bool = False  # diarization added to an existing job, whisper untouched
+    # True only when an amend RAN AND landed labels (whisper untouched); a
+    # failed amend must not claim success — diarization.available carries
+    # the outcome either way.
+    amended: bool = False
+    vocabulary_echo_trimmed: int = 0  # opening initial_prompt echoes dropped
 
 
 def _env_int(name: str, default: int) -> int:
@@ -267,14 +271,23 @@ def _needs_diarize_amend(manifest: Manifest, request: _DiarizeRequest) -> bool:
 
     A stored job without (working) diarization + an explicit request → run
     just the diarization stage. An explicit ``num_speakers`` differing from
-    the stored one re-diarizes the same way. The env default deliberately
-    never invalidates the store, and a diarized job served to a non-diarize
-    call is a harmless superset.
+    the stored one re-diarizes the same way, and so does a stored
+    ``embedding_model`` that no longer matches the currently resolved one —
+    silently serving old-model labels to a caller who switched
+    ``TALKTHROUGH_DIARIZATION_EMB_MODEL`` would betray the same intent the
+    whisper-model rule protects. The env default (and an env change without
+    an explicit ``diarize=true``) deliberately never invalidates the store,
+    and a diarized job served to a non-diarize call is a harmless superset.
     """
     if not (request.run and request.explicit and manifest.media.has_audio):
         return False
     stored = manifest.transcript.diarization
     if stored is None or not stored.available:
+        return True
+    if (
+        stored.embedding_model is not None
+        and stored.embedding_model != diarize.resolved_embedding_label()
+    ):
         return True
     return (
         request.num_speakers is not None
@@ -373,11 +386,15 @@ def process_media(
                     "job %s exists — amending diarization only, whisper is not re-run", job_id
                 )
                 amended = _amend_diarization(media, manifest_hit, diarize_request, report)
+                diarization = amended.transcript.diarization
                 return ProcessResult(
                     manifest=amended,
                     reused=True,
                     elapsed_s=time.monotonic() - started,
-                    amended=True,
+                    # the flag reflects the OUTCOME: a failed amend keeps the
+                    # transcript, records available=false + reason, and must
+                    # not be reported as an applied amend
+                    amended=diarization is not None and diarization.available,
                 )
             return ProcessResult(
                 manifest=manifest_hit, reused=True, elapsed_s=time.monotonic() - started
@@ -405,6 +422,7 @@ def process_media(
         transcript = Transcript(
             available=False, reason="no audio stream in recording", language=None, model=None
         )
+        echo_trimmed = 0
         if info.has_audio:
             report("extracting audio", 0.10)
             wav_path = directory / "audio.wav"
@@ -433,6 +451,7 @@ def process_media(
                     language_probability=stt_result.language_probability,
                     segments=list(stt_result.segments),
                 )
+                echo_trimmed = stt_result.vocabulary_echo_trimmed
                 if diarize_request.run:
                     # The stage eats the same WAV — it must run before unlink.
                     _run_diarization(wav_path, transcript, diarize_request, report)
@@ -507,7 +526,12 @@ def process_media(
         save_manifest(manifest, directory)
 
     report("done", 1.0)
-    return ProcessResult(manifest=manifest, reused=False, elapsed_s=time.monotonic() - started)
+    return ProcessResult(
+        manifest=manifest,
+        reused=False,
+        elapsed_s=time.monotonic() - started,
+        vocabulary_echo_trimmed=echo_trimmed,
+    )
 
 
 SUMMARY_ROSTER_CAP = 12
@@ -551,13 +575,19 @@ def _summarize_diarization(diarization: Diarization) -> dict[str, Any]:
             1 for s in diarization.speakers if s.talk_time_ms >= SUBSTANTIAL_TALK_MS
         )
         if substantial < (diarization.detected_num_speakers or 0):
-            # threshold-mode honesty: clusters != people; give agents the
-            # number worth reporting and the lever that fixes it
+            # threshold-mode honesty (v0.2.2): the cluster count is NOT a
+            # headcount, and no server heuristic is trusted to guess one — an
+            # external eval falsified speakers_with_30s_plus as "likely
+            # headcount" (said 4, truth 2). The user always knows their own
+            # meeting: escalate to them, with the talk-time roster as the
+            # material for the question.
             payload["speakers_with_30s_plus"] = substantial
             payload["note"] = (
-                "threshold clustering over-detects on real meetings — treat "
-                "speakers_with_30s_plus as the likely headcount, or re-run "
-                "with num_speakers for an exact roster"
+                "threshold clustering over-detected on this recording — the cluster "
+                "count is unreliable and is NOT a headcount. ASK YOUR USER how many "
+                "people actually spoke (the talk_time_ms roster above shows which "
+                "voices dominate), then re-run process_media(diarize=true, "
+                "num_speakers=N) — the amend takes seconds, whisper is not re-run"
             )
     return payload
 
@@ -624,6 +654,13 @@ def summarize(result: ProcessResult) -> dict[str, Any]:
             "language_probability": manifest.transcript.language_probability,
             "model": manifest.transcript.model,
             "segment_count": len(segments),
+            # serve-time fact, not manifest schema: opening initial_prompt
+            # echoes whisper hallucinated over quiet seconds were dropped
+            **(
+                {"vocabulary_echo_trimmed": result.vocabulary_echo_trimmed}
+                if result.vocabulary_echo_trimmed
+                else {}
+            ),
             "preview_segments": preview,
             "preview_truncated": len(segments) > len(preview),
         },

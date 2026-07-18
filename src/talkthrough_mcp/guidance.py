@@ -34,14 +34,14 @@ When NOT to use: to re-fetch data you already processed (use the retrieval tools
 URLs — local file paths only.
 Examples:
 - process_media(path="/Users/sam/Desktop/bug-repro.mov") — narrated screencast, defaults are right
-- process_media(path="/rec/interview.mov", model="large-v3-turbo") — best multilingual quality (1.5 GB, one-time)
+- meetings: model="large-v3-turbo" + vocabulary=<attendees, terms> + num_speakers=N — turbo's extra cost is trivial
 - process_media(path="/tmp/standup.m4a") — audio-only: transcript tools work, frame tools will error
 - process_media(path="/rec/panel.mov", diarize=true, num_speakers=4) — headcount known? ALWAYS pass it: best accuracy
 - job already processed + diarize=true → speakers are added in place, whisper does NOT re-run (fast amend)
 - error mentions [diarization] → the extra is missing: install via uvx "talkthrough-mcp[diarization]"
 - know the attendees? process_media(path=..., vocabulary="Anastasia, Evgenii, OKR") — names+jargon survive STT
 - user: "analyze/summarize this meeting" → include diarize=true — speaker structure is not optional extra credit
-- threshold mode counts VOICE CLUSTERS, not people — report speakers_with_30s_plus, or re-run with num_speakers
+- noisy threshold roster (clusters ≫ people)? ASK your user for the real headcount, then re-run with num_speakers=N
 - cap_hit or sampling_interval_s in summary → for slide hunts raise TALKTHROUGH_MAX_FRAMES or use extract_frame
 - summary shows wall_clock=null → ask when recording started, re-call with recorded_at=... and force=true
 - transcript garbled or language_probability low → re-call with model="large-v3-turbo" (or language="ru") + force=true
@@ -118,26 +118,30 @@ Examples:
 - keep ranges under ~30 s; a 5-min "moment" dilutes the bundle and wastes tokens
 """,
     "search": """\
-Case-insensitive substring search across BOTH transcript segments and frame OCR text. Hits \
-carry source (transcript|ocr), t_ms, t_wall when known, the matched text, and the nearest \
-frame position — everything needed to jump straight to evidence. Exact substring only, no \
+Case-insensitive word search across BOTH transcript segments and frame OCR text: a text \
+hits when EVERY word of the query matches it as a substring — any order, any distance \
+(ё and е are interchangeable). Hits carry source (transcript|ocr), t_ms, t_wall when \
+known, the matched text, and the nearest frame position — everything needed to jump \
+straight to evidence. Optional speaker="S2" narrows to one voice's transcript hits. No \
 embeddings.
 When NOT to use: fuzzy/semantic questions ("anything about performance?") — page \
 get_transcript and read; regex is not supported.
 Examples:
 - search(job_id="...", query="login") — every spoken or on-screen mention of login
 - user: "what did I say about the login button?" → search(job_id, "login button") → get_moment at hits
-- search(job_id, "error") — catches the SPOKEN word and the on-screen error text (OCR) in one call
-- search(job_id, "TypeError") — stack traces on screen are OCR-indexed; great for bug repros
+- search(job_id, "TypeError") — on-screen stack traces and error text are OCR-indexed; great for bug repros
 - search(job_id, "€49") — prices, IDs, and literals on screen are findable via OCR
 - take hit.t_wall and grep your server logs ±30 s around it to pair remark ↔ log line
 - no hits? shorten the stem: "notif" matches notification / notifications / notify
-- prefer one distinctive word ("checkout") over a whole sentence — substrings must match exactly
+- multi-word = ALL words as substrings, any order: "first phase" hits "the first real phase"
+- stems beat inflected phrases: "кнопк отправк" finds «Кнопка отправки» and «кнопку отправки»
 - every hit has nearest_frame_ms → get_frames(job_id, at_ms=<that>) shows the moment
 - diarized job: transcript hits carry "speaker" — "who mentioned the deadline?" is answered by the hit itself
+- search(job_id, "deadline", speaker="S2") — only S2's mentions; OCR hits are excluded (screens have no voice)
 - audio-only job → transcript hits only (there is no OCR index)
 - anti-example: "summarize the pricing discussion" → get_transcript(format="text") and read it
 - anti-example: finding an icon or layout glitch with no text → get_frames over the range; OCR sees text only
+- anti-example: "everything S2 said" → get_transcript and collect speaker=="S2" — search always needs a query
 """,
     "extract_frame": """\
 Re-extract ONE frame at an exact timestamp from the ORIGINAL source video at native \
@@ -258,6 +262,10 @@ Return ONE fenced JSON object, no other prose:
   answer with "1,3-4".
 - `key_frames`: 2-3 frame refs that best show the problems.
 
+Key names above are the contract — use them EXACTLY as written (`quote`,
+`frame_refs`, `t_ms`, …): no renames, no wrappers, no `quotes[]` or
+`evidence[]` arrays. Downstream tooling reads these keys mechanically.
+
 Rules: low STT/vision confidence → route="question" with a concrete question —
 never a silent guess. Findings without frame evidence (audio-only jobs) must say
 so in `frame_refs: []`. Write `digest` in the narrator's language (the
@@ -341,10 +349,13 @@ them, and that is fine.
    in that call — names survive transcription instead of degrading into
    look-alike words, and owner attribution depends on them.
 4. When segments carry speaker labels, map each label to a person before
-   writing minutes: self-introductions ("hi, this is Vera"), vocatives
-   ("thanks, Tom"), and the attendees list above are the evidence. State the
-   mapping first (e.g. `S1 = Vera, S2 = Tom, S3 = unidentified`) — never
-   guess beyond the evidence.
+   writing minutes. Evidence: self-introductions ("hi, this is Vera"),
+   vocatives ("thanks, Tom"), the attendees list above — and, on video
+   jobs, the SCREEN: meeting-app name plates, the recording's title card
+   (who started/organized it), and the active-speaker highlight during that
+   speaker's t_ms all name people (get_moment at the moment, read frames +
+   OCR). State the mapping first (e.g. `S1 = Vera, S2 = Tom,
+   S3 = unidentified`) — never guess beyond the evidence.
 5. Collect: action items (who committed to what), decisions (what was agreed),
    open questions (raised but unresolved). Keep exact quotes and t_ms for each.
 6. search(job_id="{job_id}", query="<name or topic>") to trace scattered

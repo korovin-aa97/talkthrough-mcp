@@ -38,6 +38,10 @@ Return ONE fenced JSON object, no other prose:
   answer with "1,3-4".
 - `key_frames`: 2-3 frame refs that best show the problems.
 
+Key names above are the contract — use them EXACTLY as written (`quote`,
+`frame_refs`, `t_ms`, …): no renames, no wrappers, no `quotes[]` or
+`evidence[]` arrays. Downstream tooling reads these keys mechanically.
+
 Rules: low STT/vision confidence → route="question" with a concrete question —
 never a silent guess. Findings without frame evidence (audio-only jobs) must say
 so in `frame_refs: []`. Write `digest` in the narrator's language (the

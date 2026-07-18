@@ -274,3 +274,61 @@ def test_amend_again_on_explicit_num_speakers_mismatch(
     settled = pipeline.process_media(str(MEETING_M4A), diarize_speakers=True, num_speakers=2)
     assert settled.reused is True
     assert settled.amended is False
+
+
+def test_explicit_diarize_amends_on_embedding_model_change(
+    two_voice: ProcessResult, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """v0.2.2: explicit diarize=true + a different resolved embedding model
+    re-runs ONLY diarization — labels re-land, engine fields update, whisper
+    stays untouched. MUTATES the two-voice job: keep this test LAST."""
+    stored = two_voice.manifest.transcript.diarization
+    assert stored is not None and stored.available
+
+    saved_home = os.environ["TALKTHROUGH_HOME"]
+    os.environ["TALKTHROUGH_HOME"] = str(_models_cache())
+    try:
+        wespeaker = diarize.ensure_model_file(
+            diarize.EMBEDDING_MODELS["wespeaker_en_voxceleb_resnet34_LM"]
+        )
+    finally:
+        os.environ["TALKTHROUGH_HOME"] = saved_home
+    monkeypatch.setenv("TALKTHROUGH_DIARIZATION_EMB_MODEL", str(wespeaker))
+    assert stored.embedding_model != str(wespeaker)
+
+    # an env change WITHOUT explicit intent must not invalidate the store
+    untouched = pipeline.process_media(str(TWO_VOICE_M4A))
+    assert untouched.reused is True and untouched.amended is False
+    untouched_diarization = untouched.manifest.transcript.diarization
+    assert untouched_diarization is not None
+    assert untouched_diarization.embedding_model == stored.embedding_model
+
+    def boom(*args: object, **kwargs: object) -> None:
+        raise AssertionError("whisper must not re-run during an emb-change amend")
+
+    monkeypatch.setattr(pipeline.stt, "transcribe", boom)
+    amended = pipeline.process_media(
+        str(TWO_VOICE_M4A), diarize_speakers=True, num_speakers=TWO_VOICE_NUM_SPEAKERS
+    )
+    assert amended.reused is True and amended.amended is True
+    assert amended.manifest.created_at == two_voice.manifest.created_at
+    after = amended.manifest.transcript.diarization
+    assert after is not None and after.available
+    assert after.embedding_model == str(wespeaker)
+    assert after.detected_num_speakers == TWO_VOICE_NUM_SPEAKERS
+    assert [stat.label for stat in after.speakers] == ["S1", "S2"]
+
+    # labels re-landed correctly under the new model
+    scored = [
+        (segment.speaker, _expected_label(segment.t0_ms, segment.t1_ms))
+        for segment in amended.manifest.transcript.segments
+    ]
+    comparable = [(got, want) for got, want in scored if want is not None]
+    matches = sum(1 for got, want in comparable if got == want)
+    assert matches / len(comparable) >= 0.8, f"re-attribution disagrees: {scored}"
+
+    # a repeat call with the SAME resolved model settles back to plain reuse
+    settled = pipeline.process_media(
+        str(TWO_VOICE_M4A), diarize_speakers=True, num_speakers=TWO_VOICE_NUM_SPEAKERS
+    )
+    assert settled.reused is True and settled.amended is False
