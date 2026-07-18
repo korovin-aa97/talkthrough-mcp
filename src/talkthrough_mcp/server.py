@@ -23,7 +23,7 @@ from mcp.types import ToolAnnotations
 
 from . import guidance
 from .core import jobs, pipeline
-from .core.diarize import speakers_in_range
+from .core.diarize import Diarization, speakers_in_range
 from .core.errors import AudioOnlyJobError, TalkthroughError
 from .core.frames import Frame, extract_exact_frame
 from .core.manifest import (
@@ -36,6 +36,7 @@ from .core.manifest import (
     representative_frame,
     search_manifest,
     slice_segments,
+    straddle_hint_t_ms,
 )
 
 GET_FRAMES_HARD_CAP = 6
@@ -72,7 +73,13 @@ mcp = FastMCP(
         "not wait to be asked who spoke (num_speakers=N whenever the headcount is "
         "known). Server prompts "
         "(triage-recording, spec-from-workshop, backlog-from-demo, meeting-actions, "
-        "correlate-with-logs) package the common workflows."
+        "correlate-with-logs) package the common workflows. "
+        # v0.2.3 EXPERIMENT: initialize.instructions is the one text channel
+        # not yet falsified for clients that read neither descriptions nor MCP
+        # prompts (codex) — the canon-keys sentence rides here, measured by
+        # the release battery; harmless for everyone else.
+        "Triage findings JSON uses EXACTLY the documented keys (quote, frame_refs, "
+        "t_ms, …) — no renames, no wrappers."
     ),
 )
 
@@ -223,6 +230,12 @@ def get_transcript(
         payload["speakers"], hidden = pipeline.roster_payload(diarization)
         if hidden:
             payload["speakers_truncated"] = hidden
+        escalation = pipeline.threshold_escalation_note(diarization)
+        if escalation is not None:
+            # additive (v0.2.3): the same byte-identical text the process
+            # summary carries — agents that start transcript-first (list_jobs
+            # → get_transcript) never see that summary
+            payload["diarization_note"] = escalation
     if format == "segments":
         payload["segments"] = [
             {
@@ -371,24 +384,58 @@ def search(job_id: str, query: str, speaker: str | None = None) -> dict[str, Any
                     "process_media(diarize=true) to add them (fast amend), then filter"
                 ),
             }
+        roster_labels = [stat.label for stat in diarization.speakers]
+        if roster_labels and speaker_label not in roster_labels:
+            # honesty again (v0.2.3): a label outside the roster would return
+            # a bare empty list indistinguishable from "this voice never said
+            # it" — name the mistake and the valid range instead
+            span = (
+                roster_labels[0]
+                if len(roster_labels) == 1
+                else f"{roster_labels[0]}-{roster_labels[-1]}"
+            )
+            return {
+                "job_id": job_id,
+                "query": query,
+                "speaker": speaker_label,
+                "hit_count": 0,
+                "truncated": False,
+                "hits": [],
+                "note": (
+                    f"label {speaker_label!r} is not in this job's roster ({span}) — "
+                    "0 hits here means the label does not exist, not that the words "
+                    "were never said; use a roster label"
+                ),
+            }
     hits = search_manifest(manifest, query, speaker=speaker_label)
     truncated = len(hits) > SEARCH_MAX_HITS
+    notes: list[str] = []
+    if speaker_label:
+        notes.append(
+            "ocr hits are excluded when filtering by speaker — on-screen text has no voice"
+        )
+    if not hits and len(query.split()) >= 2:
+        # v0.2.3: a zero-hit multi-word query stops being mute. Word-AND is
+        # per-segment; the cheap adjacent-pair scan tells apart "phrase
+        # straddles a segment boundary" from "words never co-occur".
+        straddle_ms = straddle_hint_t_ms(manifest, query, speaker=speaker_label)
+        if straddle_ms is not None:
+            notes.append(
+                f"the words appear together around t_ms={straddle_ms}, split across "
+                "adjacent segments (matching is per-segment) — read get_transcript there"
+            )
+        else:
+            notes.append(
+                "no single segment contains ALL the words (matching is per-segment, "
+                "any order) — drop a word or shorten the stems"
+            )
     return {
         "job_id": job_id,
         "query": query,
         **({"speaker": speaker_label} if speaker_label else {}),
         "hit_count": len(hits),
         "truncated": truncated,
-        **(
-            {
-                "note": (
-                    "ocr hits are excluded when filtering by speaker — "
-                    "on-screen text has no voice"
-                )
-            }
-            if speaker_label
-            else {}
-        ),
+        **({"note": "; ".join(notes)} if notes else {}),
         "hits": [
             {
                 "source": hit.source,
@@ -444,6 +491,17 @@ def extract_frame(
     return [_json_block(meta), Image(path=out_path)]
 
 
+def _job_speakers(diarization: Diarization) -> dict[str, Any]:
+    """The list_jobs speaker block: the raw detected count, plus the 30s+
+    signal when threshold mode over-detected — a bare ``"speakers": 28`` on
+    such jobs reads as a headcount, the exact claim the escalation note
+    exists to prevent (the count stays for compatibility)."""
+    payload: dict[str, Any] = {"speakers": diarization.detected_num_speakers}
+    if pipeline.threshold_escalation_note(diarization) is not None:
+        payload["speakers_with_30s_plus"] = pipeline.substantial_speaker_count(diarization)
+    return payload
+
+
 @mcp.tool(description=guidance.TOOL_DESCRIPTIONS["list_jobs"], annotations=READONLY_TOOL)
 def list_jobs() -> dict[str, Any]:
     manifests = jobs.list_jobs()
@@ -464,7 +522,7 @@ def list_jobs() -> dict[str, Any]:
                 "frames_unique": manifest.frames.unique_count,
                 "frames_total": manifest.frames.count,
                 **(
-                    {"speakers": manifest.transcript.diarization.detected_num_speakers}
+                    _job_speakers(manifest.transcript.diarization)
                     if manifest.transcript.diarization is not None
                     and manifest.transcript.diarization.available
                     else {}

@@ -171,6 +171,16 @@ async def _run_session(home: Path) -> None:
         assert undiarized_filter["hits"] == []
         assert "not diarized" in undiarized_filter["note"]
 
+        # 5c. v0.2.3: a zero-hit multi-word query explains the per-segment
+        # matching instead of returning a mute empty list.
+        zero_multi = _payload(
+            await session.call_tool(
+                "search", {"job_id": job_id, "query": "login zzznonexistent"}
+            )
+        )
+        assert zero_multi["hit_count"] == 0
+        assert "no single segment contains ALL the words" in zero_multi["note"]
+
         # 6. SRT export is well-formed; v0.2.2: the payload names the media kind.
         srt_result = await session.call_tool(
             "get_transcript", {"job_id": job_id, "format": "srt"}
@@ -219,6 +229,11 @@ async def _run_session(home: Path) -> None:
             assert block["available"] is True
             assert block["detected_num_speakers"] == TWO_VOICE_NUM_SPEAKERS
             assert [speaker["label"] for speaker in block["speakers"]] == ["S1", "S2"]
+            # v0.2.3: the roster carries the screen-check anchor on the wire
+            assert all(
+                isinstance(speaker["longest_turn_ms"], int)
+                for speaker in block["speakers"]
+            )
             assert any(
                 segment.get("speaker")
                 for segment in diarized_summary["transcript"]["preview_segments"]
@@ -248,6 +263,21 @@ async def _run_session(home: Path) -> None:
             assert s1_hits["hits"], "S1 speaks first — 'the' must hit her turns"
             assert all(hit["speaker"] == "S1" for hit in s1_hits["hits"])
             assert "ocr hits are excluded" in s1_hits["note"]
+
+            # v0.2.3: a label outside the roster names the roster instead of
+            # returning a mute empty list
+            bogus_label = _payload(
+                await session.call_tool(
+                    "search",
+                    {
+                        "job_id": diarized_summary["job_id"],
+                        "query": "the",
+                        "speaker": "S99",
+                    },
+                )
+            )
+            assert bogus_label["hits"] == []
+            assert "not in this job's roster (S1-S2)" in bogus_label["note"]
         else:
             failed = await session.call_tool(
                 "process_media",
