@@ -70,7 +70,9 @@ method: `triage-recording` (screencast → findings JSON per the contract in
   by design — that error is expected, not a failure.
 - Speaker labels are anonymous (`S1`/`S2`, ordered by first voice). Mapping
   them to names is YOUR job: self-introductions, vocatives, the attendees
-  list. State the mapping explicitly and mark unmapped labels
+  list — and on video jobs the screen itself (meeting-app name plates, the
+  recording's title card, the active-speaker highlight at that label's
+  `t_ms`). State the mapping explicitly and mark unmapped labels
   "unidentified". `diarize=true` needs the `[diarization]` extra — its
   absence produces an actionable install-hint error.
 - Findings/quotes must cite the narrator's exact words + `t_ms` (+ `t_wall`

@@ -292,6 +292,32 @@ def test_russian_narration_detected_and_reported(integration_home: Path) -> None
     assert ocr.engine_params(transcript.language)["Rec.lang_type"] == "eslav"
 
 
+def test_word_search_stems_and_yo_on_the_russian_fixture(integration_home: Path) -> None:
+    """#16 acceptance on a real transcript: multi-word stems hit the
+    «кнопка отправки» segment (closing Russian case endings without any
+    stemmer), and a ё-spelled query finds the е-spelled transcript text."""
+    from tests.integration.fixture_facts import (
+        RU_M4A,
+        RU_STEM_QUERY,
+        RU_STEM_TARGET,
+        RU_YO_QUERY,
+    )
+
+    result = pipeline.process_media(str(RU_M4A))
+    stem_hits = search_manifest(result.manifest, RU_STEM_QUERY)
+    assert stem_hits, "multi-word stem query must hit the «кнопка отправки» segment"
+    assert all(hit.source == "transcript" for hit in stem_hits)
+    assert any(RU_STEM_TARGET in hit.text.lower() for hit in stem_hits)
+    yo_hits = search_manifest(result.manifest, RU_YO_QUERY)
+    assert yo_hits, "«ещё» must match the transcript's «еще» via ё→е folding"
+
+
+def test_multiword_search_reaches_ocr_text(demo: ProcessResult) -> None:
+    """#16 over the OCR index: both words live only on-screen together."""
+    hits = search_manifest(demo.manifest, "scene dashboard")
+    assert any(hit.source == "ocr" for hit in hits), hits
+
+
 def test_japanese_narration_autoselects_the_japan_ocr_pack(integration_home: Path) -> None:
     """The full v0.2.1 auto-OCR chain on a non-Cyrillic script: speech
     detected as ja → japan recognition pack engaged → the katakana heading

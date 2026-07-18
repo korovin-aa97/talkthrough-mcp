@@ -110,6 +110,82 @@ def test_search_empty_query_returns_nothing() -> None:
     assert search_manifest(make_manifest(), "   ") == []
 
 
+# --- word-level search + ё/е normalization (#16) -----------------------------
+
+
+def test_multiword_query_matches_all_words_in_any_order() -> None:
+    manifest = make_manifest()
+    # "The dashboard shows an error message." — words far apart, reversed order
+    hits = search_manifest(manifest, "error dashboard")
+    assert [hit.seq for hit in hits if hit.source == "transcript"] == [2]
+    # same tokens, original order, extra whitespace
+    assert search_manifest(manifest, "  dashboard   error ") == hits
+
+
+def test_multiword_query_requires_every_word() -> None:
+    manifest = make_manifest()
+    assert search_manifest(manifest, "dashboard checkout") == []
+
+
+def test_multiword_matches_ocr_text_too() -> None:
+    manifest = make_manifest()
+    hits = search_manifest(manifest, "scene settings")
+    assert [hit.source for hit in hits] == ["ocr"]
+    assert hits[0].frame_ms == 12012
+
+
+def test_single_word_behaves_like_the_old_exact_substring() -> None:
+    manifest = make_manifest()
+    for query in ("dashboard", "DASHBOARD", "  dashboard  ", "dashboa"):
+        hits = search_manifest(manifest, query)
+        assert [hit.source for hit in hits] == ["transcript", "ocr"], query
+    assert search_manifest(manifest, "dashboard error message") != []
+    assert search_manifest(manifest, "nonexistent") == []
+
+
+def test_yo_normalization_matches_both_ways() -> None:
+    manifest = make_manifest()
+    manifest.transcript.segments = [
+        type(manifest.transcript.segments[0])(
+            seq=1, t0_ms=0, t1_ms=2000, text="Нажмём на кнопку отправки."
+        ),
+        type(manifest.transcript.segments[0])(
+            seq=2, t0_ms=2500, t1_ms=4000, text="Ошибка все еще видна."
+        ),
+    ]
+    # ё in the text, е in the query — and the reverse
+    assert [h.seq for h in search_manifest(manifest, "нажмем")] == [1]
+    assert [h.seq for h in search_manifest(manifest, "ещё")] == [2]
+    # multi-word stems close Russian case endings («кнопк отправк» class)
+    assert [h.seq for h in search_manifest(manifest, "кнопк отправк")] == [1]
+
+
+def test_whitespace_only_tokens_return_nothing() -> None:
+    manifest = make_manifest()
+    assert search_manifest(manifest, " \t\n ") == []
+
+
+# --- search(speaker=) --------------------------------------------------------
+
+
+def test_speaker_filter_restricts_transcript_hits() -> None:
+    manifest = _diarized_manifest()  # S1: login + dashboard segs, S2: settings
+    all_hits = search_manifest(manifest, "the")
+    assert {hit.source for hit in all_hits} == {"transcript"}
+    s1_hits = search_manifest(manifest, "the", speaker="S1")
+    assert [hit.seq for hit in s1_hits] == [1, 2]
+    assert all(hit.speaker == "S1" for hit in s1_hits)
+    assert search_manifest(manifest, "login", speaker="S2") == []
+
+
+def test_speaker_filter_excludes_ocr_hits() -> None:
+    manifest = _diarized_manifest()
+    unfiltered = search_manifest(manifest, "dashboard")
+    assert "ocr" in {hit.source for hit in unfiltered}
+    filtered = search_manifest(manifest, "dashboard", speaker="S1")
+    assert filtered and all(hit.source == "transcript" for hit in filtered)
+
+
 def test_from_dict_tolerates_extra_free_form_versions(tmp_path: Path) -> None:
     manifest = make_manifest()
     payload = manifest.to_dict()

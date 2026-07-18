@@ -8,6 +8,7 @@ reads from here — the source media is only re-read by ``extract_frame``.
 from __future__ import annotations
 
 import json
+import unicodedata
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any
@@ -298,14 +299,41 @@ class SearchHit:
     speaker: str | None = None  # transcript hits on diarized jobs
 
 
-def search_manifest(manifest: Manifest, query: str) -> list[SearchHit]:
-    """Case-insensitive substring match over transcript segments AND frame OCR text."""
-    needle = query.strip().lower()
+def _fold_for_search(text: str) -> str:
+    """Match-time normalization applied to BOTH query and indexed text (#16).
+
+    NFC first (so a decomposed ``е`` + combining diaeresis becomes ``ё``
+    before folding), then casefold, then ё→е — Russian writes the same word
+    both ways and neither side should have to guess which one the recording
+    used.
+    """
+    return unicodedata.normalize("NFC", text).casefold().replace("ё", "е")
+
+
+def search_manifest(
+    manifest: Manifest, query: str, *, speaker: str | None = None
+) -> list[SearchHit]:
+    """Word-level match over transcript segments AND frame OCR text.
+
+    The query is tokenized on whitespace; a text hits when EVERY token
+    matches as a substring — any order, any distance (#16). A single-word
+    query therefore behaves exactly like the old exact-substring match.
+    ``speaker`` filters transcript hits to one diarized label; OCR hits are
+    excluded then (on-screen text has no voice).
+    """
+    tokens = _fold_for_search(query).split()
     hits: list[SearchHit] = []
-    if not needle:
+    if not tokens:
         return hits
+
+    def matches(text: str) -> bool:
+        folded = _fold_for_search(text)
+        return all(token in folded for token in tokens)
+
     for segment in manifest.transcript.segments:
-        if needle in segment.text.lower():
+        if speaker is not None and segment.speaker != speaker:
+            continue
+        if matches(segment.text):
             hits.append(
                 SearchHit(
                     source="transcript",
@@ -318,8 +346,11 @@ def search_manifest(manifest: Manifest, query: str) -> list[SearchHit]:
                     speaker=segment.speaker,
                 )
             )
+    if speaker is not None:
+        hits.sort(key=lambda hit: hit.t_ms)
+        return hits
     for frame in manifest.frames.items:
-        if frame.ocr_text and needle in frame.ocr_text.lower():
+        if frame.ocr_text and matches(frame.ocr_text):
             hits.append(
                 SearchHit(
                     source="ocr",

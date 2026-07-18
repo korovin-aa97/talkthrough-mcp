@@ -165,6 +165,152 @@ def test_no_audio_job_never_amends(monkeypatch: pytest.MonkeyPatch) -> None:
     assert _needs_diarize_amend(manifest, request_for(monkeypatch, True, None)) is False
 
 
+# --- re-diarize on embedding-model change (v0.2.2) ----------------------------
+
+
+def emb_diarized(embedding_model: str | None) -> Diarization:
+    return Diarization(available=True, reason="", embedding_model=embedding_model)
+
+
+def test_explicit_diarize_amends_when_emb_model_changed(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv(
+        "TALKTHROUGH_DIARIZATION_EMB_MODEL", "wespeaker_en_voxceleb_resnet34_LM"
+    )
+    manifest = make_manifest()
+    manifest.transcript.diarization = emb_diarized(diarize.DEFAULT_EMBEDDING_MODEL)
+    assert _needs_diarize_amend(manifest, request_for(monkeypatch, True, None)) is True
+
+
+def test_matching_emb_model_reuses(monkeypatch: pytest.MonkeyPatch) -> None:
+    manifest = make_manifest()
+    manifest.transcript.diarization = emb_diarized(diarize.DEFAULT_EMBEDDING_MODEL)
+    monkeypatch.delenv("TALKTHROUGH_DIARIZATION_EMB_MODEL", raising=False)
+    assert _needs_diarize_amend(manifest, request_for(monkeypatch, True, None)) is False
+    monkeypatch.setenv("TALKTHROUGH_DIARIZATION_EMB_MODEL", diarize.DEFAULT_EMBEDDING_MODEL)
+    assert _needs_diarize_amend(manifest, request_for(monkeypatch, True, None)) is False
+
+
+def test_emb_env_change_without_explicit_diarize_never_invalidates(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Mirror of the whisper-model rule: only explicit intent re-runs."""
+    monkeypatch.setenv("TALKTHROUGH_DIARIZE", "on")
+    monkeypatch.setenv(
+        "TALKTHROUGH_DIARIZATION_EMB_MODEL", "wespeaker_en_voxceleb_resnet34_LM"
+    )
+    manifest = make_manifest()
+    manifest.transcript.diarization = emb_diarized(diarize.DEFAULT_EMBEDDING_MODEL)
+    assert _needs_diarize_amend(manifest, request_for(monkeypatch, None, None)) is False
+
+
+def test_local_onnx_path_env_counts_as_a_model_change(
+    monkeypatch: pytest.MonkeyPatch, tmp_path
+) -> None:
+    onnx = tmp_path / "custom.onnx"
+    onnx.write_bytes(b"onnx")
+    monkeypatch.setenv("TALKTHROUGH_DIARIZATION_EMB_MODEL", str(onnx))
+    manifest = make_manifest()
+    manifest.transcript.diarization = emb_diarized(diarize.DEFAULT_EMBEDDING_MODEL)
+    assert _needs_diarize_amend(manifest, request_for(monkeypatch, True, None)) is True
+    # a job stored FROM that path matches it on the next explicit call
+    manifest.transcript.diarization = emb_diarized(str(onnx))
+    assert _needs_diarize_amend(manifest, request_for(monkeypatch, True, None)) is False
+
+
+def test_manifest_without_emb_label_skips_the_emb_check(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv(
+        "TALKTHROUGH_DIARIZATION_EMB_MODEL", "wespeaker_en_voxceleb_resnet34_LM"
+    )
+    manifest = make_manifest()
+    manifest.transcript.diarization = emb_diarized(None)
+    assert _needs_diarize_amend(manifest, request_for(monkeypatch, True, None)) is False
+
+
+def test_resolved_embedding_label_never_touches_network(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        diarize, "ensure_model_file", lambda spec: (_ for _ in ()).throw(AssertionError)
+    )
+    monkeypatch.delenv("TALKTHROUGH_DIARIZATION_EMB_MODEL", raising=False)
+    assert diarize.resolved_embedding_label() == diarize.DEFAULT_EMBEDDING_MODEL
+    monkeypatch.setenv("TALKTHROUGH_DIARIZATION_EMB_MODEL", "nemo_en_titanet_small")
+    assert diarize.resolved_embedding_label() == "nemo_en_titanet_small"
+    monkeypatch.setenv("TALKTHROUGH_DIARIZATION_EMB_MODEL", "~/models/x.onnx")
+    assert diarize.resolved_embedding_label().endswith("/models/x.onnx")
+    assert "~" not in diarize.resolved_embedding_label()
+
+
+# --- diarization_amended reflects the OUTCOME (v0.2.2 honesty fix) -------------
+
+
+def _stored_job(tmp_path, monkeypatch: pytest.MonkeyPatch):
+    """A real store entry whose job_id matches a real (tiny) media file."""
+    from talkthrough_mcp.core import jobs
+    from talkthrough_mcp.core.manifest import save_manifest
+
+    monkeypatch.setenv("TALKTHROUGH_HOME", str(tmp_path / "home"))
+    media = tmp_path / "clip.mp4"
+    media.write_bytes(b"not really a video, only hashed")
+    job_id = jobs.compute_job_id(media)
+    manifest = make_manifest(job_id=job_id)
+    manifest.media = type(manifest.media)(
+        **{**manifest.media.__dict__, "path": str(media)}
+    )
+    directory = jobs.job_dir(job_id)
+    directory.mkdir(parents=True)
+    save_manifest(manifest, directory)
+    return media
+
+
+def _run_amend(media, monkeypatch: pytest.MonkeyPatch, *, succeed: bool):
+    from talkthrough_mcp.core import audio, pipeline
+    from talkthrough_mcp.core.diarize import Diarization
+
+    engine(monkeypatch, available=True)
+    monkeypatch.setattr(audio, "extract_wav", lambda *a, **k: None)
+
+    def fake_run(wav_path, transcript, request, report) -> None:
+        transcript.diarization = (
+            Diarization(available=True, reason="", detected_num_speakers=1)
+            if succeed
+            else Diarization(available=False, reason="model download failed: TLS")
+        )
+
+    monkeypatch.setattr(pipeline, "_run_diarization", fake_run)
+    return pipeline.process_media(str(media), diarize_speakers=True)
+
+
+def test_failed_amend_does_not_claim_diarization_amended(
+    tmp_path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from talkthrough_mcp.core import pipeline
+
+    media = _stored_job(tmp_path, monkeypatch)
+    result = _run_amend(media, monkeypatch, succeed=False)
+    assert result.reused is True
+    assert result.amended is False, "a failed amend must not be reported as applied"
+    summary = pipeline.summarize(result)
+    assert "diarization_amended" not in summary
+    assert summary["diarization"]["available"] is False
+    assert "TLS" in summary["diarization"]["reason"]
+
+
+def test_successful_amend_still_reports_the_flag(
+    tmp_path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from talkthrough_mcp.core import pipeline
+
+    media = _stored_job(tmp_path, monkeypatch)
+    result = _run_amend(media, monkeypatch, succeed=True)
+    assert result.amended is True
+    assert pipeline.summarize(result)["diarization_amended"] is True
+
+
 def test_whisper_loads_from_local_cache_first(monkeypatch: pytest.MonkeyPatch) -> None:
     """Warm loads must be zero-network: try local_files_only=True, download on miss.
 
@@ -229,12 +375,20 @@ def test_roster_payload_caps_and_counts_hidden() -> None:
     assert len(small_entries) == 3 and small_hidden == 0
 
 
-def test_summary_threshold_mode_flags_dust() -> None:
+def test_summary_threshold_mode_escalates_to_the_user() -> None:
+    """v0.2.2: over-detection no longer claims a 'likely headcount' (an
+    external eval falsified that: said 4, truth 2) — the note instructs the
+    agent to ASK THE USER and names the fast num_speakers amend."""
     from talkthrough_mcp.core.pipeline import _summarize_diarization
 
     block = _summarize_diarization(dusty_diarization(majors=5, dust=118))
-    assert block["speakers_with_30s_plus"] == 5
-    assert "threshold clustering" in block["note"]
+    assert block["speakers_with_30s_plus"] == 5  # still served — one signal of several
+    note = block["note"]
+    assert "NOT a headcount" in note
+    assert "ASK YOUR USER" in note
+    assert "num_speakers=N" in note
+    assert "whisper is not re-run" in note
+    assert "likely headcount" not in note  # the falsified claim is gone
     assert block["speakers_truncated"] == 111
 
     exact = dusty_diarization(majors=5, dust=0)

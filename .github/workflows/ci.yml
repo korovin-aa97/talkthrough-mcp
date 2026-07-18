@@ -53,11 +53,12 @@ jobs:
       - run: uv run ruff check
       - run: uv run pytest tests/unit -q
 
-  # Best-effort (issue #1): not a required check, but keeps the Windows path
-  # honest — imports, unit suite, and a real CLI smoke over the fixture
-  # (static-ffmpeg Windows build + whisper tiny + OCR + idempotent re-run),
-  # plus a diarize smoke through the native sherpa-onnx stack (the
-  # System32-onnxruntime DLL clash class breaks HERE, not at users').
+  # Keeps the Windows path honest (issue #1): imports, unit suite, and a real
+  # CLI smoke over the fixture (static-ffmpeg Windows build + whisper tiny +
+  # OCR + idempotent re-run), plus a diarize smoke through the native
+  # sherpa-onnx stack (the System32-onnxruntime DLL clash class breaks HERE,
+  # not at users'). Promotion to a required branch check happens with the
+  # repo owner after a green week on the release branch.
   windows:
     runs-on: windows-latest
     timeout-minutes: 30

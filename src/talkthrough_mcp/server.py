@@ -208,6 +208,9 @@ def get_transcript(
         "job_id": job_id,
         "format": format,
         "language": manifest.transcript.language,
+        # payload-over-description: an agent writing minutes must not have to
+        # remember the media kind — "audio-only" slips on video jobs happen
+        "media_kind": manifest.media.kind,
         "segment_count_total": len(manifest.transcript.segments),
         "segments_returned": len(served),
         "range": {"start_ms": start_ms, "end_ms": end_ms},
@@ -347,17 +350,45 @@ def get_moment(job_id: str, start_ms: int, end_ms: int) -> list[str | Image]:
 
 
 @mcp.tool(description=guidance.TOOL_DESCRIPTIONS["search"], annotations=READONLY_TOOL)
-def search(job_id: str, query: str) -> dict[str, Any]:
+def search(job_id: str, query: str, speaker: str | None = None) -> dict[str, Any]:
     manifest = _load(job_id)
     if not query.strip():
         raise ToolError("query is empty — pass a distinctive word or phrase")
-    hits = search_manifest(manifest, query)
+    speaker_label = speaker.strip().upper() if speaker and speaker.strip() else None
+    if speaker_label is not None:
+        diarization = manifest.transcript.diarization
+        if diarization is None or not diarization.available:
+            # honesty, not an error: the labels the filter needs don't exist yet
+            return {
+                "job_id": job_id,
+                "query": query,
+                "speaker": speaker_label,
+                "hit_count": 0,
+                "truncated": False,
+                "hits": [],
+                "note": (
+                    "job is not diarized — speaker labels don't exist here; re-run "
+                    "process_media(diarize=true) to add them (fast amend), then filter"
+                ),
+            }
+    hits = search_manifest(manifest, query, speaker=speaker_label)
     truncated = len(hits) > SEARCH_MAX_HITS
     return {
         "job_id": job_id,
         "query": query,
+        **({"speaker": speaker_label} if speaker_label else {}),
         "hit_count": len(hits),
         "truncated": truncated,
+        **(
+            {
+                "note": (
+                    "ocr hits are excluded when filtering by speaker — "
+                    "on-screen text has no voice"
+                )
+            }
+            if speaker_label
+            else {}
+        ),
         "hits": [
             {
                 "source": hit.source,

@@ -4,6 +4,97 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions follow
 [SemVer](https://semver.org/).
 
+## [0.2.2] — 2026-07-18
+
+Search ergonomics and honesty fixes, each sourced from the v0.2.1 release
+battery or the external evaluation of 0.2.1 on a real corporate meeting.
+Fully additive patch: the `talkthrough-manifest/v1` schema gains no fields
+at all, no new tools, no new dependencies — every new field below lives in
+server responses only, so existing processed jobs serve the new data with
+no migration.
+
+### Added
+
+- **Word-level search** (#16) — a multi-word `search` query now hits when
+  EVERY whitespace-separated word matches as a substring, in any order at
+  any distance; both sides are normalized with casefold + ё→е + NFC. A
+  single-word query behaves exactly as before, and the stem trick from the
+  guidance now closes Russian case endings: «кнопк отправк» finds both
+  «Кнопка отправки» and «кнопку отправки» (no stemming — deliberately).
+  Hit payloads are unchanged. Verified on a real RU screencast: «карточк
+  справ» lands on «…увидеть карточку справа…», «заявк» reaches both the
+  spoken phrase and the on-screen bot reply via OCR.
+- **`search(…, speaker="S2")`** — filter transcript hits to one diarized
+  voice (label case-insensitive). OCR hits are excluded when the filter is
+  active — on-screen text has no voice — and the payload says so. On an
+  undiarized job the response is honestly empty with a note naming the fix
+  (`diarize=true`, fast amend) instead of an error. `query` stays required:
+  "everything S2 said" is `get_transcript`'s job.
+- **`media_kind` in `get_transcript`** — `"video"` or `"audio"` next to
+  `language`, so minutes writers can't mislabel a video job "audio-only"
+  (an Opus slip observed by the external evaluation) —
+  payload-over-description, again.
+- **Vocabulary-echo trim** — whisper replays `initial_prompt` (the
+  `vocabulary`) over quiet opening seconds; on a real 73-minute meeting
+  the echo swallowed the actual first words. Segments inside the first
+  ~90 s that are ≥80% vocabulary tokens AND (a token repeated 3+ times OR
+  a near-verbatim vocabulary prefix) are dropped, logged, and counted in
+  the summary as `transcript.vocabulary_echo_trimmed` (present only when
+  > 0). A live roll-call («на встрече присутствуют Анастасия, Диана и
+  Влад») has connecting words, fails the 80% bar, and survives — guarded
+  by a dedicated unit test.
+
+### Changed
+
+- **Threshold-mode over-detection now escalates to the user.** The 0.2.1
+  note called `speakers_with_30s_plus` "the likely headcount" — the
+  external evaluation falsified that (it said 4 on a true-2 meeting), so
+  the server no longer guesses headcounts at all. The note now instructs
+  the agent to ASK THE USER how many people spoke (the talk-time roster
+  right above is the material for that question) and to re-run with
+  `num_speakers=N` — the amend takes seconds, whisper is not re-run.
+  `speakers_with_30s_plus` stays in the payload as one signal among
+  several, without the claim.
+- **Explicit `diarize=true` re-diarizes when the embedding model changed.**
+  A job diarized under one `TALKTHROUGH_DIARIZATION_EMB_MODEL` used to
+  serve its old labels forever; now an explicit request on a job whose
+  stored `diarization.embedding_model` differs from the currently resolved
+  one re-runs just the diarization stage (whisper untouched) — the mirror
+  of the explicit-whisper-model reuse rule. An env change without explicit
+  intent still never invalidates the store.
+
+### Fixed
+
+- **`diarization_amended` reflects the outcome.** A failed amend (e.g. a
+  model download dying on corporate TLS) used to return top-level
+  `diarization_amended: true` right above `diarization.available: false`.
+  The flag is now set only when the amend actually landed labels; failures
+  keep the transcript and report `available: false` with the reason.
+
+### Docs
+
+- Tool guidance: search examples teach word-AND semantics and the
+  `speaker=` filter; `process_media` gains the meeting recipe
+  (`large-v3-turbo` + attendee `vocabulary` + `num_speakers` — turbo's
+  extra cost is trivial next to frames+OCR) and the ask-the-user line for
+  noisy threshold rosters.
+- `meeting-actions` prompt (and the Agent Skill): speaker-mapping evidence
+  now includes on-screen sources — meeting-app name plates, the
+  recording's title card, the active-speaker highlight — the exact
+  evidence a freeform evaluation run used to name speakers while the
+  command-constrained run left them "unidentified".
+- `triage-recording` prompt: the findings keys are declared EXACTLY
+  (`quote`, `frame_refs`, …, no `quotes[]`/`evidence[]` wrappers) — aimed
+  at the one runner that kept drifting from the canon.
+- TROUBLESHOOTING: a "Corporate networks" section (`HF_HUB_DISABLE_XET=1`
+  for stalled whisper downloads, `SSL_CERT_FILE` for TLS-inspected
+  diarization downloads). MODEL-NOTES: EN homophone names resist
+  `vocabulary` at every config ("prophet" → "profit") — the multi-modal
+  OCR redundancy is the compensation.
+- Windows wording: the CI job is no longer labeled "best-effort" —
+  promotion to a required branch check is planned right after this
+  release's green week.
+
 ## [0.2.1] — 2026-07-18
 
 Quality quick-wins, each grown out of a concrete v0.2.0 release-battery

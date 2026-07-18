@@ -16,6 +16,33 @@ After that, expect roughly 3× faster than real time on an Apple-Silicon CPU
 with the default `small` model, OCR included (a 2-minute clip ≈ 40 s).
 Re-processing the same file returns instantly from the job store.
 
+## Corporate networks: model downloads stall or fail TLS
+
+Two env vars fix the one-time downloads on locked-down networks (warm runs
+are offline and unaffected):
+
+- **Whisper download hangs / stalls at 0%** — some proxies break Hugging
+  Face's Xet transfer protocol. Disable it; downloads fall back to plain
+  HTTPS:
+
+  ```bash
+  HF_HUB_DISABLE_XET=1
+  ```
+
+- **Diarization model download fails with a certificate error** — TLS
+  inspection re-signs traffic with a corporate CA that Python's bundled
+  certificate store doesn't trust. Point Python at the system store that
+  includes your CA (macOS: `/etc/ssl/cert.pem`; Linux distros commonly use
+  `/etc/ssl/certs/ca-certificates.crt`):
+
+  ```bash
+  SSL_CERT_FILE=/etc/ssl/cert.pem
+  ```
+
+Set both in the MCP server config (`"env": {...}`) or the shell that runs
+the first `process_media`. Once the models are cached, neither is needed —
+processing is zero-network by design.
+
 ## `pip install` says "No matching distribution found"
 
 Your Python is older than 3.11 (macOS ships 3.9 as `/usr/bin/python3`), so
@@ -136,9 +163,9 @@ Nothing is written anywhere else, and there is no telemetry to opt out of.
 
 ## Windows
 
-Best-effort but CI-smoked (lint + unit + a real CLI run). Quote paths with
-spaces; the per-job lock degrades to a no-op — fine on a single-user machine.
-Details: README → Windows.
+CI-smoked on every push (lint + unit + a real CLI run + a diarize smoke).
+Quote paths with spaces; the per-job lock degrades to a no-op — fine on a
+single-user machine. Details: README → Windows.
 
 Diarization caveat: sherpa-onnx vendors its own ONNX Runtime, but a stray
 `onnxruntime.dll` in `C:\Windows\System32` (left there by some installers)

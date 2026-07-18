@@ -33,6 +33,14 @@ MEETING_KEYWORDS = ("action", "report", "team")
 RU_M4A = FIXTURES_DIR / "multilang-ru-demo.m4a"
 RU_LANGUAGE = "ru"
 
+# v0.2.2 word-search facts (#16): the narration says «Кнопка отправки не
+# работает…» and «Ещё я хочу…»; `tiny` renders "кнопка отправки" verbatim
+# and writes "еще" WITHOUT the ё — exactly the two real-world cases the
+# search normalization must close (multi-word stems; ё-query over е-text).
+RU_STEM_QUERY = "кнопк отправк"
+RU_YO_QUERY = "ещё"
+RU_STEM_TARGET = "кнопка отправки"
+
 # Japanese narrated screencast (Kyoko voice) — the auto-OCR-pack fixture.
 # The on-screen heading is katakana-heavy on purpose: the default
 # Latin+Chinese recognition model cannot read kana, so an OCR hit on the

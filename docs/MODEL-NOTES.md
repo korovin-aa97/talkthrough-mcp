@@ -51,6 +51,12 @@ failures). Results:
   into the first ~60 s of quiet opening chatter (a known `initial_prompt`
   trait, present since 0.1.0). If you pass `vocabulary`, treat the opening
   seconds of the transcript with suspicion before quoting them.
+  The note is RU-derived; an external EN evaluation adds the boundary:
+  `vocabulary` does not rescue English homophone names — a name that IS a
+  common word ("Prophet" → "profit") stays wrong in every config, and its
+  count can even shift slightly — while the pipeline's multi-modal
+  redundancy compensates: OCR reads the correct spellings off slides/UI,
+  and Sonnet-tier agents reconcile the two streams in their output.
 
 ## Method
 

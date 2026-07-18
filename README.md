@@ -531,14 +531,15 @@ processes in ~40 s) — and instant re-runs on the same file. Progress streams
 as MCP progress notifications, and the CLI prints stage lines. More:
 [docs/TROUBLESHOOTING.md](docs/TROUBLESHOOTING.md).
 
-## Windows (best-effort)
+## Windows
 
-CI runs lint, the unit suite, and a full CLI smoke on `windows-latest`
-(static-ffmpeg Windows build, whisper `tiny` transcription, OCR, and the
-instant idempotent re-run). Notes: the per-job lock is POSIX `fcntl` and
+CI runs lint, the unit suite, a full CLI smoke, and a diarize smoke on
+`windows-latest` (static-ffmpeg Windows build, whisper `tiny` transcription,
+OCR, the instant idempotent re-run, and a speaker-roster assert through the
+native sherpa-onnx stack). Notes: the per-job lock is POSIX `fcntl` and
 degrades to a no-op on Windows — fine for a single-user machine; quote paths
 with spaces (`uv run talkthrough-mcp process "C:\Videos\Screen Recording.mp4"`).
-Windows is not a release gate — if something breaks, please open an issue.
+If something breaks, please open an issue.
 
 ## Supported inputs
 
@@ -571,7 +572,8 @@ Honest edges, so you can decide fast:
 - **OCR reads crisp UI text well;** tiny or low-contrast print is best-effort.
 - **Wall-clock confidence depends on recorder metadata** — worst case pass
   `recorded_at=` (see the ladder above).
-- **Windows is best-effort** (see above).
+- **Windows caveats** — POSIX lock degrades to a no-op; see the Windows
+  section above.
 
 ## How it compares
 
