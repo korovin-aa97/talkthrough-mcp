@@ -5,6 +5,53 @@ models drift, sample sizes are small (n in every cell), and the corpus
 is one team's real recordings. Read it as "what tier of agent reliably
 drives this MCP for which job".*
 
+## v0.2.2 addendum (targeted battery, 2026-07-18)
+
+A 20-run battery on the v0.2.2 server — four runner configs (haiku /
+sonnet / gpt-5.5 medium / gpt-5.4-mini low) × the surfaces this release
+touches, on the same real recordings as the earlier grids. Every
+mechanical zero was adjudicated by reading the raw output (three were
+checker-shape artifacts, none were agent failures). Results:
+
+- **Two-word stem search (#16): 8/8.** «карточк отправ»-class queries —
+  «карточк справ» on the 2-min RU screencast, «обратн связ» on the 73-min
+  RU meeting — returned the ground-truth moment at every tier (10–27 s
+  wall). On 0.2.1 these exact queries returned zero hits (exact-substring
+  semantics); agents needed lucky single-word fallbacks.
+- **Ask-the-user escalation: 4/4 refused to trust the cluster count**
+  on an UNDIARIZED copy of the 73-min meeting («сколько людей говорило и
+  кто что сказал?», no headcount given). Sonnet asked outright
+  («Подскажите, сколько человек реально участвовало? … пересчитаю с
+  num_speakers=N — это быстро»); gpt-5.4-mini — the runner that
+  description prose famously never reaches — ALSO asked («напишите число,
+  тогда доразмечу с num_speakers=N»), driven purely by the payload note;
+  haiku and gpt-5.5 hedged the number against cluster noise instead of
+  asserting it. Zero confident wrong headcounts (the v0.2.1 external
+  eval's failure mode).
+- **T6 findings JSON: 4/4 evidence-complete** (verbatim quotes
+  string-matched, cited frame files exist). Canonical key names: both
+  Claude tiers exact; both codex tiers still invent schemas
+  (`evidence_frames`/nested `evidence{}`) — and the transcript shows WHY:
+  `codex exec` never fetches MCP prompt templates, so the new canon
+  paragraph in `triage-recording` physically cannot reach codex runners.
+  The description-vs-payload lesson extends to prompts: contracts that
+  must reach every client belong in tool RESPONSES, not prompt text.
+- **T2 point-lookup regression: 4/4** (S2 + exact timestamp).
+- **Vocabulary-echo trim** (engine-level): on the 73-min meeting
+  re-transcription (small + six-name vocabulary) the opening
+  initial_prompt echo is now dropped — `vocabulary_echo_trimmed: 1` in
+  the summary, transcript opens with real speech, reference-point names
+  intact («влад дим дайте какую-то обратную…», «александр коровин»).
+  The echo's shape VARIES between decodes (repeat runs vs. a single
+  vocabulary-order pass — whisper's fallback sampling is nondeterministic
+  in quiet windows), which is why the detector matches vocabulary ORDER,
+  not a verbatim prefix. Boundary, honestly: trimming cannot resurrect
+  words whisper never emitted — on this recording the opening «Евгений
+  мне сообщил…» is decoded fine WITHOUT the vocabulary prompt but
+  swallowed WITH it; restoring such openings needs a prompt-free
+  re-decode of the trimmed window (a 0.3 candidate, evidence in the
+  v0.2.2 release notes).
+
 ## v0.2.1 addendum (feature-grid battery, 2026-07-18)
 
 A 36-run feature grid re-ran on the v0.2.1 server — all six v0.2.0 runner
