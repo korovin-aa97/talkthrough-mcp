@@ -5,6 +5,48 @@ models drift, sample sizes are small (n in every cell), and the corpus
 is one team's real recordings. Read it as "what tier of agent reliably
 drives this MCP for which job".*
 
+## v0.2.3 addendum (targeted battery, 2026-07-18)
+
+An 18-run battery (16 cells + 2 adjudication re-runs) on the v0.2.3
+server — the same four runner configs (haiku / sonnet / gpt-5.5 medium /
+gpt-5.4-mini low) on the same real recordings as the earlier grids, plus a
+39.7-min EN 3-speaker meeting and a stored 28-cluster threshold copy of
+the 73-min RU meeting. Every mechanical zero was adjudicated by reading
+the raw output (one was a checker artifact — a hedged «2–3 человека» range
+the hedge regex missed; no agent failures). Results:
+
+- **The MCP `instructions` channel REACHES codex — findings-key canon went
+  4/4** (v0.2.2: 2/4, Claude tiers only). One canon-keys sentence added to
+  the server's `initialize.instructions` («Triage findings JSON uses
+  EXACTLY the documented keys…») and both codex tiers emitted exactly
+  `quote`/`frame_refs` — including gpt-5.4-mini low, the runner that
+  neither description prose nor MCP prompt templates ever reach
+  (transcript-proven in v0.2.2). Two universal text channels now exist:
+  tool payloads and server instructions. The 0.3 canon-via-payload design
+  drops from "required" to "optional hardening".
+- **Escalation-note delivery via `get_transcript`: 4/4 without
+  re-processing.** Runners got ONLY a job id of a stored 28-cluster
+  threshold job («сколько людей говорило?») — every tier hedged or ranged
+  the headcount against cluster noise, zero confident wrong counts, zero
+  `process_media` calls. In 0.2.2 this note lived only in the
+  `process_media` summary, invisible on exactly this transcript-first
+  path.
+- **Speaker-mapping regression (meeting minutes on the 3-speaker EN
+  meeting): 6/6 runs mapped S1 = the presenter correctly; the 0.2.2-eval
+  failure shape (mapping the vocative target as the speaker) did not
+  recur.** Honest boundary: no headless runner pulled frames for the
+  screen check — the hardened MANDATORY step lives in prompt/skill text,
+  which `claude -p` does not auto-fetch and codex never fetches; it
+  reaches interactive clients (plugin command / server prompt users). The
+  payload half (`longest_turn_ms` in every roster entry) is served to all
+  clients; transcript evidence alone sufficed for the mapping here.
+- **T2 point-lookup regression: 4/4** (S2 + exact timestamp).
+- Harness lesson (recorded): a user-installed talkthrough plugin leaks its
+  STALE previous-release skill into headless `claude -p` runs — first-pass
+  cells consumed 0.2.2 skill text while testing the 0.2.3 server;
+  re-measured with the Skill tool disabled (same outcomes). Guidance-text
+  experiments must pin or disable installed plugins.
+
 ## v0.2.2 addendum (targeted battery, 2026-07-18)
 
 A 20-run battery on the v0.2.2 server — four runner configs (haiku /
