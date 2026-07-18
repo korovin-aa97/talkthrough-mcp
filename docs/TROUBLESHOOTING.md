@@ -59,6 +59,17 @@ create the venv from a modern interpreter, e.g. `python3.12 -m venv`.
 - Healthy state: the client lists 7 tools, and `list_jobs()` returns `[]` on
   a fresh install.
 
+## Updated the plugin, but the server behaves like the old version
+
+A running session keeps its MCP server process alive: `claude plugin update
+talkthrough` (or editing the version in any client's config) updates the
+files immediately, but the already-spawned server keeps serving the OLD
+version until the session/client restarts. Restart the session (or the
+client) after updating; headless and CI runs pick up the new version on
+their next launch because they spawn a fresh server every time. To verify
+what is actually running, check `tool_versions` in any `process_media`
+summary or manifest.
+
 ## Processing a long recording times out my agent call
 
 Pre-process outside the session, then query instantly:
@@ -79,6 +90,11 @@ same file is an instant re-call, and `list_jobs()` finds the job.
   `model="large-v3-turbo"` and `force=true`.
 - Domain jargon getting mangled: pass `vocabulary="Name1, Name2"` — it biases
   the decoder.
+- Budget note: an explicit model change reprocesses the WHOLE job (STT +
+  frames + OCR + diarization), not just the transcript — plan for up to half
+  the recording's own duration on a laptop (measured: a 65-minute 1080p
+  meeting took 28.5 minutes). Only a diarization-only change amends in
+  seconds.
 
 ## OCR misses on-screen text
 
@@ -138,6 +154,16 @@ TALKTHROUGH_DIARIZATION_EMB_MODEL=/models/embedding.onnx
 ```
 
 Paths are used verbatim, no network is touched.
+
+## A failed re-diarize keeps the stored labels
+
+Since 0.2.3, an explicit `diarize=true` on a job that already has working
+labels fails FAST when the engine cannot even be constructed (a mistyped
+`TALKTHROUGH_DIARIZATION_*_MODEL`, a dead model download): the call returns
+an error and the stored job — labels included — stays byte-identical. The
+boundary: a failure *inside* diarization after the engine constructed still
+degrades to `available: false` with the reason (the transcript always
+survives), and one clean amend restores labels.
 
 ## `t_wall` is null or looks wrong
 

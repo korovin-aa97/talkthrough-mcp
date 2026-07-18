@@ -268,9 +268,10 @@ Key names above are the contract — use them EXACTLY as written (`quote`,
 
 Rules: low STT/vision confidence → route="question" with a concrete question —
 never a silent guess. Findings without frame evidence (audio-only jobs) must say
-so in `frame_refs: []`. Write `digest` in the narrator's language (the
-transcript language); keep every `quote` verbatim in the original language —
-never translate quotes.
+so in `frame_refs: []`. STT homophones lie about name spellings (spoken
+"profit" vs on-screen "Prophet") — trust OCR/frames over the transcript for
+names. Write `digest` in the narrator's language (the transcript language);
+keep every `quote` verbatim in the original language — never translate quotes.
 """,
     "spec-from-workshop": """\
 You are a product engineer writing a spec from a recorded workshop / design
@@ -302,7 +303,8 @@ A markdown spec with these sections:
 5. **Open questions** — everything ambiguous or contested, with the quote that
    raised it. Do not resolve ambiguity yourself — surface it.
 
-Write the spec in the workshop's language; quotes stay verbatim.
+Copy `t_wall` values VERBATIM from the payload — never compute them from t_ms
+yourself. Write the spec in the workshop's language; quotes stay verbatim.
 """,
     "backlog-from-demo": """\
 You are a product owner turning a recorded product demo into a prioritized
@@ -351,11 +353,17 @@ them, and that is fine.
 4. When segments carry speaker labels, map each label to a person before
    writing minutes. Evidence: self-introductions ("hi, this is Vera"),
    vocatives ("thanks, Tom"), the attendees list above — and, on video
-   jobs, the SCREEN: meeting-app name plates, the recording's title card
-   (who started/organized it), and the active-speaker highlight during that
-   speaker's t_ms all name people (get_moment at the moment, read frames +
-   OCR). State the mapping first (e.g. `S1 = Vera, S2 = Tom,
-   S3 = unidentified`) — never guess beyond the evidence.
+   jobs, the SCREEN. The screen check is MANDATORY on video jobs, not
+   optional: for EVERY label you map, call get_frames(job_id="{job_id}",
+   at_ms=<that label's longest_turn_ms from the roster>) and read the
+   meeting-app name plates, the recording's title card (who
+   started/organized it), and the active-speaker highlight BEFORE asserting
+   the mapping — vocative evidence alone mis-attributes (a remark spoken TO
+   Tom is routinely tagged as Tom speaking). Name spellings: STT
+   homophones lie (spoken "profit" vs on-screen "Prophet") — trust
+   OCR/frames over the transcript for names. State the mapping first (e.g.
+   `S1 = Vera, S2 = Tom, S3 = unidentified`) — never guess beyond the
+   evidence.
 5. Collect: action items (who committed to what), decisions (what was agreed),
    open questions (raised but unresolved). Keep exact quotes and t_ms for each.
 6. search(job_id="{job_id}", query="<name or topic>") to trace scattered
@@ -376,8 +384,11 @@ is diarized):
 
 Owners and dates come ONLY from spoken words — a commitment voiced by a mapped
 speaker counts ("I'll send it" spoken by S2 = Tom → owner: Tom); never infer
-beyond that. When unclear, write "unassigned"/"unspecified". Write the minutes
-in the meeting's language; quotes stay verbatim.
+beyond that. When unclear, write "unassigned"/"unspecified". Copy `t_wall`
+values VERBATIM from the payload — never compute them from t_ms yourself
+(hand-derived wall-clocks drift by whole hours; the correct value is already
+in the segment you are quoting). Write the minutes in the meeting's language;
+quotes stay verbatim.
 """,
     "correlate-with-logs": """\
 You are debugging with two evidence streams: a narrated recording (talkthrough
