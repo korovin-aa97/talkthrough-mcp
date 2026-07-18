@@ -57,8 +57,9 @@ jobs:
   # CLI smoke over the fixture (static-ffmpeg Windows build + whisper tiny +
   # OCR + idempotent re-run), plus a diarize smoke through the native
   # sherpa-onnx stack (the System32-onnxruntime DLL clash class breaks HERE,
-  # not at users'). Promotion to a required branch check happens with the
-  # repo owner after a green week on the release branch.
+  # not at users'). Required branch check since v0.2.2 (2026-07-18), together
+  # with linux and macos — its first day on duty it caught a real
+  # Windows-only path bug, which settled the promotion debate.
   windows:
     runs-on: windows-latest
     timeout-minutes: 30
