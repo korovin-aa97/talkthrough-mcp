@@ -223,16 +223,22 @@ def _run_diarization(
     transcript: Transcript,
     request: _DiarizeRequest,
     report: ProgressFn,
+    diarizer: diarize.Diarizer | None = None,
 ) -> None:
     """Diarize the WAV and attach turns/roster/speakers to the transcript.
 
     Any engine failure (model download, native error) degrades to
     ``diarization.available=false`` with the reason — the transcript always
     survives. Only the fail-fast in ``_resolve_diarize_request`` raises.
+    ``diarizer`` lets the amend path hand in an engine it already constructed
+    (its fail-fast contract needs construction errors raised BEFORE any store
+    write); fresh runs construct here and degrade on failure — there are no
+    stored labels to lose.
     """
     report(DIARIZE_STAGE, DIARIZE_PROGRESS_START)
     try:
-        diarizer = diarize.create_diarizer()
+        if diarizer is None:
+            diarizer = diarize.create_diarizer()
         if diarizer is None:
             transcript.diarization = Diarization(
                 available=False, reason=diarize.MISSING_EXTRA_REASON
@@ -302,14 +308,31 @@ def _amend_diarization(
 
     Whisper is not re-run; stored segments are re-attributed in place and the
     manifest is re-saved. ``created_at`` stays — the job identity is the same.
+
+    Fail-fast (v0.2.3): the engine is constructed BEFORE the WAV extract and
+    before any store write. An amend may target a job whose stored labels are
+    good, and an engine that cannot even construct (mistyped
+    ``TALKTHROUGH_DIARIZATION_*_MODEL``, dead model download) is the caller's
+    env/network problem — it must not overwrite those labels with
+    ``available:false``. The ``ValidationError``/``ToolFailureError``
+    propagates (server → clean tool error) and the store stays byte-identical.
+    A failure INSIDE diarization after successful construction still degrades
+    with a reason, like a fresh run — that boundary is documented in
+    TROUBLESHOOTING.
     """
+    report("loading diarization models", 0.05)
+    diarizer = diarize.create_diarizer()
+    if diarizer is None:
+        # unreachable through the tool layer (explicit requests without the
+        # extra fail in _resolve_diarize_request) — kept for direct callers
+        raise ValidationError(diarize.MISSING_EXTRA_REASON)
     directory = jobs.job_dir(manifest.job_id)
     tool_timeout = max(600, int(manifest.media.duration_s * 4) + 120)
     wav_path = directory / "audio.wav"
     report("extracting audio", 0.10)
     try:
         audio.extract_wav(media, wav_path, timeout=tool_timeout)
-        _run_diarization(wav_path, manifest.transcript, request, report)
+        _run_diarization(wav_path, manifest.transcript, request, report, diarizer=diarizer)
     finally:
         wav_path.unlink(missing_ok=True)
     report("writing manifest", 0.99)
@@ -538,6 +561,54 @@ SUMMARY_ROSTER_CAP = 12
 SUBSTANTIAL_TALK_MS = 30_000
 
 
+def substantial_speaker_count(diarization: Diarization) -> int:
+    """Speakers with >= 30 s of attributed talk time — one signal among
+    several, never a headcount claim (an external eval falsified the
+    "likely headcount" reading: it said 4 on a true-2 meeting)."""
+    return sum(1 for s in diarization.speakers if s.talk_time_ms >= SUBSTANTIAL_TALK_MS)
+
+
+def threshold_escalation_note(diarization: Diarization) -> str | None:
+    """The ask-the-user note for threshold-mode over-detection, or None.
+
+    Fires when threshold clustering (no ``requested_num_speakers``) detected
+    more clusters than have substantial talk time. ONE text, byte-identical
+    on every surface that serves it (``process_media`` summary,
+    ``get_transcript`` header) — an agent starting from either entry point
+    must meet the same escalation contract; a summary-only note never reaches
+    transcript-first agents.
+    """
+    if not diarization.available or diarization.requested_num_speakers is not None:
+        return None
+    if substantial_speaker_count(diarization) >= (diarization.detected_num_speakers or 0):
+        return None
+    return (
+        "threshold clustering over-detected on this recording — the cluster "
+        "count is unreliable and is NOT a headcount. ASK YOUR USER how many "
+        "people actually spoke (the talk_time_ms roster above shows which "
+        "voices dominate), then re-run process_media(diarize=true, "
+        "num_speakers=N) — the amend takes seconds, whisper is not re-run"
+    )
+
+
+def _longest_turn_starts(diarization: Diarization) -> dict[str, int]:
+    """label → ``t0_ms`` of that speaker's longest turn (ties → the earliest).
+
+    Serve-time only, computed from the stored turns — the manifest schema
+    stays untouched. This is the "where to LOOK" anchor for screen-evidence
+    speaker mapping: ``get_frames(at_ms=<longest_turn_ms>)`` lands
+    mid-monologue, where name plates and the active-speaker highlight are
+    most likely to show the person actually talking.
+    """
+    best: dict[str, tuple[int, int]] = {}
+    for turn in diarization.turns:
+        duration = turn.t1_ms - turn.t0_ms
+        current = best.get(turn.speaker)
+        if current is None or (duration, -turn.t0_ms) > (current[0], -current[1]):
+            best[turn.speaker] = (duration, turn.t0_ms)
+    return {label: t0_ms for label, (_, t0_ms) in best.items()}
+
+
 def roster_payload(diarization: Diarization) -> tuple[list[dict[str, Any]], int]:
     """Top speakers by talk time, capped for the token budget.
 
@@ -548,8 +619,16 @@ def roster_payload(diarization: Diarization) -> tuple[list[dict[str, Any]], int]
     """
     ranked = sorted(diarization.speakers, key=lambda s: -s.talk_time_ms)[:SUMMARY_ROSTER_CAP]
     kept = {stat.label for stat in ranked}
+    longest = _longest_turn_starts(diarization)
     entries = [
-        {"label": stat.label, "talk_time_ms": stat.talk_time_ms, "turn_count": stat.turn_count}
+        {
+            "label": stat.label,
+            "talk_time_ms": stat.talk_time_ms,
+            "turn_count": stat.turn_count,
+            **(
+                {"longest_turn_ms": longest[stat.label]} if stat.label in longest else {}
+            ),
+        }
         for stat in diarization.speakers
         if stat.label in kept
     ]
@@ -571,24 +650,13 @@ def _summarize_diarization(diarization: Diarization) -> dict[str, Any]:
     if diarization.requested_num_speakers is not None:
         payload["requested_num_speakers"] = diarization.requested_num_speakers
     else:
-        substantial = sum(
-            1 for s in diarization.speakers if s.talk_time_ms >= SUBSTANTIAL_TALK_MS
-        )
-        if substantial < (diarization.detected_num_speakers or 0):
-            # threshold-mode honesty (v0.2.2): the cluster count is NOT a
-            # headcount, and no server heuristic is trusted to guess one — an
-            # external eval falsified speakers_with_30s_plus as "likely
-            # headcount" (said 4, truth 2). The user always knows their own
-            # meeting: escalate to them, with the talk-time roster as the
-            # material for the question.
-            payload["speakers_with_30s_plus"] = substantial
-            payload["note"] = (
-                "threshold clustering over-detected on this recording — the cluster "
-                "count is unreliable and is NOT a headcount. ASK YOUR USER how many "
-                "people actually spoke (the talk_time_ms roster above shows which "
-                "voices dominate), then re-run process_media(diarize=true, "
-                "num_speakers=N) — the amend takes seconds, whisper is not re-run"
-            )
+        # threshold-mode honesty (v0.2.2): the cluster count is NOT a
+        # headcount, and no server heuristic is trusted to guess one — the
+        # note escalates to the user, who always knows their own meeting.
+        note = threshold_escalation_note(diarization)
+        if note is not None:
+            payload["speakers_with_30s_plus"] = substantial_speaker_count(diarization)
+            payload["note"] = note
     return payload
 
 

@@ -9,7 +9,7 @@ from tests.conftest import make_manifest
 
 from talkthrough_mcp.core import diarize
 from talkthrough_mcp.core.diarize import Diarization
-from talkthrough_mcp.core.errors import ValidationError
+from talkthrough_mcp.core.errors import ToolFailureError, ValidationError
 from talkthrough_mcp.core.pipeline import (
     ALLOWED_WHISPER_MODELS,
     DEFAULT_WHISPER_MODEL,
@@ -275,9 +275,12 @@ def _run_amend(media, monkeypatch: pytest.MonkeyPatch, *, succeed: bool):
     from talkthrough_mcp.core.diarize import Diarization
 
     engine(monkeypatch, available=True)
+    # the amend path constructs the engine BEFORE touching anything (v0.2.3
+    # fail-fast) — stub it so unit runs never resolve real models
+    monkeypatch.setattr(diarize, "create_diarizer", lambda: object())
     monkeypatch.setattr(audio, "extract_wav", lambda *a, **k: None)
 
-    def fake_run(wav_path, transcript, request, report) -> None:
+    def fake_run(wav_path, transcript, request, report, diarizer=None) -> None:
         transcript.diarization = (
             Diarization(available=True, reason="", detected_num_speakers=1)
             if succeed
@@ -312,6 +315,109 @@ def test_successful_amend_still_reports_the_flag(
     result = _run_amend(media, monkeypatch, succeed=True)
     assert result.amended is True
     assert pipeline.summarize(result)["diarization_amended"] is True
+
+
+# --- fail-fast failed amend (v0.2.3): construction errors leave the store alone
+
+
+def _stored_diarized_job(tmp_path, monkeypatch: pytest.MonkeyPatch):
+    """A stored job with GOOD labels whose next explicit call must amend
+    (stored requested k=2, the test calls with k=3)."""
+    from talkthrough_mcp.core import jobs
+    from talkthrough_mcp.core.diarize import SpeakerStat, Turn
+    from talkthrough_mcp.core.manifest import save_manifest
+
+    monkeypatch.setenv("TALKTHROUGH_HOME", str(tmp_path / "home"))
+    media = tmp_path / "meeting.mp4"
+    media.write_bytes(b"two voices, only ever hashed")
+    job_id = jobs.compute_job_id(media)
+    manifest = make_manifest(job_id=job_id)
+    manifest.media = type(manifest.media)(
+        **{**manifest.media.__dict__, "path": str(media)}
+    )
+    turns = [Turn(0, 5000, "S1"), Turn(5000, 8000, "S2")]
+    manifest.transcript.diarization = Diarization(
+        available=True,
+        reason="",
+        requested_num_speakers=2,
+        detected_num_speakers=2,
+        speakers=[
+            SpeakerStat(label="S1", talk_time_ms=5000, turn_count=1, first_ms=0, last_ms=5000),
+            SpeakerStat(label="S2", talk_time_ms=3000, turn_count=1, first_ms=5000, last_ms=8000),
+        ],
+        turns=turns,
+    )
+    directory = jobs.job_dir(job_id)
+    directory.mkdir(parents=True)
+    save_manifest(manifest, directory)
+    return media, directory / "manifest.json"
+
+
+@pytest.mark.parametrize(
+    "exc",
+    [
+        ValidationError(
+            "TALKTHROUGH_DIARIZATION_EMB_MODEL='nemo_titanet_smal' is neither a known "
+            "model name nor an existing .onnx file"
+        ),
+        ToolFailureError("sherpa-onnx rejected the diarization model config"),
+    ],
+)
+def test_amend_construction_failure_fails_fast_and_leaves_the_store_alone(
+    tmp_path, monkeypatch: pytest.MonkeyPatch, exc: Exception
+) -> None:
+    """The 0.2.2-eval caveat: a failed explicit re-diarize must not clobber
+    good stored labels. An engine that cannot even CONSTRUCT (mistyped model
+    env, dead download) now raises before the WAV extract and before any
+    manifest write — the store stays byte-identical."""
+    from talkthrough_mcp.core import audio, jobs, pipeline
+
+    media, manifest_path = _stored_diarized_job(tmp_path, monkeypatch)
+    before = manifest_path.read_bytes()
+    engine(monkeypatch, available=True)
+
+    def refuse_construction():
+        raise exc
+
+    monkeypatch.setattr(diarize, "create_diarizer", refuse_construction)
+
+    def no_extract(*args: object, **kwargs: object) -> None:
+        raise AssertionError("fail-fast must fire BEFORE the WAV extract")
+
+    monkeypatch.setattr(audio, "extract_wav", no_extract)
+    with pytest.raises((ValidationError, ToolFailureError)) as caught:
+        pipeline.process_media(str(media), diarize_speakers=True, num_speakers=3)
+    assert str(caught.value) == str(exc)
+    assert manifest_path.read_bytes() == before, "manifest must stay byte-identical"
+    stored = jobs.load_job(jobs.compute_job_id(media)).transcript.diarization
+    assert stored is not None and stored.available
+    assert [stat.label for stat in stored.speakers] == ["S1", "S2"]
+
+
+def test_fresh_run_construction_failure_still_degrades(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The fail-fast is amend-only: a fresh pipeline has no labels to lose,
+    so a construction failure keeps degrading to available:false + reason."""
+    from talkthrough_mcp.core.manifest import Transcript
+    from talkthrough_mcp.core.pipeline import _run_diarization
+
+    def refuse_construction():
+        raise ToolFailureError("could not download diarization model: network down")
+
+    monkeypatch.setattr(diarize, "create_diarizer", refuse_construction)
+    transcript = Transcript(
+        available=True, reason="", language="en", model="tiny", segments=[]
+    )
+    _run_diarization(
+        Path("/nonexistent.wav"),
+        transcript,
+        request_for(monkeypatch, True, None),
+        lambda stage, fraction: None,
+    )
+    assert transcript.diarization is not None
+    assert transcript.diarization.available is False
+    assert "network down" in transcript.diarization.reason
 
 
 def test_whisper_loads_from_local_cache_first(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -398,3 +504,70 @@ def test_summary_threshold_mode_escalates_to_the_user() -> None:
     exact.requested_num_speakers = 5
     block = _summarize_diarization(exact)
     assert "note" not in block and "speakers_with_30s_plus" not in block
+
+
+def test_threshold_escalation_note_is_one_text_on_every_surface() -> None:
+    """v0.2.3: the note is a helper both the summary and get_transcript
+    serve — byte-identical, and absent outside threshold over-detection."""
+    from talkthrough_mcp.core.pipeline import (
+        _summarize_diarization,
+        threshold_escalation_note,
+    )
+
+    dusty = dusty_diarization(majors=5, dust=118)
+    note = threshold_escalation_note(dusty)
+    assert note is not None
+    assert note == _summarize_diarization(dusty)["note"]
+
+    clean = dusty_diarization(majors=3, dust=0)
+    assert threshold_escalation_note(clean) is None
+
+    requested = dusty_diarization(majors=5, dust=118)
+    requested.requested_num_speakers = 5
+    assert threshold_escalation_note(requested) is None
+
+    failed = Diarization(available=False, reason="engine exploded")
+    assert threshold_escalation_note(failed) is None
+
+
+# --- longest_turn_ms roster anchor (v0.2.3) ------------------------------------
+
+
+def test_roster_payload_carries_longest_turn_anchor() -> None:
+    """label → t0_ms of the speaker's longest turn; equal durations resolve
+    to the EARLIEST turn — deterministic regardless of stored turn order."""
+    from talkthrough_mcp.core.diarize import Turn, speaker_roster
+    from talkthrough_mcp.core.pipeline import roster_payload
+
+    turns = [
+        Turn(0, 4000, "S1"),
+        Turn(4000, 5000, "S2"),
+        Turn(5000, 9000, "S1"),  # ties the first S1 turn at 4000 ms
+        Turn(9000, 20000, "S2"),
+    ]
+    diarization = Diarization(
+        available=True,
+        reason="",
+        detected_num_speakers=2,
+        speakers=speaker_roster(turns),
+        turns=turns,
+    )
+    entries, hidden = roster_payload(diarization)
+    assert hidden == 0
+    by_label = {entry["label"]: entry for entry in entries}
+    assert by_label["S1"]["longest_turn_ms"] == 0  # 4000ms tie → earliest t0
+    assert by_label["S2"]["longest_turn_ms"] == 9000  # 11000ms beats 1000ms
+
+    shuffled = Diarization(
+        available=True,
+        reason="",
+        detected_num_speakers=2,
+        speakers=speaker_roster(turns),
+        turns=list(reversed(turns)),
+    )
+    shuffled_entries, _ = roster_payload(shuffled)
+    assert shuffled_entries == entries, "tie-break must not depend on turn order"
+
+    no_turns = dusty_diarization(majors=2, dust=0)
+    bare_entries, _ = roster_payload(no_turns)
+    assert all("longest_turn_ms" not in entry for entry in bare_entries)
