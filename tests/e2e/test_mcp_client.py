@@ -169,11 +169,12 @@ async def _run_session(home: Path) -> None:
         jobs_payload = _payload(jobs_result)
         assert any(job["job_id"] == job_id for job in jobs_payload["jobs"])
 
-        # 8. Issue #13 on the wire: every served frame + extract carries an
-        # absolute path that exists on this machine.
+        # 8. Issues #13 + #14 on the wire: every served frame carries an
+        # absolute existing path AND its validity span.
         for frame in moment_meta["frames"]:
             assert Path(frame["path"]).is_absolute()
             assert Path(frame["path"]).is_file(), frame["path"]
+            assert frame["valid_from_ms"] <= frame["t_ms"] < frame["valid_to_ms"], frame
         extract_result = await session.call_tool(
             "extract_frame", {"job_id": job_id, "at_ms": 6500}
         )

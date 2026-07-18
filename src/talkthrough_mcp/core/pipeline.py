@@ -458,7 +458,9 @@ def process_media(
             dedup.mark_duplicates(extracted, frames_directory)
             unique = [frame for frame in extracted if frame.is_unique]
 
-            engine = ocr.create_engine()
+            # STT ran first (pipeline order), so the detected narration
+            # language can pick the OCR script pack when no env is set.
+            engine = ocr.create_engine(language_hint=transcript.language)
             if engine is not None:
                 ocr_ran = True
                 for index, frame in enumerate(unique):
@@ -560,6 +562,32 @@ def _summarize_diarization(diarization: Diarization) -> dict[str, Any]:
     return payload
 
 
+def _summarize_frames(manifest: Manifest) -> dict[str, Any]:
+    """Frames block; carries the sampling honesty note on long recordings.
+
+    The adaptive keyframe floor means a 73-minute meeting is sampled every
+    ~7 s, not every second — agents hunting a specific slide must know that
+    from the payload (the same speakers_with_30s_plus lesson: facts agents
+    must not miss go into the response, not the description). The floor is
+    recomputed from the stored duration + caps — the manifest schema stays
+    untouched.
+    """
+    payload: dict[str, Any] = {
+        "count": manifest.frames.count,
+        "unique_count": manifest.frames.unique_count,
+        "cap_hit": manifest.frames.cap_hit,
+    }
+    floor_s = frames.frame_floor_s(manifest.media.duration_s, manifest.caps.max_frames)
+    if manifest.media.has_video and floor_s > 1.0:
+        interval_s = round(floor_s)
+        payload["sampling_interval_s"] = interval_s
+        payload["note"] = (
+            f"frames sampled every ~{interval_s}s across the whole recording — "
+            "exact instants via extract_frame"
+        )
+    return payload
+
+
 def summarize(result: ProcessResult) -> dict[str, Any]:
     """Compact, context-friendly summary — never the full payload."""
     manifest = result.manifest
@@ -600,11 +628,7 @@ def summarize(result: ProcessResult) -> dict[str, Any]:
             "preview_truncated": len(segments) > len(preview),
         },
         **({"diarization": _summarize_diarization(diarization)} if diarization else {}),
-        "frames": {
-            "count": manifest.frames.count,
-            "unique_count": manifest.frames.unique_count,
-            "cap_hit": manifest.frames.cap_hit,
-        },
+        "frames": _summarize_frames(manifest),
         "ocr": {"enabled": manifest.caps.ocr, "unique_frames_with_text": frames_with_text},
         "next_steps": (
             "use get_transcript / get_moment / get_frames / search with this job_id; "

@@ -11,6 +11,13 @@ scripts — it accepts either a narration-style language code (``ru``, ``ja``,
 ``cyrillic``, ``latin``, …). ``TALKTHROUGH_OCR_PARAMS`` is the advanced
 escape hatch: a JSON object of raw RapidOCR constructor params, merged over
 the derived ones.
+
+Auto-selection (v0.2.1): STT detects the narration language BEFORE the OCR
+stage runs, so when ``TALKTHROUGH_OCR_LANG`` is NOT set and the detected
+language maps to a script pack in ``_LANG_ALIASES``, that pack becomes the
+derived default — Russian narration stops producing unreadable Cyrillic
+frames out of the box. The explicit env always wins, and languages outside
+the alias table (Latin-script es/fr/de/en …) keep the stock engine.
 """
 
 from __future__ import annotations
@@ -66,10 +73,26 @@ def ocr_enabled() -> bool:
     return os.environ.get("TALKTHROUGH_OCR", "on").strip().lower() not in {"off", "0", "false"}
 
 
-def engine_params() -> dict[str, Any]:
-    """RapidOCR constructor params derived from the TALKTHROUGH_OCR_* env vars."""
+def engine_params(language_hint: str | None = None) -> dict[str, Any]:
+    """RapidOCR constructor params from the TALKTHROUGH_OCR_* env vars.
+
+    ``language_hint`` is the STT-detected narration language; it applies only
+    when ``TALKTHROUGH_OCR_LANG`` is empty AND the hint is a known alias —
+    unknown or Latin-script codes never switch packs (the stock engine
+    already reads Latin, and an invalid pack must not reach the engine).
+    """
     params: dict[str, Any] = {}
     lang = os.environ.get("TALKTHROUGH_OCR_LANG", "").strip().lower()
+    if not lang and language_hint:
+        hint = language_hint.strip().lower()
+        if hint in _LANG_ALIASES:
+            lang = hint
+            logger.info(
+                "OCR pack %r derived from detected speech language %r "
+                "(TALKTHROUGH_OCR_LANG overrides; pack models are a one-time download)",
+                _LANG_ALIASES[hint],
+                hint,
+            )
     if lang:
         pack = _LANG_ALIASES.get(lang, lang)
         params["Rec.lang_type"] = pack
@@ -114,7 +137,7 @@ def _coerce_params(params: dict[str, Any]) -> dict[str, Any]:
     return coerced
 
 
-def create_engine() -> OcrEngine | None:
+def create_engine(language_hint: str | None = None) -> OcrEngine | None:
     """Build a RapidOCR engine, or None when OCR is disabled/unavailable."""
     if not ocr_enabled():
         logger.info("OCR disabled via TALKTHROUGH_OCR")
@@ -124,7 +147,7 @@ def create_engine() -> OcrEngine | None:
             logging.getLogger(noisy).setLevel(logging.WARNING)
         from rapidocr import RapidOCR
 
-        params = _coerce_params(engine_params())
+        params = _coerce_params(engine_params(language_hint))
         if params:
             logger.info("OCR params: %s", {k: str(v) for k, v in params.items()})
         # First use may download ONNX models; keep any stray stdout out of

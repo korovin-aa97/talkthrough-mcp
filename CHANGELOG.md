@@ -4,6 +4,65 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions follow
 [SemVer](https://semver.org/).
 
+## [0.2.1] — 2026-07-18
+
+Quality quick-wins, each grown out of a concrete v0.2.0 release-battery
+failure (see `docs/MODEL-NOTES.md`). Fully additive: the manifest schema
+and the model defaults are untouched, and every field below is computed at
+serve time — existing processed jobs gain the new data with no migration.
+
+### Added
+
+- **Per-frame validity spans** (#14) — every frame served by `get_frames` /
+  `get_moment` carries `valid_from_ms` / `valid_to_ms`: the interval during
+  which the screen looked like that keyframe (duplicates prove continuity,
+  so a span runs to the next unique keyframe). "Was X on screen at t?"
+  becomes a data lookup instead of a `duplicate_of`-chain inference. Honesty
+  at the edges: when frame extraction hit its cap (`cap_hit`), the last span
+  ends at the last extracted sample plus one sampling step — never at media
+  end. `extract_frame` responses stay span-free (an exact instant by
+  definition); the `get_moment` "no unique keyframe inside the range" note
+  remains as the secondary, prose explanation. Verified on a real 73-minute
+  meeting job processed by v0.2.0: spans appear with no reprocessing and
+  cover the requested moments inside deduplicated static stretches.
+- **OCR script pack auto-selected from the speech language.** The v0.2.0
+  battery found Cyrillic UI text unreadable by the default Latin+Chinese
+  recognition models — on a real RU bug screencast, the bot's on-screen
+  reply «Я готовлю вашу заявку…» was invisible to `search`. Transcription
+  runs before OCR, so when `TALKTHROUGH_OCR_LANG` is not set and the
+  detected narration language maps to a script pack (`ru`→`eslav`,
+  `ja`→`japan`, `ko`, `ar`, `hi`, …), that pack now becomes the derived
+  default. The explicit env always wins; Latin-script languages (es/fr/de/
+  en) never switch packs; pack models remain a one-time download. Proven on
+  two scripts: the same real RU screencast (the bot reply is now found by
+  `search`, 8 OCR hits, Latin UI text still read) and a new committed
+  Japanese fixture whose katakana heading the default model cannot read.
+- **Frame-sampling honesty note.** On long recordings the adaptive keyframe
+  floor means sampling every ~N seconds, not every second; the
+  `process_media` summary now says so (`frames.sampling_interval_s` + a
+  note pointing at `extract_frame`) whenever the floor exceeds 1 s — the
+  same payload-over-description principle that fixed threshold-mode
+  headcounts in 0.2.0.
+
+### Docs
+
+- Tool guidance teaches the new data: check that a frame's span covers the
+  moment you cite; `cap_hit`/`sampling_interval_s` in a summary is the cue
+  to raise `TALKTHROUGH_MAX_FRAMES` or use `extract_frame` for slide hunts.
+- attendees → `vocabulary` recipe: names the transcriber has seen in
+  `initial_prompt` survive STT instead of degrading into look-alike words
+  («Анастасия» → "in a station" class), so `process_media` examples and the
+  `meeting-actions` prompt now say to pass attendee names in `vocabulary`.
+
+### CI
+
+- The Windows job installs the `[diarization]` extra and runs a diarize
+  smoke over the two-voice fixture with a JSON assert on the speaker roster
+  (engine failures degrade by design, so exit codes alone prove nothing).
+  Its first run immediately caught a real Windows quirk — redirected stdout
+  falling back to cp1252 — now fixed with `PYTHONUTF8`. Windows remains
+  best-effort.
+
 ## [0.2.0] — 2026-07-16
 
 Speaker diarization (#4) and absolute frame paths (#13). Additive minor:

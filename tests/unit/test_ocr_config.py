@@ -74,3 +74,60 @@ def test_coerce_drops_unknown_enum_values() -> None:
     coerced = _coerce_params({"Rec.lang_type": "martian", "Global.text_score": 0.5})
     assert "Rec.lang_type" not in coerced
     assert coerced["Global.text_score"] == 0.5
+
+
+# --- auto-selection from the detected speech language (v0.2.1) ---------------
+
+
+def test_detected_language_hint_derives_the_pack_when_env_is_empty(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("TALKTHROUGH_OCR_LANG", raising=False)
+    monkeypatch.delenv("TALKTHROUGH_OCR_PARAMS", raising=False)
+    assert engine_params("ru") == RU_PARAMS
+    assert engine_params("ja") == {"Rec.lang_type": "japan"}
+    assert engine_params("KO ") == {
+        "Rec.lang_type": "korean",
+        "Rec.ocr_version": "PP-OCRv5",
+        "Rec.model_type": "mobile",
+    }
+
+
+def test_explicit_env_always_beats_the_detected_language(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("TALKTHROUGH_OCR_LANG", "ja")
+    assert engine_params("ru") == {"Rec.lang_type": "japan"}
+
+
+def test_latin_script_languages_never_trigger_a_pack_switch(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """MANDATORY guard: es/fr/de/en are not in _LANG_ALIASES and must keep the
+    stock engine — an invalid Rec.lang_type must never even be derived (it
+    would only be dropped later by _coerce_params, which is too late to rely
+    on)."""
+    monkeypatch.delenv("TALKTHROUGH_OCR_LANG", raising=False)
+    monkeypatch.delenv("TALKTHROUGH_OCR_PARAMS", raising=False)
+    for detected in ("es", "fr", "de", "en", "pt", "it"):
+        assert engine_params(detected) == {}, detected
+
+
+def test_unknown_or_absent_hints_leave_the_engine_stock(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("TALKTHROUGH_OCR_LANG", raising=False)
+    monkeypatch.delenv("TALKTHROUGH_OCR_PARAMS", raising=False)
+    assert engine_params(None) == {}
+    assert engine_params("") == {}
+    assert engine_params("xx") == {}
+
+
+def test_params_env_still_merges_over_the_derived_pack(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("TALKTHROUGH_OCR_LANG", raising=False)
+    monkeypatch.setenv("TALKTHROUGH_OCR_PARAMS", '{"Global.text_score": 0.3}')
+    params = engine_params("ru")
+    assert params["Rec.lang_type"] == "eslav"
+    assert params["Global.text_score"] == 0.3

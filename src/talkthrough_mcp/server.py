@@ -25,11 +25,12 @@ from . import guidance
 from .core import jobs, pipeline
 from .core.diarize import speakers_in_range
 from .core.errors import AudioOnlyJobError, TalkthroughError
-from .core.frames import extract_exact_frame
+from .core.frames import Frame, extract_exact_frame
 from .core.manifest import (
     Manifest,
     format_srt,
     format_text,
+    frame_validity_ms,
     frames_in_range,
     nearest_frames,
     representative_frame,
@@ -95,15 +96,21 @@ def _require_video(manifest: Manifest) -> None:
         raise ToolError(str(AudioOnlyJobError(manifest.job_id)))
 
 
-def _frame_payload(manifest: Manifest, frame_ms: int, file: str) -> dict[str, Any]:
-    return {
-        "t_ms": frame_ms,
-        "t_wall": manifest.t_wall_iso(frame_ms),
-        "file": file,
+def _frame_payload(manifest: Manifest, frame: Frame) -> dict[str, Any]:
+    payload = {
+        "t_ms": frame.ms,
+        "t_wall": manifest.t_wall_iso(frame.ms),
+        "file": frame.file,
         # absolute path (issue #13): copying the image elsewhere is the
         # calling agent's job, under the user's own permission model
-        "path": str((jobs.frames_dir(manifest.job_id) / file).resolve()),
+        "path": str((jobs.frames_dir(manifest.job_id) / frame.file).resolve()),
     }
+    span = frame_validity_ms(manifest, frame)
+    if span is not None:
+        # issue #14: the interval during which the screen looked like this
+        # keyframe — evidence coverage becomes data, not an inference
+        payload["valid_from_ms"], payload["valid_to_ms"] = span
+    return payload
 
 
 def _json_block(payload: dict[str, Any]) -> str:
@@ -266,7 +273,7 @@ def get_frames(
         "returned": len(picked),
         "max_frames_effective": count,
         "frames": [
-            _frame_payload(manifest, frame.ms, frame.file)
+            _frame_payload(manifest, frame)
             | ({"ocr_text": frame.ocr_text} if frame.ocr_text else {})
             | ({"duplicate_of": frame.duplicate_of} if frame.duplicate_of is not None else {})
             for frame in picked
@@ -321,7 +328,7 @@ def get_moment(job_id: str, start_ms: int, end_ms: int) -> list[str | Image]:
             for segment in segments
         ],
         "frames": [
-            _frame_payload(manifest, frame.ms, frame.file)
+            _frame_payload(manifest, frame)
             | ({"ocr_text": frame.ocr_text} if frame.ocr_text else {})
             for frame in picked
         ],

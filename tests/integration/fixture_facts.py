@@ -33,6 +33,15 @@ MEETING_KEYWORDS = ("action", "report", "team")
 RU_M4A = FIXTURES_DIR / "multilang-ru-demo.m4a"
 RU_LANGUAGE = "ru"
 
+# Japanese narrated screencast (Kyoko voice) — the auto-OCR-pack fixture.
+# The on-screen heading is katakana-heavy on purpose: the default
+# Latin+Chinese recognition model cannot read kana, so an OCR hit on the
+# word below proves the japan pack was auto-selected from the detected
+# speech language (v0.2.1).
+JA_MP4 = FIXTURES_DIR / "multilang-ja-demo.mp4"
+JA_LANGUAGE = "ja"
+JA_OCR_TITLE_WORD = "ログイン"  # katakana half of the "ログイン画面" heading
+
 # Two-voice meeting: Samantha speaks first (=> S1 by first appearance),
 # Daniel is S2. Boundaries were measured from the per-turn say clips at
 # generation time; the AAC encode shifts the real edges by a few tens of ms,

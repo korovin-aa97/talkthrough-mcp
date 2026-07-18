@@ -19,6 +19,7 @@ from talkthrough_mcp.core.manifest import (
     Manifest,
     format_srt,
     format_text,
+    frame_validity_ms,
     frames_in_range,
     load_manifest,
     nearest_frame_ms,
@@ -235,3 +236,64 @@ def test_representative_frame_none_for_audio_only() -> None:
     manifest = make_manifest(kind="audio")
     assert representative_frame(manifest, 1000) is None
     assert nearest_frame_ms(manifest, 1000) is None
+
+
+# --- validity spans (#14) ----------------------------------------------------
+
+
+def test_validity_span_runs_to_the_next_unique_frame() -> None:
+    manifest = make_manifest()  # uniques at 0, 6006, 12012; duplicate at 1000
+    frame_at_0, frame_at_6006 = manifest.frames.items[0], manifest.frames.items[2]
+    assert frame_validity_ms(manifest, frame_at_0) == (0, 6006)
+    assert frame_validity_ms(manifest, frame_at_6006) == (6006, 12012)
+
+
+def test_validity_span_of_a_duplicate_is_its_unique_frames_span() -> None:
+    manifest = _long_static_manifest()  # unique@1000, dups 2000-10000, unique@11000
+    for frame in manifest.frames.items:
+        if frame.duplicate_of == 1000:
+            assert frame_validity_ms(manifest, frame) == (1000, 11000)
+    unique = manifest.frames.items[0]
+    assert frame_validity_ms(manifest, unique) == (1000, 11000)
+
+
+def test_validity_span_of_the_last_frame_reaches_the_end_of_the_recording() -> None:
+    manifest = make_manifest()  # duration 18.0 s, cap_hit False
+    last = manifest.frames.items[-1]
+    assert frame_validity_ms(manifest, last) == (12012, 18000)
+
+
+def test_validity_span_of_a_single_frame_job_covers_the_whole_recording() -> None:
+    manifest = make_manifest()
+    only = Frame(ms=0, file="t00000000.jpg", duplicate_of=None)
+    manifest.frames = FrameIndex(count=1, unique_count=1, cap_hit=False, items=[only])
+    assert frame_validity_ms(manifest, only) == (0, 18000)
+
+
+def test_validity_span_on_cap_hit_ends_at_the_last_sample_plus_step_not_media_end() -> None:
+    """Issue #14 honesty rule: extraction stopped early ⇒ no claim past the
+    last extracted sample (+ one sampling step); media end would overclaim."""
+    manifest = make_manifest()
+    frames = [Frame(ms=1000, file="t00001000.jpg", duplicate_of=None)]
+    frames += [
+        Frame(ms=ms, file=f"t{ms:08d}.jpg", duplicate_of=1000)
+        for ms in range(2000, 11000, 1000)
+    ]
+    manifest.frames = FrameIndex(count=len(frames), unique_count=1, cap_hit=True, items=frames)
+    # floor for 18 s / 600 frames stays 1 s → last sample 10000 + 1000 step
+    assert frame_validity_ms(manifest, frames[0]) == (1000, 11000)
+    assert manifest.media.duration_s * 1000 > 11000  # strictly before media end
+
+
+def test_validity_span_before_a_cap_hit_tail_is_unaffected() -> None:
+    manifest = _long_static_manifest()
+    manifest.frames.cap_hit = True
+    first_unique = manifest.frames.items[0]
+    assert frame_validity_ms(manifest, first_unique) == (1000, 11000)
+    last_unique = manifest.frames.items[-1]  # also the last extracted sample
+    assert frame_validity_ms(manifest, last_unique) == (11000, 12000)
+
+
+def test_validity_span_is_none_for_audio_only_jobs() -> None:
+    manifest = make_manifest(kind="audio")
+    assert frame_validity_ms(manifest, Frame(ms=0, file="t00000000.jpg")) is None
