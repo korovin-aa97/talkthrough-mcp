@@ -7,6 +7,7 @@ reads from here — the source media is only re-read by ``extract_frame``.
 
 from __future__ import annotations
 
+import itertools
 import json
 import unicodedata
 from dataclasses import asdict, dataclass, field
@@ -364,3 +365,31 @@ def search_manifest(
             )
     hits.sort(key=lambda hit: hit.t_ms)
     return hits
+
+
+def straddle_hint_t_ms(
+    manifest: Manifest, query: str, *, speaker: str | None = None
+) -> int | None:
+    """``t0_ms`` of the first ADJACENT segment pair whose combined text
+    matches every query token — the cheap cross-boundary check behind the
+    zero-hit search note.
+
+    Word-AND is per-segment BY CONTRACT (#16); a phrase split over a segment
+    boundary ("recurring | invites") legitimately misses, and the note should
+    say where the words do meet instead of leaving the miss indistinguishable
+    from "never said". Same normalization as the search itself. OCR text
+    stays out — frames are not contiguous prose. With ``speaker`` both
+    segments of the pair must be that speaker's, mirroring the filter the
+    zero-hit search ran under. Not a search mode: the hit contract is
+    untouched, this feeds one prose note.
+    """
+    tokens = _fold_for_search(query).split()
+    if len(tokens) < 2:
+        return None
+    for first, second in itertools.pairwise(manifest.transcript.segments):
+        if speaker is not None and (first.speaker != speaker or second.speaker != speaker):
+            continue
+        combined = _fold_for_search(first.text + " " + second.text)
+        if all(token in combined for token in tokens):
+            return first.t0_ms
+    return None

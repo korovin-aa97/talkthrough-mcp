@@ -44,6 +44,7 @@ Key names above are the contract — use them EXACTLY as written (`quote`,
 
 Rules: low STT/vision confidence → route="question" with a concrete question —
 never a silent guess. Findings without frame evidence (audio-only jobs) must say
-so in `frame_refs: []`. Write `digest` in the narrator's language (the
-transcript language); keep every `quote` verbatim in the original language —
-never translate quotes.
+so in `frame_refs: []`. STT homophones lie about name spellings (spoken
+"profit" vs on-screen "Prophet") — trust OCR/frames over the transcript for
+names. Write `digest` in the narrator's language (the transcript language);
+keep every `quote` verbatim in the original language — never translate quotes.

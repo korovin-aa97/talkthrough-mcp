@@ -4,6 +4,78 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions follow
 [SemVer](https://semver.org/).
 
+## [0.2.3] — 2026-07-18
+
+Fail-fast and honesty-contour fixes, sourced from the same-day external
+evaluation of 0.2.2 and from holes that release itself introduced. Fully
+additive patch: the `talkthrough-manifest/v1` schema gains no fields, no
+new tools, no new dependencies — every new field lives in server responses
+only, so existing processed jobs serve the new data with no migration.
+
+### Fixed
+
+- **A failed explicit re-diarize no longer erases stored labels.** With the
+  0.2.2 embedding-model gate, a mistyped `TALKTHROUGH_DIARIZATION_EMB_MODEL`
+  plus `diarize=true` on a job with WORKING labels reached the amend path,
+  failed to build the engine, and overwrote good labels with
+  `available: false` (the 0.2.2 evaluation's one design caveat). The amend
+  now constructs the diarizer BEFORE the WAV extract and before any store
+  write: construction failures (bad model env, dead model download) raise a
+  clean tool error and the stored job stays byte-identical. The boundary,
+  documented in TROUBLESHOOTING: a failure *inside* diarization after
+  successful construction still degrades to `available: false` with the
+  reason, and a fresh (non-amend) run keeps degrading as before — there are
+  no labels to lose there.
+
+### Added
+
+- **The threshold-escalation note now reaches transcript-first agents.**
+  The ask-the-user note (over-detected threshold roster) lived only in the
+  `process_media` summary — an agent starting from `list_jobs` →
+  `get_transcript` never saw it (a 0.2.2 evaluation run mis-mapped a
+  speaker exactly that way). `get_transcript` headers now carry the same
+  byte-identical text as `diarization_note` next to the roster; absent on
+  jobs with an explicit `num_speakers` or a clean roster.
+- **`list_jobs` stops implying a headcount.** A diarized entry's
+  `"speakers"` field serves the raw detected count — on threshold-mode
+  over-detection that read as "28 people attended". Such entries now carry
+  `"speakers_with_30s_plus"` alongside; `"speakers"` itself is unchanged
+  for compatibility.
+- **Zero-hit searches explain themselves** (payload honesty, both notes new):
+  - `speaker=` with a label outside a diarized job's roster returns
+    `hits: []` plus a note naming the label and the valid range
+    (`label 'S99' is not in this job's roster (S1-S7)`) — an empty result
+    stops being indistinguishable from "that voice never said it".
+  - A multi-word query with zero hits gets a note explaining per-segment
+    word-AND matching; when the words DO meet across two adjacent segments
+    (the "recurring invites" class from the 0.2.2 evaluation), the note
+    names the spot: `the words appear together around t_ms=X … read
+    get_transcript there`. A cheap adjacent-pair scan, transcript only —
+    the hit contract, single-word behavior, and non-empty payloads are
+    byte-identical to 0.2.2.
+- **`longest_turn_ms` in every roster entry** (summary and `get_transcript`,
+  computed at serve time): the start of that speaker's longest turn — the
+  exact instant to pull frames for name plates / the active-speaker
+  highlight when mapping labels to people
+  (`get_frames(at_ms=<longest_turn_ms>)`).
+
+### Docs
+
+- Guidance pack, one regen: minutes/spec prompts now order "copy `t_wall`
+  VERBATIM from the payload — never compute it" (a 0.2.2 evaluation run
+  hand-derived one and slipped an hour); the meeting-actions screen check
+  is MANDATORY on video jobs and anchored at each label's
+  `longest_turn_ms` (uptake of the optional wording was probabilistic);
+  meeting-actions and triage-recording carry the homophone rule ("profit"
+  vs on-screen "Prophet" — trust OCR/frames for name spellings); the MCP
+  server `instructions` string gains one canon-keys sentence — an
+  experiment aimed at clients that read neither tool descriptions nor MCP
+  prompts, measured by the release battery.
+- TROUBLESHOOTING: "updated the plugin but the server is old" (running
+  sessions keep the MCP process until restart); the reprocess-cost rule
+  (explicit model change = full re-run, up to half the recording's duration
+  on a laptop — measured 65 min → 28.5 min); the fail-fast boundary above.
+
 ## [0.2.2] — 2026-07-18
 
 Search ergonomics and honesty fixes, each sourced from the v0.2.1 release

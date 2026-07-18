@@ -33,4 +33,5 @@ A markdown spec with these sections:
 5. **Open questions** — everything ambiguous or contested, with the quote that
    raised it. Do not resolve ambiguity yourself — surface it.
 
-Write the spec in the workshop's language; quotes stay verbatim.
+Copy `t_wall` values VERBATIM from the payload — never compute them from t_ms
+yourself. Write the spec in the workshop's language; quotes stay verbatim.

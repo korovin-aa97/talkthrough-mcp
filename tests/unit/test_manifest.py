@@ -28,6 +28,7 @@ from talkthrough_mcp.core.manifest import (
     save_manifest,
     search_manifest,
     slice_segments,
+    straddle_hint_t_ms,
 )
 from talkthrough_mcp.core.wallclock import WallClock
 
@@ -184,6 +185,40 @@ def test_speaker_filter_excludes_ocr_hits() -> None:
     assert "ocr" in {hit.source for hit in unfiltered}
     filtered = search_manifest(manifest, "dashboard", speaker="S1")
     assert filtered and all(hit.source == "transcript" for hit in filtered)
+
+
+# --- adjacent-pair straddle hint (v0.2.3 zero-hit note) -----------------------
+
+
+def test_straddle_hint_names_the_first_boundary_pair() -> None:
+    manifest = make_manifest()
+    # "dashboard settings" never lands in ONE segment but meets across 2|3
+    assert search_manifest(manifest, "dashboard settings") == []
+    assert straddle_hint_t_ms(manifest, "dashboard settings") == 2500
+    # same normalization as the search: case + ё/е fold
+    assert straddle_hint_t_ms(manifest, "DASHBOARD Settings") == 2500
+    # words that never meet even across adjacent segments
+    assert straddle_hint_t_ms(manifest, "login settings") is None
+    # single-word queries never produce the hint (behavior unchanged there)
+    assert straddle_hint_t_ms(manifest, "dashboard") is None
+
+
+def test_straddle_hint_ignores_ocr_text() -> None:
+    """Frames are not contiguous prose — OCR stays out of the pair scan."""
+    manifest = make_manifest()
+    # "scene settings" HITS ocr (one frame), so the note never fires for it —
+    # but even a zero-hit ocr-only combination must not produce a hint
+    assert straddle_hint_t_ms(manifest, "scene checkout") is None
+
+
+def test_straddle_hint_respects_the_speaker_filter() -> None:
+    manifest = _diarized_manifest()  # segments 1,2 → S1; segment 3 → S2
+    assert straddle_hint_t_ms(manifest, "login error") == 0  # pair 1|2, both S1
+    assert straddle_hint_t_ms(manifest, "login error", speaker="S1") == 0
+    assert straddle_hint_t_ms(manifest, "login error", speaker="S2") is None
+    # pair 2|3 spans two voices — not offered under either single-voice filter
+    assert straddle_hint_t_ms(manifest, "dashboard settings") == 2500
+    assert straddle_hint_t_ms(manifest, "dashboard settings", speaker="S1") is None
 
 
 def test_from_dict_tolerates_extra_free_form_versions(tmp_path: Path) -> None:

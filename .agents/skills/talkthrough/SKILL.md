@@ -50,7 +50,9 @@ install it: `claude mcp add -s user talkthrough -- uvx talkthrough-mcp`
 ## Timestamps
 
 Every timestamped result carries `t_ms` (video-relative) and, when the
-recording start is known, `t_wall` (ISO 8601 real time). Use `t_wall` to
+recording start is known, `t_wall` (ISO 8601 real time). Copy `t_wall`
+VERBATIM from the payload — never compute it from `t_ms` yourself
+(hand-derived wall-clocks drift by whole hours). Use `t_wall` to
 correlate remarks with server/app logs (±30 s grep window). If
 `wall_clock` is null or low-confidence, ask the user when the recording
 started and re-anchor: `process_media(path, recorded_at="<ISO 8601>",
@@ -70,11 +72,15 @@ method: `triage-recording` (screencast → findings JSON per the contract in
   by design — that error is expected, not a failure.
 - Speaker labels are anonymous (`S1`/`S2`, ordered by first voice). Mapping
   them to names is YOUR job: self-introductions, vocatives, the attendees
-  list — and on video jobs the screen itself (meeting-app name plates, the
-  recording's title card, the active-speaker highlight at that label's
-  `t_ms`). State the mapping explicitly and mark unmapped labels
-  "unidentified". `diarize=true` needs the `[diarization]` extra — its
-  absence produces an actionable install-hint error.
+  list — and on video jobs the screen check is MANDATORY: for every label
+  you map, `get_frames(at_ms=<that label's longest_turn_ms from the
+  roster>)` and read the meeting-app name plates, the recording's title
+  card, the active-speaker highlight BEFORE asserting the mapping. STT
+  homophones lie about name spellings (spoken "profit" vs on-screen
+  "Prophet") — trust OCR/frames over the transcript for names. State the
+  mapping explicitly and mark unmapped labels "unidentified".
+  `diarize=true` needs the `[diarization]` extra — its absence produces an
+  actionable install-hint error.
 - Findings/quotes must cite the narrator's exact words + `t_ms` (+ `t_wall`
   when known) + the frame files you actually inspected.
 - Low STT/vision confidence → surface a question; never silently guess.

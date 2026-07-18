@@ -29,6 +29,7 @@ from tests.integration.fixture_facts import (
 )
 
 from talkthrough_mcp.core import diarize, jobs, pipeline
+from talkthrough_mcp.core.errors import ValidationError
 from talkthrough_mcp.core.pipeline import ProcessResult
 
 pytestmark = [
@@ -151,7 +152,9 @@ def test_summary_carries_compact_diarization_block(two_voice: ProcessResult) -> 
     assert block["available"] is True
     assert block["detected_num_speakers"] == TWO_VOICE_NUM_SPEAKERS
     assert block["requested_num_speakers"] == TWO_VOICE_NUM_SPEAKERS
-    assert {"label", "talk_time_ms", "turn_count"} == set(block["speakers"][0])
+    assert {"label", "talk_time_ms", "turn_count", "longest_turn_ms"} == set(
+        block["speakers"][0]
+    )
     preview = summary["transcript"]["preview_segments"]
     assert any(entry.get("speaker") for entry in preview)
 
@@ -184,7 +187,17 @@ def test_get_transcript_serves_speakers_roster_and_prefixes(two_voice: ProcessRe
     payload = get_transcript(job_id)
     assert payload["diarized"] is True
     assert [entry["label"] for entry in payload["speakers"]] == ["S1", "S2"]
-    assert {"label", "talk_time_ms", "turn_count"} == set(payload["speakers"][0])
+    assert {"label", "talk_time_ms", "turn_count", "longest_turn_ms"} == set(
+        payload["speakers"][0]
+    )
+    # the anchor points INSIDE one of that speaker's stored turns
+    diarization = two_voice.manifest.transcript.diarization
+    assert diarization is not None
+    for entry in payload["speakers"]:
+        own_turns = [t for t in diarization.turns if t.speaker == entry["label"]]
+        assert any(t.t0_ms == entry["longest_turn_ms"] for t in own_turns)
+        longest = max(own_turns, key=lambda t: t.t1_ms - t.t0_ms)
+        assert entry["longest_turn_ms"] == longest.t0_ms
     speakers_seen = {entry.get("speaker") for entry in payload["segments"]}
     assert {"S1", "S2"} <= speakers_seen
 
@@ -332,3 +345,46 @@ def test_explicit_diarize_amends_on_embedding_model_change(
         str(TWO_VOICE_M4A), diarize_speakers=True, num_speakers=TWO_VOICE_NUM_SPEAKERS
     )
     assert settled.reused is True and settled.amended is False
+
+
+def test_failed_amend_construction_leaves_stored_labels_untouched(
+    two_voice: ProcessResult, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """v0.2.3 fail-fast — the 0.2.2-eval failure injection, end-to-end: a
+    fat-fingered TALKTHROUGH_DIARIZATION_EMB_MODEL + explicit diarize=true
+    on a job with WORKING labels errors out (store byte-identical) instead
+    of overwriting them with available:false; correcting the env amends
+    cleanly right after. Runs last: the recovery amend mutates the two-voice
+    job (back to the session's default embedding model)."""
+    good_emb = os.environ["TALKTHROUGH_DIARIZATION_EMB_MODEL"]
+    manifest_path = jobs.job_dir(two_voice.manifest.job_id) / "manifest.json"
+    stored = jobs.load_job(two_voice.manifest.job_id).transcript.diarization
+    assert stored is not None and stored.available
+    before = manifest_path.read_bytes()
+
+    monkeypatch.setenv("TALKTHROUGH_DIARIZATION_EMB_MODEL", "nemo_titanet_smal")
+
+    def boom(*args: object, **kwargs: object) -> None:
+        raise AssertionError("whisper must not re-run during a failed amend")
+
+    monkeypatch.setattr(pipeline.stt, "transcribe", boom)
+    with pytest.raises(ValidationError, match="nemo_titanet_smal"):
+        pipeline.process_media(
+            str(TWO_VOICE_M4A), diarize_speakers=True, num_speakers=TWO_VOICE_NUM_SPEAKERS
+        )
+    assert manifest_path.read_bytes() == before, "store must stay byte-identical"
+    survivor = jobs.load_job(two_voice.manifest.job_id).transcript.diarization
+    assert survivor is not None and survivor.available
+    assert [stat.label for stat in survivor.speakers] == ["S1", "S2"]
+
+    # recovery: fixed env (differs from the stored wespeaker labels) → the
+    # same call now amends and lands fresh labels
+    monkeypatch.setenv("TALKTHROUGH_DIARIZATION_EMB_MODEL", good_emb)
+    recovered = pipeline.process_media(
+        str(TWO_VOICE_M4A), diarize_speakers=True, num_speakers=TWO_VOICE_NUM_SPEAKERS
+    )
+    assert recovered.reused is True and recovered.amended is True
+    after = recovered.manifest.transcript.diarization
+    assert after is not None and after.available
+    assert after.embedding_model == good_emb
+    assert [stat.label for stat in after.speakers] == ["S1", "S2"]
