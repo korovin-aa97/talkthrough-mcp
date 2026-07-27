@@ -5,6 +5,10 @@ checkout bug (no narration — like Windows Game Bar clips, which don't capture
 the microphone by default) goes in; an evidence-backed GitHub issue draft
 comes out.
 
+**[▶ Video: the same scenario, narrated (1:18)](https://youtu.be/nHfGfEiVdE8)**
+— the same demo app processed live in Claude Code, this time with the user
+talking over the recording; the spoken words end up quoted in the report.
+
 **Transparent labeling: this is a scripted reproduction of a demo-app bug.**
 The app is a single self-contained page (`checkout-demo.html`, a fake shop —
 not a real store), the reproduction is driven by Playwright
