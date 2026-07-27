@@ -32,7 +32,8 @@ install it: `claude mcp add -s user talkthrough -- uvx talkthrough-mcp`
    just "summarize", speaker structure is part of meeting analysis — and — whenever the
    headcount is known — `num_speakers=N` (the main accuracy lever): segments
    get `S1`/`S2`/… labels and the summary a talk-time roster. On an
-   already-processed job this amends in seconds without re-transcribing.
+   already-processed job the amend re-runs ONLY diarization (no
+   re-transcription) — still minutes on long recordings.
 2. **Orient**: `get_transcript(job_id)` (paginate via `next_start_ms` when
    `truncated`) or `search(job_id, "<distinctive word>")` to jump straight
    to the relevant moments (searches speech AND on-screen OCR text).
@@ -61,10 +62,11 @@ force=true)`.
 ## Packaged workflows (server prompts)
 
 Prefer the server prompts when the task matches — they encode the full
-method: `triage-recording` (screencast → findings JSON per the contract in
-`examples/output-contract.schema.json`), `spec-from-workshop`,
-`backlog-from-demo`, `meeting-actions` (audio-only friendly),
-`correlate-with-logs`.
+method: `bug` (one recording → evidence-backed GitHub issue draft; silent,
+narration-free recordings welcome), `triage-recording` (screencast →
+findings JSON per the contract in `examples/output-contract.schema.json`),
+`spec-from-workshop`, `backlog-from-demo`, `meeting-actions` (audio-only
+friendly), `correlate-with-logs`.
 
 ## Rules of thumb
 

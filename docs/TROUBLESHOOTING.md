@@ -93,8 +93,10 @@ same file is an instant re-call, and `list_jobs()` finds the job.
 - Budget note: an explicit model change reprocesses the WHOLE job (STT +
   frames + OCR + diarization), not just the transcript — plan for up to half
   the recording's own duration on a laptop (measured: a 65-minute 1080p
-  meeting took 28.5 minutes). Only a diarization-only change amends in
-  seconds.
+  meeting took 28.5 minutes). A diarization-only change amends without
+  re-transcribing, but the diarization stage itself still re-scans the full
+  audio — minutes on long recordings (measured: ~12 minutes on a large
+  meeting), not seconds.
 
 ## OCR misses on-screen text
 

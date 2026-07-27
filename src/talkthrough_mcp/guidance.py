@@ -9,7 +9,7 @@ Two mechanisms, both mandatory:
    tool). One-liners only — the full tool list lands in every client's
    context window.
 
-2. Server-side MCP prompts (``PROMPT_TEMPLATES``): five workflow prompts
+2. Server-side MCP prompts (``PROMPT_TEMPLATES``): six workflow prompts
    invocable as slash commands from MCP clients. The files in
    ``examples/prompts/`` render from these same templates — a unit test
    pins them together so they cannot drift.
@@ -37,7 +37,7 @@ Examples:
 - meetings: model="large-v3-turbo" + vocabulary=<attendees, terms> + num_speakers=N — turbo's extra cost is trivial
 - process_media(path="/tmp/standup.m4a") — audio-only: transcript tools work, frame tools will error
 - process_media(path="/rec/panel.mov", diarize=true, num_speakers=4) — headcount known? ALWAYS pass it: best accuracy
-- job already processed + diarize=true → speakers are added in place, whisper does NOT re-run (fast amend)
+- job already processed + diarize=true → amend re-runs ONLY diarization (whisper reused; long files: minutes)
 - error mentions [diarization] → the extra is missing: install via uvx "talkthrough-mcp[diarization]"
 - know the attendees? process_media(path=..., vocabulary="Anastasia, Evgenii, OKR") — names+jargon survive STT
 - user: "analyze/summarize this meeting" → include diarize=true — speaker structure is not optional extra credit
@@ -190,6 +190,7 @@ TOOL_NAMES = tuple(TOOL_DESCRIPTIONS)
 # --- server prompts ----------------------------------------------------------
 
 PROMPT_NAMES = (
+    "bug",
     "triage-recording",
     "spec-from-workshop",
     "backlog-from-demo",
@@ -198,6 +199,11 @@ PROMPT_NAMES = (
 )
 
 PROMPT_DESCRIPTIONS: dict[str, str] = {
+    "bug": (
+        "Turn one screen recording of a bug into an evidence-backed GitHub issue "
+        "draft (quote, frames, OCR identifiers, wall-clock; silent recordings "
+        "work too)."
+    ),
     "triage-recording": (
         "Turn a narrated screencast into precise, evidence-backed findings JSON "
         "(bug / feature / question routing with frame evidence)."
@@ -219,6 +225,7 @@ PROMPT_DESCRIPTIONS: dict[str, str] = {
 }
 
 _PROMPT_CONTEXT_LABELS: dict[str, str] = {
+    "bug": "Product context",
     "triage-recording": "Product context",
     "spec-from-workshop": "Feature name",
     "backlog-from-demo": "Project context",
@@ -227,6 +234,65 @@ _PROMPT_CONTEXT_LABELS: dict[str, str] = {
 }
 
 PROMPT_TEMPLATES: dict[str, str] = {
+    "bug": """\
+You are turning a recorded bug into ONE evidence-backed GitHub issue draft.
+The recording was processed by talkthrough as job `{job_id}`. Evidence comes
+before everything else — and this is a bug report, not a fix: change no code.
+{context_section}
+## Method — evidence first
+
+1. Orient. Short recording: get_transcript(job_id="{job_id}") and read it
+   whole. Long recording: search(job_id="{job_id}", query="<distinctive
+   word>") (error text, feature names) and read only the relevant ranges.
+   If the job_id looks wrong, verify with list_jobs().
+2. A silent recording (no narration) is a VALID input, not an error: the
+   transcript is empty, but frames and on-screen text are still indexed —
+   orient with search (OCR hits) and get_frames across the timeline instead.
+3. Pick ONE bug — the highest-confidence, highest-severity problem the
+   evidence supports. Mention anything else in a single "Also observed" line
+   at the end of the draft; do not investigate it.
+4. Evidence bundle: get_moment(job_id="{job_id}", start_ms=<t0-2000>,
+   end_ms=<t1+2000>) around the key remark or on-screen failure. Inspect at
+   least one returned frame with your own eyes. Describe the observed state
+   from the pixels and OCR text — never from imagination.
+5. Small text unreadable (error codes, request IDs, on-screen log lines)?
+   extract_frame(job_id="{job_id}", at_ms=<exact ms>, crop=<region>) for a
+   native-resolution look before quoting it.
+
+## Checkpoint — write this block before drafting
+
+- Heard: the narrator's exact words + timestamp (or "silent recording").
+- Saw: the concrete visible state + OCR identifiers (error text, codes, IDs).
+- When: t_wall + its confidence (or "relative timestamp only").
+- Expected: the expected behavior, as stated or implied by the recording.
+
+## Optional — log correlation
+
+Only when the user pointed you at logs you can actually read from here. Grep
+the t_wall ± 30 s window; quote matching lines VERBATIM — never invent or
+paraphrase a log line. For deeper multi-moment correlation, switch to the
+correlate-with-logs prompt instead.
+
+## Output — the issue draft
+
+Return a markdown issue draft; do NOT create an issue anywhere:
+
+- **Title** — one line, symptom first.
+- **Observed** — what actually happened, from pixels + narration.
+- **Expected** — what should have happened.
+- **Reproduction steps** — numbered, exactly as the recording shows them.
+- **Severity** — P1 (flow broken) | P2 (default) | P3 (polish), one line why.
+- **Evidence** — quote + t_ms (+ t_wall when known), frame_refs (the frame
+  files you actually looked at), OCR identifiers, the matching log line when
+  one was found.
+
+Rules: ambiguous evidence → STOP and ask your user ONE concrete question
+instead of guessing. Copy t_wall values VERBATIM from the payload — never
+compute them from t_ms yourself. This is not a code review: report what the
+recording shows, not what the codebase might contain. Write the draft in the
+recording's language unless the user asks otherwise; keep every quote
+verbatim in its original language.
+""",
     "triage-recording": """\
 You are a meticulous triage agent. A narrated screen recording was processed by
 talkthrough as job `{job_id}`. Turn it into precise, evidence-backed findings.

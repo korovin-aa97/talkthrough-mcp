@@ -400,7 +400,7 @@ def process_media(
             manifest=manifest_hit, reused=True, elapsed_s=time.monotonic() - started
         )
 
-    with jobs.job_lock(job_id):
+    with jobs.job_lock(job_id), jobs.partial_job_cleanup(job_id):
         # Re-check under the lock: a concurrent call may have just finished it.
         manifest_hit = reusable()
         if manifest_hit is not None:
@@ -559,6 +559,20 @@ def process_media(
 
 SUMMARY_ROSTER_CAP = 12
 SUBSTANTIAL_TALK_MS = 30_000
+# Above this, an unconstrained cluster count stops being merely unreliable
+# and becomes implausible for one recording (tester report, 2026-07-27: a
+# large meeting "detected" 123 speakers) — the note escalates accordingly.
+IMPLAUSIBLE_SPEAKER_COUNT = 16
+
+# The honest amend contract, shared by every note that recommends a re-run:
+# only diarization re-runs, but on long recordings that still takes minutes
+# (segmentation + embeddings re-scan the whole audio) — "takes seconds" was
+# falsified by a ~12-minute amend on a real meeting (2026-07-27).
+_AMEND_HONESTY = (
+    "re-run process_media(diarize=true, num_speakers=N) — only the "
+    "diarization stage is re-run (transcription is reused); on long "
+    "recordings this still takes minutes"
+)
 
 
 def substantial_speaker_count(diarization: Diarization) -> int:
@@ -572,22 +586,33 @@ def threshold_escalation_note(diarization: Diarization) -> str | None:
     """The ask-the-user note for threshold-mode over-detection, or None.
 
     Fires when threshold clustering (no ``requested_num_speakers``) detected
-    more clusters than have substantial talk time. ONE text, byte-identical
-    on every surface that serves it (``process_media`` summary,
-    ``get_transcript`` header) — an agent starting from either entry point
-    must meet the same escalation contract; a summary-only note never reaches
-    transcript-first agents.
+    more clusters than have substantial talk time — and escalates to the
+    stronger "implausible" wording when the count alone exceeds
+    ``IMPLAUSIBLE_SPEAKER_COUNT`` (then the substantial-count comparison is
+    irrelevant: no single recording has 17+ real speakers detected reliably
+    by unconstrained clustering). ONE text, byte-identical on every surface
+    that serves it (``process_media`` summary, ``get_transcript`` header) —
+    an agent starting from either entry point must meet the same escalation
+    contract; a summary-only note never reaches transcript-first agents.
     """
     if not diarization.available or diarization.requested_num_speakers is not None:
         return None
-    if substantial_speaker_count(diarization) >= (diarization.detected_num_speakers or 0):
+    detected = diarization.detected_num_speakers or 0
+    if detected > IMPLAUSIBLE_SPEAKER_COUNT:
+        return (
+            f"unconstrained clustering detected {detected} speaker clusters — an "
+            "implausible count: it likely over-split the speakers, and it is NOT "
+            "a headcount. ASK YOUR USER how many people actually spoke (the "
+            "talk_time_ms roster above shows which voices dominate), then "
+            + _AMEND_HONESTY
+        )
+    if substantial_speaker_count(diarization) >= detected:
         return None
     return (
         "threshold clustering over-detected on this recording — the cluster "
         "count is unreliable and is NOT a headcount. ASK YOUR USER how many "
         "people actually spoke (the talk_time_ms roster above shows which "
-        "voices dominate), then re-run process_media(diarize=true, "
-        "num_speakers=N) — the amend takes seconds, whisper is not re-run"
+        "voices dominate), then " + _AMEND_HONESTY
     )
 
 

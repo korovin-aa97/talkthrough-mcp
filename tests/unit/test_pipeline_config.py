@@ -450,6 +450,56 @@ def test_whisper_loads_from_local_cache_first(monkeypatch: pytest.MonkeyPatch) -
     assert calls == [True, None], "cache miss must fall back to a one-time download"
 
 
+# --- pre-STT failure cleanup (v0.2.4) ------------------------------------------
+
+
+def test_pre_stt_failure_cleans_up_the_partial_dir_and_retry_completes(
+    isolated_home: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A failure before the manifest exists (the reported case: cold-start
+    model download) must remove the lock-only job dir; a later live retry
+    starts clean and completes the same job_id."""
+    from talkthrough_mcp.core import jobs, pipeline
+    from talkthrough_mcp.core.probe import MediaInfo
+
+    media = tmp_path / "clip.mp4"
+    media.write_bytes(b"fake-video-bytes" * 1000)
+    job_id = jobs.compute_job_id(media)
+
+    def boom(path: Path) -> MediaInfo:
+        raise ToolFailureError("simulated cold-start failure before STT")
+
+    monkeypatch.setattr(pipeline, "probe_media", boom)
+    with pytest.raises(ToolFailureError):
+        pipeline.process_media(str(media))
+    assert not jobs.job_dir(job_id).exists(), "partial dir (job.lock only) must be removed"
+    assert jobs.list_jobs() == []
+
+    # retry: a stream-less probe result walks the whole pipeline to a manifest
+    # without needing ffmpeg/whisper — the directory is recreated and completed
+    def probe_ok(path: Path) -> MediaInfo:
+        stat = media.stat()
+        return MediaInfo(
+            path=str(media),
+            filename=media.name,
+            size_bytes=stat.st_size,
+            duration_s=5.0,
+            has_video=False,
+            has_audio=False,
+            width=0,
+            height=0,
+            video_codec="",
+            mtime_epoch=stat.st_mtime,
+        )
+
+    monkeypatch.setattr(pipeline, "probe_media", probe_ok)
+    result = pipeline.process_media(str(media))
+    assert result.reused is False
+    assert result.manifest.job_id == job_id
+    assert jobs.job_exists(job_id)
+    assert [m.job_id for m in jobs.list_jobs()] == [job_id]
+
+
 # --- dusty-roster budget (threshold-mode honesty) ------------------------------
 
 
@@ -487,7 +537,7 @@ def test_roster_payload_caps_and_counts_hidden() -> None:
 def test_summary_threshold_mode_escalates_to_the_user() -> None:
     """v0.2.2: over-detection no longer claims a 'likely headcount' (an
     external eval falsified that: said 4, truth 2) — the note instructs the
-    agent to ASK THE USER and names the fast num_speakers amend."""
+    agent to ASK THE USER and names the num_speakers amend honestly."""
     from talkthrough_mcp.core.pipeline import _summarize_diarization
 
     block = _summarize_diarization(dusty_diarization(majors=5, dust=118))
@@ -496,7 +546,7 @@ def test_summary_threshold_mode_escalates_to_the_user() -> None:
     assert "NOT a headcount" in note
     assert "ASK YOUR USER" in note
     assert "num_speakers=N" in note
-    assert "whisper is not re-run" in note
+    assert "transcription is reused" in note
     assert "likely headcount" not in note  # the falsified claim is gone
     assert block["speakers_truncated"] == 111
 
@@ -504,6 +554,42 @@ def test_summary_threshold_mode_escalates_to_the_user() -> None:
     exact.requested_num_speakers = 5
     block = _summarize_diarization(exact)
     assert "note" not in block and "speakers_with_30s_plus" not in block
+
+
+def test_implausible_cluster_count_gets_the_stronger_note() -> None:
+    """v0.2.4 honesty: >16 unconstrained clusters is called implausible
+    outright (a real meeting 'detected' 123), and every amend mention drops
+    the falsified 'takes seconds' claim (a real amend took ~12 minutes)."""
+    from talkthrough_mcp.core.pipeline import threshold_escalation_note
+
+    note = threshold_escalation_note(dusty_diarization(majors=5, dust=118))
+    assert note is not None
+    assert "123 speaker clusters" in note
+    assert "implausible" in note
+    assert "likely over-split" in note
+    assert "transcription is reused" in note
+    assert "still takes minutes" in note
+    assert "takes seconds" not in note
+
+
+def test_implausible_note_fires_even_when_every_cluster_is_substantial() -> None:
+    """The count alone triggers it: 17 clusters with 30s+ each would silence
+    the substantial-count comparison, but 17+ is implausible regardless."""
+    from talkthrough_mcp.core.pipeline import threshold_escalation_note
+
+    note = threshold_escalation_note(dusty_diarization(majors=17, dust=0))
+    assert note is not None and "implausible" in note
+
+
+def test_boundary_sixteen_clusters_keeps_the_plain_escalation_text() -> None:
+    from talkthrough_mcp.core.pipeline import threshold_escalation_note
+
+    note = threshold_escalation_note(dusty_diarization(majors=10, dust=6))
+    assert note is not None
+    assert "implausible" not in note
+    assert "threshold clustering over-detected" in note
+    assert "transcription is reused" in note
+    assert "takes seconds" not in note
 
 
 def test_threshold_escalation_note_is_one_text_on_every_surface() -> None:

@@ -6,13 +6,13 @@
   },
   "metadata": {
     "description": "Marketplace for the talkthrough plugin: narrated screen recordings in, agent-ready evidence out.",
-    "version": "0.2.3"
+    "version": "0.2.4"
   },
   "plugins": [
     {
       "name": "talkthrough",
       "source": "./integrations/claude-code",
-      "description": "Turn narrated screen recordings into filed bugs, specs, backlogs and meeting actions — local Whisper + keyframes + OCR + wall-clock via the talkthrough MCP server."
+      "description": "Turn screen recordings into filed bugs, specs, backlogs and meeting actions — local Whisper transcript + keyframes + OCR + wall-clock evidence via the talkthrough MCP server."
     }
   ]
 }

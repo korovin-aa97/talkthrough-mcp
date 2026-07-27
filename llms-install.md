@@ -71,8 +71,8 @@ will answer with the one-line reinstall hint — relay it verbatim.
 
 1. The client should list 7 tools: `process_media`, `get_transcript`,
    `get_frames`, `get_moment`, `search`, `extract_frame`, `list_jobs`, and
-   5 prompts (`triage-recording`, `spec-from-workshop`, `backlog-from-demo`,
-   `meeting-actions`, `correlate-with-logs`).
+   6 prompts (`bug`, `triage-recording`, `spec-from-workshop`,
+   `backlog-from-demo`, `meeting-actions`, `correlate-with-logs`).
 2. Smoke test: call `list_jobs()` — an empty result is a healthy first run.
 3. Full test (optional): `process_media(path="<any short local .mp4/.mov/.m4a>")`
    → expect a summary with `job_id`. First run downloads the whisper model;
