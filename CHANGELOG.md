@@ -57,7 +57,7 @@ schema gains no fields, no new tools, no new dependencies.
 ### Docs
 
 - README hero: "Don't write a bug report. Record it." + the new demo GIF
-  (27 s `/talkthrough:bug` storyline); neutral factual descriptions synced
+  (30 s `/talkthrough:bug` storyline); neutral factual descriptions synced
   across `pyproject.toml`, `server.json`, and both plugin manifests.
 
 ## [0.2.3] — 2026-07-18
