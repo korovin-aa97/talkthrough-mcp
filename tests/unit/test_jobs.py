@@ -121,7 +121,11 @@ def test_partial_job_cleanup_context_removes_only_manifestless_dirs(
 
 def test_waiter_retakes_the_lock_after_holder_cleans_up(isolated_home: Path) -> None:
     """A waiter blocked on the old lock file must notice the cleanup and
-    retake the lock on the fresh path — never proceed on the orphaned inode."""
+    retake the lock on the fresh path — never proceed on the orphaned inode.
+
+    POSIX-only: the Windows lock degrades to a no-op by design, so there is
+    no blocking (and no ordering) to assert there."""
+    pytest.importorskip("fcntl")
     import threading
     import time
 
