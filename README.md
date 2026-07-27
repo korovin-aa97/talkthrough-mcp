@@ -25,6 +25,10 @@ Also works for meetings, workshops, product demos, and production incidents.
 keyframes · OCR · wall-clock), the evidence checkpoint is assembled, and the
 bug lands in the tracker with the screenshot attached.*
 
+**[▶ Watch the demo with sound (1:18)](https://youtu.be/nHfGfEiVdE8)** — a
+real, unedited session: a narrated recording goes in, a ready-to-file
+`bug-report.md` comes out.
+
 ## Quickstart
 
 One command, no system dependencies: ffmpeg falls back to a bundled build,
