@@ -4,6 +4,62 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions follow
 [SemVer](https://semver.org/).
 
+## [0.2.4] — 2026-07-27
+
+A growth-and-honesty micro-release: one new workflow prompt, a hygiene fix
+in the failure path, two diarization honesty fixes sourced from a real
+tester report, and a positioning refresh (README hero, new demo GIF, a
+shareable benchmarks section). Fully additive: the `talkthrough-manifest/v1`
+schema gains no fields, no new tools, no new dependencies.
+
+### Added
+
+- **`bug` workflow prompt** (`/talkthrough:bug` in Claude Code) — turn ONE
+  screen recording into an evidence-backed GitHub issue draft: orient
+  (transcript or search), pick the single highest-confidence bug, pull the
+  `get_moment` evidence bundle, write a Heard/Saw/When/Expected checkpoint,
+  then emit the draft (Title / Observed / Expected / Reproduction steps /
+  Severity / Evidence with quote + `t_ms` + frame refs + OCR identifiers).
+  Optional log correlation when logs are locally readable — exact lines
+  quoted verbatim, deep correlation deferred to `correlate-with-logs`.
+  Silent (narration-free) recordings — Game Bar's default — are a valid
+  input: the prompt routes them through OCR search and frames. No issue is
+  ever created online; the draft is the output. End-to-end example with a
+  real silent recording: `examples/bug-from-silent-recording/`.
+- **Implausible speaker-count warning.** Unconstrained (no `num_speakers`)
+  clustering that detects more than 16 clusters now says so outright:
+  "an implausible count: it likely over-split the speakers, and it is NOT
+  a headcount" — same ask-the-user escalation, served byte-identical on
+  the summary and `get_transcript` surfaces (a real large meeting
+  "detected" 123 speakers; the old note undersold how wrong that number
+  was).
+- **`benchmarks/`** — the 150-run model battery repackaged as a shareable
+  summary: score-by-task dot plot (light/dark), three findings, honest
+  limits; linked from the README. Full matrices stay in
+  `docs/MODEL-NOTES.md`.
+
+### Fixed
+
+- **A failure before the manifest exists no longer leaves a partial job
+  directory behind** (tester report: a failed cold-start model download
+  left a `job.lock`-only directory — invisible to `list_jobs` and
+  harmless, but litter). The pre-manifest failure path now removes the
+  directory; `job_lock` re-takes the lock on a fresh inode when the old
+  holder cleaned up, so concurrent waiters keep their retry semantics.
+  Completed jobs and amend targets (manifest present) are never touched.
+- **"Fast amend" claims corrected everywhere.** The amend path re-runs
+  ONLY diarization (whisper/frames/OCR are reused) — but the diarization
+  stage itself re-scans the full audio, which takes minutes on long
+  recordings (~12 min measured on a large meeting), not "seconds". The
+  escalation note, `search`'s undiarized-job note, tool guidance, skill
+  text, and TROUBLESHOOTING now say so honestly.
+
+### Docs
+
+- README hero: "Don't write a bug report. Record it." + the new demo GIF
+  (27 s `/talkthrough:bug` storyline); neutral factual descriptions synced
+  across `pyproject.toml`, `server.json`, and both plugin manifests.
+
 ## [0.2.3] — 2026-07-18
 
 Fail-fast and honesty-contour fixes, sourced from the same-day external
