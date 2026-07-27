@@ -66,7 +66,11 @@ _V5_REC_PACKS = frozenset(
 
 
 class OcrEngine(Protocol):  # pragma: no cover - typing only
-    def __call__(self, content: str) -> Any: ...
+    # Positional-only (`/`): RapidOCR names the argument `img_content`, and a
+    # named protocol parameter would demand that exact keyword. rapidocr 3.9.2
+    # shipped `py.typed`, which is what first made the mismatch visible — the
+    # frame path has always been passed positionally.
+    def __call__(self, content: str, /) -> Any: ...
 
 
 def ocr_enabled() -> bool:
