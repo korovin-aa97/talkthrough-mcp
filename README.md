@@ -7,30 +7,23 @@
 [![python](https://img.shields.io/badge/python-3.11%E2%80%933.13-blue.svg)](pyproject.toml)
 [![PyPI](https://img.shields.io/pypi/v/talkthrough-mcp.svg)](https://pypi.org/project/talkthrough-mcp/)
 
-[Quickstart](#quickstart) · [Tools](#tools) · [FAQ](#faq) ·
-[Troubleshooting](docs/TROUBLESHOOTING.md) · [Changelog](CHANGELOG.md) ·
-[Contributing](CONTRIBUTING.md)
+[Quickstart](#quickstart) · [Tools](#tools) · [Benchmarks](benchmarks/) ·
+[FAQ](#faq) · [Troubleshooting](docs/TROUBLESHOOTING.md) ·
+[Changelog](CHANGELOG.md) · [Contributing](CONTRIBUTING.md)
 
-**Feedback ingestion for AI agents.** Record your screen and talk; your agent
-does the rest — files the bugs, writes the spec, builds the backlog.
+# Don't write a bug report. Record it.
 
-![talkthrough demo: process a narrated recording, then query it lazily](assets/demo.gif)
+Give Claude Code or Codex a narrated `.mov`/`.mp4` — talkthrough turns it
+into searchable transcript, exact frames, OCR and wall-clock timestamps,
+locally — so your agent files an evidence-backed issue or investigates the fix.
 
-`talkthrough-mcp` is a local-first MCP server that turns a narrated screen
-recording (or any video/audio file) into agent-ready structured data:
-timestamped transcript segments, optional who-said-what speaker labels,
-scene-change keyframes, OCR'd on-screen text, and wall-clock anchoring.
-Everything is served through lazy retrieval tools, so a 30-minute recording
-never floods the model context — the agent pulls exactly the transcript
-slice, moment bundle, or frame it needs.
+Also works for meetings, workshops, product demos, and production incidents.
 
-There is no LLM inside the server and no cloud anywhere in the path: ffmpeg,
-faster-whisper, and RapidOCR run on your machine, and the calling agent brings
-the intelligence. What makes it different from screen-recorder SaaS and
-video-analyzer MCPs: it works on arbitrary local files, it ships the agent
-workflows (server prompts + example agents), and it anchors every timestamp to
-**wall-clock time** — so "the moment I said the checkout hung" maps straight to
-the right window of your server logs.
+![talkthrough demo: a recorded checkout bug goes through /talkthrough:bug — indexed locally, evidence found, and filed as an issue](assets/demo.gif)
+
+*One `/talkthrough:bug` run: the recording is indexed locally (transcript ·
+keyframes · OCR · wall-clock), the evidence checkpoint is assembled, and the
+bug lands in the tracker with the screenshot attached.*
 
 ## Quickstart
 
@@ -52,7 +45,7 @@ only prerequisite is [uv](https://docs.astral.sh/uv/) (`brew install uv` or
 Two install paths — **pick one**, not both (the plugin already includes
 the server; installing both would register it twice):
 
-**Server only** — the 7 tools + 5 prompts, and nothing else on your
+**Server only** — the 7 tools + 6 prompts, and nothing else on your
 system. Choose this for a minimal setup, or when you manage MCP servers
 yourself across several clients:
 
@@ -61,9 +54,10 @@ claude mcp add -s user talkthrough -- uvx "talkthrough-mcp[diarization]"
 ```
 
 **Full plugin** — the same server, plus native slash commands
-(`/talkthrough:triage-recording`, …) that handle the ceremony for you,
-a ready-made triage subagent, and an agent skill that teaches Claude the
-workflow. Choose this for the best out-of-the-box experience:
+(`/talkthrough:bug`, `/talkthrough:triage-recording`, …) that handle the
+ceremony for you, a ready-made triage subagent, and an agent skill that
+teaches Claude the workflow. Choose this for the best out-of-the-box
+experience:
 
 ```
 /plugin marketplace add korovin-aa97/talkthrough-mcp
@@ -363,6 +357,7 @@ without extra prompting.
 
 | Prompt | Workflow |
 |---|---|
+| `bug` | One recording → evidence-backed GitHub issue draft (silent, narration-free recordings work too) |
 | `triage-recording` | Narrated screencast → precise findings JSON (bug/feature/question routing, frame evidence) |
 | `spec-from-workshop` | Recorded workshop → structured spec with quoted decisions and open questions |
 | `backlog-from-demo` | Product demo → prioritized backlog with timestamped evidence |
@@ -615,12 +610,12 @@ mobile screencasts, ops incidents, meetings, any file — with no account, and
 correlates with *server-side* logs via wall-clock time.
 
 **Which agent model do I need to drive this?**
-We ran a 150-run battery against v0.2.0 — 6 model configs (Claude haiku/sonnet/opus, Codex gpt-5.5 at two reasoning efforts + gpt-5.4-mini) × 10 verbatim-identical task prompts × 5 real recordings (30 s–73 min, RU/EN, 1–5 speakers), scored by a strict LLM judge plus mechanical evidence checks. Short version: point lookups and search ("who said X and when") worked on **every** tier tested; minutes-with-owners and evidence-disciplined name mapping want the top tiers; reasoning effort moved results more than model family. Full matrices — score × time × tokens on every intersection — in [docs/MODEL-NOTES.md](docs/MODEL-NOTES.md).
+We ran a 150-run battery against v0.2.0 — 6 model configs (Claude haiku/sonnet/opus, Codex gpt-5.5 at two reasoning efforts + gpt-5.4-mini) × 10 verbatim-identical task prompts × 5 real recordings (30 s–73 min, RU/EN, 1–5 speakers), scored by a strict LLM judge plus mechanical evidence checks — and targeted regression batteries on every release since. Short version: point lookups and search ("who said X and when") worked on **every** tier tested; minutes-with-owners and evidence-disciplined name mapping want the top tiers; reasoning effort moved results more than model family. Chart + takeaways: [benchmarks/](benchmarks/); full matrices — score × time × tokens on every intersection — in [docs/MODEL-NOTES.md](docs/MODEL-NOTES.md).
 
 **Can't I just script ffmpeg + whisper myself?**
 Yes — that's exactly this pipeline. What you'd be rebuilding: scene-change
 detection with perceptual dedup, OCR, transcript+OCR search, the wall-clock
-ladder, MCP tools with embedded usage examples, five workflow prompts, and a
+ladder, MCP tools with embedded usage examples, six workflow prompts, and a
 findings contract. One `uvx` command instead of an afternoon of glue.
 
 **Is it really local? What leaves my machine?**

@@ -19,3 +19,18 @@ tests/fixtures/_build/
 # OS / IDE noise
 .DS_Store
 .idea/
+.claude/settings.local.json
+
+# local working files at the repo root — never commit:
+# raw recordings / media dumps (94 MB .mov etc.)
+/*.mov
+/*.mp4
+/*.m4a
+/*.pdf
+/Screen Recording*
+# demo-GIF staging (sources + generators live here until promoted to assets/)
+/media-staging/
+# internal evaluation / planning notes (contain unsanitized names & meetings)
+/talkthrough-mcp-*.md
+/findings-*.md
+/plan-*.md
