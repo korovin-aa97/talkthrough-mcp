@@ -1,0 +1,79 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="960" height="620" viewBox="0 0 960 620" font-family="system-ui, -apple-system, 'Segoe UI', sans-serif">
+<rect width="960" height="620" fill="#fcfcfb" rx="8"/>
+<text x="32" y="40" font-size="19" font-weight="600" fill="#0b0b0b">Which jobs need which agent tier?</text>
+<text x="32" y="62" font-size="13" fill="#52514e">Mean judge score per task · 6 runner configs · 132 judged runs on real recordings (30 s – 73 min, RU/EN) · v0.2.0 battery, July 2026</text>
+<circle cx="37" cy="84" r="5" fill="#2a78d6"/>
+<text x="48" y="88" font-size="12.5" fill="#52514e">Claude — haiku · sonnet · opus (defaults)</text>
+<circle cx="335" cy="84" r="5" fill="#eb6834"/>
+<text x="346" y="88" font-size="12.5" fill="#52514e">Codex — gpt-5.5 medium · gpt-5.5 high · gpt-5.4-mini low</text>
+<line x1="400.0" y1="118" x2="400.0" y2="518" stroke="#e1e0d9" stroke-width="1"/>
+<text x="400.0" y="538" font-size="12" fill="#898781" text-anchor="middle">0</text>
+<line x1="525.0" y1="118" x2="525.0" y2="518" stroke="#e1e0d9" stroke-width="1"/>
+<text x="525.0" y="538" font-size="12" fill="#898781" text-anchor="middle">0.5</text>
+<line x1="650.0" y1="118" x2="650.0" y2="518" stroke="#e1e0d9" stroke-width="1"/>
+<text x="650.0" y="538" font-size="12" fill="#898781" text-anchor="middle">1</text>
+<line x1="775.0" y1="118" x2="775.0" y2="518" stroke="#e1e0d9" stroke-width="1"/>
+<text x="775.0" y="538" font-size="12" fill="#898781" text-anchor="middle">1.5</text>
+<line x1="900.0" y1="118" x2="900.0" y2="518" stroke="#e1e0d9" stroke-width="1"/>
+<text x="900.0" y="538" font-size="12" fill="#898781" text-anchor="middle">2</text>
+<text x="650.0" y="562" font-size="12" fill="#898781" text-anchor="middle">mean judge score — 0 failed/fabricated · 1 partial · 2 correct and fully evidenced</text>
+<text x="384" y="147.0" font-size="13" fill="#0b0b0b" text-anchor="end">Point lookup: who said X, and when</text>
+<circle cx="893.0" cy="135.0" r="5" fill="#2a78d6" stroke="#fcfcfb" stroke-width="2"/>
+<circle cx="900.0" cy="135.0" r="5" fill="#2a78d6" stroke="#fcfcfb" stroke-width="2"/>
+<circle cx="907.0" cy="135.0" r="5" fill="#2a78d6" stroke="#fcfcfb" stroke-width="2"/>
+<circle cx="893.0" cy="151.0" r="5" fill="#eb6834" stroke="#fcfcfb" stroke-width="2"/>
+<circle cx="900.0" cy="151.0" r="5" fill="#eb6834" stroke="#fcfcfb" stroke-width="2"/>
+<circle cx="907.0" cy="151.0" r="5" fill="#eb6834" stroke="#fcfcfb" stroke-width="2"/>
+<text x="384" y="197.0" font-size="13" fill="#0b0b0b" text-anchor="end">Bug triage → evidence-backed findings JSON</text>
+<circle cx="650.0" cy="185.0" r="5" fill="#2a78d6" stroke="#fcfcfb" stroke-width="2"/>
+<circle cx="896.5" cy="185.0" r="5" fill="#2a78d6" stroke="#fcfcfb" stroke-width="2"/>
+<circle cx="903.5" cy="185.0" r="5" fill="#2a78d6" stroke="#fcfcfb" stroke-width="2"/>
+<circle cx="893.0" cy="201.0" r="5" fill="#eb6834" stroke="#fcfcfb" stroke-width="2"/>
+<circle cx="900.0" cy="201.0" r="5" fill="#eb6834" stroke="#fcfcfb" stroke-width="2"/>
+<circle cx="907.0" cy="201.0" r="5" fill="#eb6834" stroke="#fcfcfb" stroke-width="2"/>
+<text x="384" y="247.0" font-size="13" fill="#0b0b0b" text-anchor="end">Find the key slide, return the screenshot</text>
+<circle cx="900.0" cy="235.0" r="5" fill="#2a78d6" stroke="#fcfcfb" stroke-width="2"/>
+<circle cx="650.0" cy="235.0" r="5" fill="#2a78d6" stroke="#fcfcfb" stroke-width="2"/>
+<circle cx="775.0" cy="235.0" r="5" fill="#2a78d6" stroke="#fcfcfb" stroke-width="2"/>
+<circle cx="893.0" cy="251.0" r="5" fill="#eb6834" stroke="#fcfcfb" stroke-width="2"/>
+<circle cx="900.0" cy="251.0" r="5" fill="#eb6834" stroke="#fcfcfb" stroke-width="2"/>
+<circle cx="907.0" cy="251.0" r="5" fill="#eb6834" stroke="#fcfcfb" stroke-width="2"/>
+<text x="384" y="297.0" font-size="13" fill="#0b0b0b" text-anchor="end">Bug screencast stays cheap (no pointless diarization)</text>
+<circle cx="650.0" cy="285.0" r="5" fill="#2a78d6" stroke="#fcfcfb" stroke-width="2"/>
+<circle cx="896.5" cy="285.0" r="5" fill="#2a78d6" stroke="#fcfcfb" stroke-width="2"/>
+<circle cx="903.5" cy="285.0" r="5" fill="#2a78d6" stroke="#fcfcfb" stroke-width="2"/>
+<circle cx="896.5" cy="301.0" r="5" fill="#eb6834" stroke="#fcfcfb" stroke-width="2"/>
+<circle cx="903.5" cy="301.0" r="5" fill="#eb6834" stroke="#fcfcfb" stroke-width="2"/>
+<circle cx="650.0" cy="301.0" r="5" fill="#eb6834" stroke="#fcfcfb" stroke-width="2"/>
+<text x="384" y="347.0" font-size="13" fill="#0b0b0b" text-anchor="end">Ingest with who-said-what intent (parameter choice)</text>
+<circle cx="900.0" cy="335.0" r="5" fill="#2a78d6" stroke="#fcfcfb" stroke-width="2"/>
+<circle cx="725.0" cy="335.0" r="5" fill="#2a78d6" stroke="#fcfcfb" stroke-width="2"/>
+<circle cx="825.0" cy="335.0" r="5" fill="#2a78d6" stroke="#fcfcfb" stroke-width="2"/>
+<circle cx="821.5" cy="351.0" r="5" fill="#eb6834" stroke="#fcfcfb" stroke-width="2"/>
+<circle cx="828.5" cy="351.0" r="5" fill="#eb6834" stroke="#fcfcfb" stroke-width="2"/>
+<circle cx="650.0" cy="351.0" r="5" fill="#eb6834" stroke="#fcfcfb" stroke-width="2"/>
+<text x="384" y="397.0" font-size="13" fill="#0b0b0b" text-anchor="end">Map speaker labels to real names, with evidence</text>
+<circle cx="725.0" cy="385.0" r="5" fill="#2a78d6" stroke="#fcfcfb" stroke-width="2"/>
+<circle cx="825.0" cy="385.0" r="5" fill="#2a78d6" stroke="#fcfcfb" stroke-width="2"/>
+<circle cx="575.0" cy="385.0" r="5" fill="#2a78d6" stroke="#fcfcfb" stroke-width="2"/>
+<circle cx="825.0" cy="401.0" r="5" fill="#eb6834" stroke="#fcfcfb" stroke-width="2"/>
+<circle cx="900.0" cy="401.0" r="5" fill="#eb6834" stroke="#fcfcfb" stroke-width="2"/>
+<circle cx="650.0" cy="401.0" r="5" fill="#eb6834" stroke="#fcfcfb" stroke-width="2"/>
+<text x="384" y="447.0" font-size="13" fill="#0b0b0b" text-anchor="end">Naive “analyze this meeting” (zero hints)</text>
+<circle cx="650.0" cy="435.0" r="5" fill="#2a78d6" stroke="#fcfcfb" stroke-width="2"/>
+<circle cx="525.0" cy="435.0" r="5" fill="#2a78d6" stroke="#fcfcfb" stroke-width="2"/>
+<circle cx="775.0" cy="435.0" r="5" fill="#2a78d6" stroke="#fcfcfb" stroke-width="2"/>
+<circle cx="650.0" cy="451.0" r="5" fill="#eb6834" stroke="#fcfcfb" stroke-width="2"/>
+<circle cx="900.0" cy="451.0" r="5" fill="#eb6834" stroke="#fcfcfb" stroke-width="2"/>
+<circle cx="775.0" cy="451.0" r="5" fill="#eb6834" stroke="#fcfcfb" stroke-width="2"/>
+<text x="384" y="497.0" font-size="13" fill="#0b0b0b" text-anchor="end">Meeting minutes with owners</text>
+<circle cx="400.0" cy="485.0" r="5" fill="#2a78d6" stroke="#fcfcfb" stroke-width="2"/>
+<circle cx="525.0" cy="485.0" r="5" fill="#2a78d6" stroke="#fcfcfb" stroke-width="2"/>
+<circle cx="900.0" cy="485.0" r="5" fill="#2a78d6" stroke="#fcfcfb" stroke-width="2"/>
+<circle cx="521.5" cy="501.0" r="5" fill="#eb6834" stroke="#fcfcfb" stroke-width="2"/>
+<circle cx="528.5" cy="501.0" r="5" fill="#eb6834" stroke="#fcfcfb" stroke-width="2"/>
+<circle cx="900.0" cy="501.0" r="5" fill="#eb6834" stroke="#fcfcfb" stroke-width="2"/>
+<text x="870.0" y="147.0" font-size="11.5" fill="#898781" text-anchor="end">every tier tested</text>
+<text x="870.0" y="497.0" font-size="11.5" fill="#898781" text-anchor="end">only opus and gpt-5.5 high</text>
+<text x="32" y="604" font-size="11.5" fill="#898781">n per cell = 1–3 runs — read as tiers, not a leaderboard · exact numbers and per-release regression batteries: docs/MODEL-NOTES.md</text>
+</svg>

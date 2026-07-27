@@ -2,7 +2,7 @@
 
 Enforced contract: every tool description carries >=10 one-line examples
 (each <=120 chars) plus a "when NOT to use" line; the server registers
-exactly the 7 described tools and exactly the 5 workflow prompts; prompt
+exactly the 7 described tools and exactly the 6 workflow prompts; prompt
 templates render non-empty, name the tools they orchestrate, and are
 byte-identical with the files in ``examples/prompts/`` (no drift).
 """
@@ -25,6 +25,9 @@ MAX_EXAMPLE_CHARS = 120
 
 # Which tools each workflow prompt must explicitly orchestrate.
 PROMPT_REQUIRED_TOOLS = {
+    "bug": {
+        "get_transcript", "search", "list_jobs", "get_frames", "get_moment", "extract_frame",
+    },
     "triage-recording": {"get_transcript", "get_moment", "search", "extract_frame", "list_jobs"},
     "spec-from-workshop": {"get_transcript", "get_frames", "get_moment", "search"},
     "backlog-from-demo": {"get_transcript", "get_moment", "search"},
@@ -70,10 +73,10 @@ def test_every_tool_carries_honest_annotations() -> None:
         assert ann.readOnlyHint is (tool.name not in writers), tool.name
 
 
-def test_exactly_five_prompts_registered() -> None:
+def test_exactly_six_prompts_registered() -> None:
     prompts = asyncio.run(mcp.list_prompts())
     assert sorted(prompt.name for prompt in prompts) == sorted(guidance.PROMPT_NAMES)
-    assert len(prompts) == 5
+    assert len(prompts) == 6
     for prompt in prompts:
         assert prompt.description == guidance.PROMPT_DESCRIPTIONS[prompt.name]
         arg_names = [argument.name for argument in prompt.arguments or []]

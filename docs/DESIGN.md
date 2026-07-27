@@ -38,7 +38,7 @@ exact instants.
 
 | Module | Responsibility |
 |---|---|
-| `server.py` | FastMCP app: 7 tools, 5 prompts, progress, MCP error mapping |
+| `server.py` | FastMCP app: 7 tools, 6 prompts, progress, MCP error mapping |
 | `guidance.py` | Tool descriptions (10-15 examples each) + prompt templates; unit-gated |
 | `cli.py` | `serve` (default) / `process` / `gc` |
 | `core/pipeline.py` | Orchestrates stages, caps, progress callbacks, summary |
@@ -136,7 +136,7 @@ Models use tools far better when the server ships usage guidance:
    param combos, agent intents mapped to the right call, edge cases
    (audio-only, `wall_clock=null`, truncation continuation), and
    anti-examples redirecting to the better tool.
-2. Five `@mcp.prompt()` workflow prompts mirror `examples/prompts/*.md` and
+2. Six `@mcp.prompt()` workflow prompts mirror `examples/prompts/*.md` and
    the Claude Code plugin commands — everything renders from the same
    templates in `guidance.py` via `scripts/gen_integrations.py`, which also
    emits every `integrations/<engine>/` adapter; a unit test byte-pins all

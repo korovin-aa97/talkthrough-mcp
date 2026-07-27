@@ -1,4 +1,4 @@
-"""FastMCP server: 7 lazy-retrieval tools + 5 workflow prompts, stdio transport.
+"""FastMCP server: 7 lazy-retrieval tools + 6 workflow prompts, stdio transport.
 
 Design rule: ``process_media`` returns a compact summary, never the full
 payload; everything else is lazy and capped. Image responses are MCP image
@@ -72,8 +72,8 @@ mcp = FastMCP(
         "multi-person recording pass diarize=true as part of normal analysis — do "
         "not wait to be asked who spoke (num_speakers=N whenever the headcount is "
         "known). Server prompts "
-        "(triage-recording, spec-from-workshop, backlog-from-demo, meeting-actions, "
-        "correlate-with-logs) package the common workflows. "
+        "(bug, triage-recording, spec-from-workshop, backlog-from-demo, "
+        "meeting-actions, correlate-with-logs) package the common workflows. "
         # v0.2.3 EXPERIMENT: initialize.instructions is the one text channel
         # not yet falsified for clients that read neither descriptions nor MCP
         # prompts (codex) — the canon-keys sentence rides here, measured by
@@ -381,7 +381,8 @@ def search(job_id: str, query: str, speaker: str | None = None) -> dict[str, Any
                 "hits": [],
                 "note": (
                     "job is not diarized — speaker labels don't exist here; re-run "
-                    "process_media(diarize=true) to add them (fast amend), then filter"
+                    "process_media(diarize=true) to add them (only the diarization "
+                    "stage runs, transcription is reused), then filter"
                 ),
             }
         roster_labels = [stat.label for stat in diarization.speakers]
@@ -534,6 +535,10 @@ def list_jobs() -> dict[str, Any]:
 
 
 def _register_prompts() -> None:
+    @mcp.prompt(name="bug", description=guidance.PROMPT_DESCRIPTIONS["bug"])
+    def bug(job_id: str, product_context: str = "") -> str:
+        return guidance.render_prompt("bug", job_id, product_context)
+
     @mcp.prompt(
         name="triage-recording", description=guidance.PROMPT_DESCRIPTIONS["triage-recording"]
     )

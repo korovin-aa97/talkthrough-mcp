@@ -1,7 +1,7 @@
 [project]
 name = "talkthrough-mcp"
-version = "0.2.3"
-description = "Local-first MCP server that turns narrated screen recordings into agent-ready structured data: timestamped transcript, scene keyframes, OCR text, and wall-clock anchoring."
+version = "0.2.4"
+description = "Local MCP server: turn screen recordings into transcript, exact frames, OCR and wall-clock evidence for coding agents."
 readme = "README.md"
 authors = [
     { name = "korovin-aa97", email = "korovin.aa97@gmail.com" }
@@ -75,6 +75,8 @@ build-backend = "uv_build"
 line-length = 100
 target-version = "py311"
 src = ["src", "tests"]
+# untracked local staging for demo-GIF sources — not part of the package
+extend-exclude = ["media-staging"]
 
 [tool.ruff.lint]
 select = ["E", "F", "W", "I", "UP", "B", "SIM", "RUF"]
@@ -86,6 +88,8 @@ select = ["E", "F", "W", "I", "UP", "B", "SIM", "RUF"]
 # guidance contract (enforced in tests/unit/test_guidance.py); Cyrillic
 # ё/е examples are the point of the search guidance
 "src/talkthrough_mcp/guidance.py" = ["E501", "RUF001"]
+# chart copy uses typographic en dashes on purpose
+"scripts/make_benchmark_chart.py" = ["RUF001"]
 # generator templates carry one-line skill descriptions and markdown tables
 "scripts/gen_integrations.py" = ["E501"]
 # Cyrillic ё→е folding literals and RU sample strings are the FEATURE here

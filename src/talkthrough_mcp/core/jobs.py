@@ -68,36 +68,87 @@ def job_lock(job_id: str, *, wait_seconds: int = 600) -> Iterator[None]:
     """Exclusive per-job lock so two processes never preprocess the same file at once.
 
     POSIX flock; on platforms without fcntl (Windows) it degrades to a no-op —
-    Windows is best-effort by design.
+    Windows is best-effort by design. After acquiring, the lock file's identity
+    is re-checked: the holder we waited on may have failed and cleaned up the
+    whole partial job directory (``cleanup_partial_job``) — then the flock we
+    hold is on an orphaned inode, and it must be retaken on the fresh path so
+    two waiters can never both "win" on different inodes.
     """
     directory = job_dir(job_id)
-    directory.mkdir(parents=True, exist_ok=True)
     lock_path = directory / LOCK_NAME
     try:
         import fcntl
     except ImportError:  # pragma: no cover - Windows best-effort
         # No flock semantics, but keep the on-disk layout identical: the
         # job.lock marker exists on every platform.
+        directory.mkdir(parents=True, exist_ok=True)
         lock_path.touch(exist_ok=True)
         yield
         return
-    handle = lock_path.open("w")
     deadline = time.monotonic() + wait_seconds
+    while True:
+        directory.mkdir(parents=True, exist_ok=True)
+        handle = lock_path.open("w")
+        try:
+            while True:
+                try:
+                    fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+                    break
+                except BlockingIOError:
+                    if time.monotonic() >= deadline:
+                        raise ToolFailureError(
+                            f"another process has been holding the lock for job {job_id!r} "
+                            f"for {wait_seconds}s — retry later"
+                        ) from None
+                    time.sleep(1)
+        except BaseException:
+            handle.close()
+            raise
+        try:
+            same_file = os.stat(lock_path).st_ino == os.fstat(handle.fileno()).st_ino
+        except FileNotFoundError:
+            same_file = False
+        if same_file:
+            break
+        handle.close()  # lock file vanished/was replaced under us — retake
     try:
-        while True:
-            try:
-                fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
-                break
-            except BlockingIOError:
-                if time.monotonic() >= deadline:
-                    raise ToolFailureError(
-                        f"another process has been holding the lock for job {job_id!r} "
-                        f"for {wait_seconds}s — retry later"
-                    ) from None
-                time.sleep(1)
         yield
     finally:
         handle.close()
+
+
+def cleanup_partial_job(job_id: str) -> bool:
+    """Remove a job directory that failed before its manifest was written.
+
+    Call while holding the job lock. A directory WITH a manifest is never
+    touched — completed jobs and amend targets stay intact. Returns True when
+    a partial directory was removed. The caller's own lock handle survives
+    (flock on the unlinked inode); blocked waiters detect the vanished lock
+    file and retake it on a fresh one (see ``job_lock``).
+    """
+    directory = job_dir(job_id)
+    if not directory.is_dir() or (directory / MANIFEST_NAME).is_file():
+        return False
+    shutil.rmtree(directory, ignore_errors=True)
+    return True
+
+
+@contextmanager
+def partial_job_cleanup(job_id: str) -> Iterator[None]:
+    """Delete the partial job dir when the wrapped processing fails.
+
+    Stack INSIDE ``job_lock`` (cleanup must happen while still holding the
+    lock). A failure before the manifest exists — cold-start model download,
+    cap validation, an ffmpeg crash — otherwise leaves a job directory with
+    only ``job.lock`` behind: invisible to ``list_jobs`` and harmless, but
+    litter. A failure after the manifest exists (e.g. a diarization amend)
+    removes nothing.
+    """
+    try:
+        yield
+    except BaseException:
+        cleanup_partial_job(job_id)
+        raise
 
 
 def list_jobs() -> list[Manifest]:

@@ -8,8 +8,8 @@ files are starting points.
 - [`agents/feedback-triage.md`](agents/feedback-triage.md) — a ready-to-use
   Claude Code agent: recording → findings JSON → numbered confirm digest.
   Drop it into `.claude/agents/` in your project.
-- [`prompts/`](prompts/) — the five workflow prompts, byte-identical to the
-  server-side MCP prompts (`triage-recording`, `spec-from-workshop`,
+- [`prompts/`](prompts/) — the six workflow prompts, byte-identical to the
+  server-side MCP prompts (`bug`, `triage-recording`, `spec-from-workshop`,
   `backlog-from-demo`, `meeting-actions`, `correlate-with-logs`). Use them
   directly from any MCP client as slash commands, or paste them into clients
   that don't surface MCP prompts.

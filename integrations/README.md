@@ -10,7 +10,7 @@ One folder per engine with the exact config to paste:
 
 | Engine | Folder | Extras beyond the MCP config |
 |---|---|---|
-| Claude Code | [`claude-code/`](claude-code/) | full plugin: 5 slash commands, triage agent, skill |
+| Claude Code | [`claude-code/`](claude-code/) | full plugin: 6 slash commands, triage agent, skill |
 | Claude Desktop | [`claude-desktop/`](claude-desktop/) | one-click `.mcpb` extension (draft) |
 | OpenAI Codex CLI | [`codex/`](codex/) | `$talkthrough` skill via `.agents/skills/` |
 | OpenClaw | [`openclaw/`](openclaw/) | ClawHub-ready skill wrapper |

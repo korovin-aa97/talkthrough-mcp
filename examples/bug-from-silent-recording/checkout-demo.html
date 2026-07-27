@@ -1,0 +1,149 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Nimbus Audio — Checkout</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<style>
+  :root {
+    --bg: #f4f5f7; --card: #ffffff; --ink: #16181d; --muted: #6b7280;
+    --line: #e5e7eb; --accent: #2a5bd7; --ok: #147a3d; --err: #b42318;
+    --err-bg: #fef3f2; --err-line: #fecdca;
+  }
+  * { box-sizing: border-box; margin: 0; }
+  body {
+    background: var(--bg); color: var(--ink); min-height: 100vh;
+    font: 16px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif;
+    display: flex; flex-direction: column; align-items: center; gap: 20px;
+    padding: 36px 16px 24px;
+  }
+  .shop { display: flex; align-items: center; gap: 10px; width: 560px; }
+  .logo {
+    width: 34px; height: 34px; border-radius: 9px; background: var(--accent);
+    color: #fff; display: grid; place-items: center; font-weight: 700;
+  }
+  .shop b { font-size: 18px; }
+  .shop span { color: var(--muted); font-size: 14px; margin-left: auto; }
+  .card {
+    width: 560px; background: var(--card); border: 1px solid var(--line);
+    border-radius: 14px; padding: 24px; box-shadow: 0 1px 3px rgba(16,24,40,.06);
+  }
+  h1 { font-size: 20px; margin-bottom: 16px; }
+  .row { display: flex; justify-content: space-between; padding: 9px 0; }
+  .row + .row { border-top: 1px solid var(--line); }
+  .row .muted { color: var(--muted); }
+  .discount { color: var(--ok); display: none; }
+  .total { font-weight: 700; font-size: 18px; }
+  .coupon { display: flex; gap: 10px; margin: 16px 0 6px; }
+  .coupon input {
+    flex: 1; padding: 10px 12px; border: 1px solid var(--line);
+    border-radius: 8px; font: inherit; text-transform: uppercase;
+  }
+  .coupon button, .paybtn {
+    padding: 10px 18px; border: 0; border-radius: 8px; font: inherit;
+    font-weight: 600; cursor: pointer;
+  }
+  .coupon button { background: #eef2ff; color: var(--accent); }
+  .applied { color: var(--ok); font-size: 14px; display: none; }
+  .paybtn {
+    width: 100%; margin-top: 14px; background: var(--accent); color: #fff;
+    font-size: 16px;
+  }
+  .paybtn:disabled { opacity: .6; cursor: default; }
+  .banner {
+    display: none; margin-top: 14px; padding: 12px 14px; border-radius: 10px;
+    background: var(--err-bg); border: 1px solid var(--err-line);
+    color: var(--err); font-weight: 600;
+  }
+  .banner small { display: block; font-weight: 400; color: #912018; }
+  .devlog {
+    width: 560px; background: #101319; color: #d7dae0; border-radius: 12px;
+    padding: 14px 16px; font: 13px/1.7 ui-monospace, Menlo, monospace;
+  }
+  .devlog .t { color: #7d8590; }
+  .devlog .bad { color: #ff7b72; }
+  .devlog div { white-space: pre-wrap; }
+  .devlog .head { color: #7d8590; letter-spacing: .4px; margin-bottom: 4px; }
+</style>
+</head>
+<body>
+  <div class="shop"><div class="logo">N</div><b>Nimbus Audio</b><span>demo shop — not a real store</span></div>
+
+  <div class="card">
+    <h1>Checkout</h1>
+    <div class="row"><span>Nimbus ANC Headphones</span><span>€100.00</span></div>
+    <div class="row discount" id="discountRow"><span>Coupon SAVE20 (−20%)</span><span id="discountAmt">−€20.00</span></div>
+    <div class="row total"><span>Total</span><span id="total">€100.00</span></div>
+
+    <div class="coupon">
+      <input id="coupon" placeholder="Coupon code" autocomplete="off">
+      <button id="apply">Apply</button>
+    </div>
+    <span class="applied" id="applied">✓ SAVE20 applied</span>
+
+    <button class="paybtn" id="pay">Pay €100.00</button>
+    <div class="banner" id="banner">
+      Payment failed · Reference: req_7F3A
+      <small id="bannerDetail">Your card was not charged.</small>
+    </div>
+  </div>
+
+  <div class="devlog" id="devlog">
+    <div class="head">DEV LOG — /api/pay</div>
+    <div><span class="t" data-t></span> page ready · cart subtotal €100.00</div>
+  </div>
+
+<script>
+  const eur = v => "€" + v.toFixed(2);
+  let total = 100.00;
+  const $ = id => document.getElementById(id);
+  const log = (html) => {
+    const line = document.createElement("div");
+    line.innerHTML = '<span class="t">' + ts() + "</span> " + html;
+    $("devlog").appendChild(line);
+  };
+  const ts = () => new Date().toTimeString().slice(0, 8);
+  document.querySelectorAll("[data-t]").forEach(el => el.textContent = ts());
+
+  $("apply").addEventListener("click", () => {
+    const code = $("coupon").value.trim().toUpperCase();
+    if (code !== "SAVE20") { log('coupon rejected: "' + code + '"'); return; }
+    total = 100.00 * 0.80;
+    $("discountRow").style.display = "flex";
+    $("applied").style.display = "inline";
+    $("total").textContent = eur(total);
+    $("pay").textContent = "Pay " + eur(total);
+    log("coupon SAVE20 accepted · new total " + eur(total));
+  });
+
+  // The gateway charges in CENTS and enforces a 100-cent minimum,
+  // like real card processors do.
+  function gateway(payload) {
+    if (payload.amount < 100) {
+      return { status: 402, error: "amount_too_small",
+               message: "minimum charge is 100 (cents); got " + payload.amount,
+               ref: "req_7F3A" };
+    }
+    return { status: 200, ref: "req_7F3A" };
+  }
+
+  $("pay").addEventListener("click", () => {
+    const btn = $("pay");
+    btn.disabled = true; btn.textContent = "Processing…";
+    // BUG: sends the total in EUROS where the gateway expects CENTS
+    // (should be Math.round(total * 100) = 8000, not 80)
+    const payload = { amount: total, currency: "eur" };
+    log('POST /api/pay {"amount": ' + payload.amount + ', "currency": "eur"}');
+    setTimeout(() => {
+      const res = gateway(payload);
+      if (res.status !== 200) {
+        log('<span class="bad">gateway 402 amount_too_small — ' + res.message + "</span>");
+        log('<span class="bad">payment failed · ref=' + res.ref + "</span>");
+        $("banner").style.display = "block";
+        btn.disabled = false; btn.textContent = "Pay " + eur(total);
+      }
+    }, 1100);
+  });
+</script>
+</body>
+</html>

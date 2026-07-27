@@ -332,16 +332,17 @@ def readme_install_region() -> str:
         "Two install paths — **pick one**, not both (the plugin already includes\n"
         "the server; installing both would register it twice):\n"
         "\n"
-        "**Server only** — the 7 tools + 5 prompts, and nothing else on your\n"
+        "**Server only** — the 7 tools + 6 prompts, and nothing else on your\n"
         "system. Choose this for a minimal setup, or when you manage MCP servers\n"
         "yourself across several clients:\n"
         "\n"
         f"```bash\n{claude_add}\n```\n"
         "\n"
         "**Full plugin** — the same server, plus native slash commands\n"
-        "(`/talkthrough:triage-recording`, …) that handle the ceremony for you,\n"
-        "a ready-made triage subagent, and an agent skill that teaches Claude the\n"
-        "workflow. Choose this for the best out-of-the-box experience:\n"
+        "(`/talkthrough:bug`, `/talkthrough:triage-recording`, …) that handle the\n"
+        "ceremony for you, a ready-made triage subagent, and an agent skill that\n"
+        "teaches Claude the workflow. Choose this for the best out-of-the-box\n"
+        "experience:\n"
         "\n"
         "```\n"
         "/plugin marketplace add korovin-aa97/talkthrough-mcp\n"
@@ -451,8 +452,9 @@ def build_plugin_manifests() -> dict[str, str]:
     plugin = {
         "name": "talkthrough",
         "description": (
-            "Turn narrated screen recordings into filed bugs, specs, backlogs and "
-            "meeting actions. Bundles the talkthrough MCP server, five workflow "
+            "Turn screen recordings into transcript, exact frames, OCR and "
+            "wall-clock evidence — then into filed bugs, specs, backlogs and "
+            "meeting actions. Bundles the talkthrough MCP server, six workflow "
             "commands, a triage agent, and an agent skill."
         ),
         "version": PROJECT_VERSION,
@@ -480,9 +482,9 @@ def build_plugin_manifests() -> dict[str, str]:
                 "name": "talkthrough",
                 "source": "./integrations/claude-code",
                 "description": (
-                    "Turn narrated screen recordings into filed bugs, specs, backlogs "
-                    "and meeting actions — local Whisper + keyframes + OCR + "
-                    "wall-clock via the talkthrough MCP server."
+                    "Turn screen recordings into filed bugs, specs, backlogs "
+                    "and meeting actions — local Whisper transcript + keyframes + "
+                    "OCR + wall-clock evidence via the talkthrough MCP server."
                 ),
             }
         ],
@@ -536,8 +538,8 @@ def build_registry_manifest() -> dict[str, str]:
         "name": "io.github.korovin-aa97/talkthrough-mcp",
         # Registry hard limit: <= 100 chars (enforced server-side, checked 2026-07-11).
         "description": (
-            "Narrated screen recordings into agent-ready data: "
-            "local transcript, keyframes, OCR, wall-clock."
+            "Local MCP server: screen recordings into transcript, "
+            "exact frames, OCR, wall-clock evidence."
         ),
         "repository": {
             "url": "https://github.com/korovin-aa97/talkthrough-mcp",
@@ -649,7 +651,7 @@ One folder per engine with the exact config to paste:
 
 | Engine | Folder | Extras beyond the MCP config |
 |---|---|---|
-| Claude Code | [`claude-code/`](claude-code/) | full plugin: 5 slash commands, triage agent, skill |
+| Claude Code | [`claude-code/`](claude-code/) | full plugin: 6 slash commands, triage agent, skill |
 | Claude Desktop | [`claude-desktop/`](claude-desktop/) | one-click `.mcpb` extension (draft) |
 | OpenAI Codex CLI | [`codex/`](codex/) | `$talkthrough` skill via `.agents/skills/` |
 | OpenClaw | [`openclaw/`](openclaw/) | ClawHub-ready skill wrapper |
