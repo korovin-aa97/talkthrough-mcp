@@ -15,19 +15,30 @@
 
 Give Claude Code or Codex a narrated `.mov`/`.mp4` — talkthrough turns it
 into searchable transcript, exact frames, OCR and wall-clock timestamps,
-locally — so your agent files an evidence-backed issue or investigates the fix.
+locally — so your agent writes an evidence-backed issue draft or investigates
+the fix.
 
 Also works for meetings, workshops, product demos, and production incidents.
 
-![talkthrough demo: a recorded checkout bug goes through /talkthrough:bug — indexed locally, evidence found, and filed as an issue](assets/demo.gif)
+![Illustration of a /talkthrough:bug run: a recorded checkout bug is indexed locally, the evidence is found, and a ready-to-file issue draft is assembled](assets/demo.gif)
 
-*One `/talkthrough:bug` run: the recording is indexed locally (transcript ·
-keyframes · OCR · wall-clock), the evidence checkpoint is assembled, and the
-bug lands in the tracker with the screenshot attached.*
+*Illustration — an animation of the `/talkthrough:bug` storyline, not a screen
+capture: the recording is indexed locally (transcript · keyframes · OCR ·
+wall-clock), the evidence checkpoint is assembled, and the draft is ready to
+file with your own tracker tooling (`gh`, Jira, a GitHub MCP server —
+talkthrough itself never leaves your machine and never posts anything).*
 
-**[▶ Watch the demo with sound (1:18)](https://youtu.be/nHfGfEiVdE8)** — a
-real, unedited session: a narrated recording goes in, a ready-to-file
-`bug-report.md` comes out.
+**Real runs, no animation:**
+
+- **[▶ Watch the demo with sound (1:18)](https://youtu.be/nHfGfEiVdE8)** — an
+  unedited session: a narrated recording goes in, a ready-to-file
+  `bug-report.md` comes out.
+- **[Silent recording → issue draft](examples/bug-from-silent-recording/)** —
+  the whole thing as files you can re-run: a Playwright-recorded, audio-free
+  `.mp4` and the unedited agent output. Every number is reproducible —
+  processing that file gives `job_id 8703a66bbe77a7d0` (the job id *is* the
+  sha256 prefix, so `shasum -a 256` predicts it), 17 keyframes / 4 unique, and
+  0 transcript segments because there is no audio track.
 
 ## Quickstart
 

@@ -453,9 +453,9 @@ def build_plugin_manifests() -> dict[str, str]:
         "name": "talkthrough",
         "description": (
             "Turn screen recordings into transcript, exact frames, OCR and "
-            "wall-clock evidence — then into filed bugs, specs, backlogs and "
-            "meeting actions. Bundles the talkthrough MCP server, six workflow "
-            "commands, a triage agent, and an agent skill."
+            "wall-clock evidence — then into ready-to-file bug drafts, specs, "
+            "backlogs and meeting actions. Bundles the talkthrough MCP server, "
+            "six workflow commands, a triage agent, and an agent skill."
         ),
         "version": PROJECT_VERSION,
         "author": {"name": "korovin-aa97", "url": "https://github.com/korovin-aa97"},
@@ -482,9 +482,10 @@ def build_plugin_manifests() -> dict[str, str]:
                 "name": "talkthrough",
                 "source": "./integrations/claude-code",
                 "description": (
-                    "Turn screen recordings into filed bugs, specs, backlogs "
-                    "and meeting actions — local Whisper transcript + keyframes + "
-                    "OCR + wall-clock evidence via the talkthrough MCP server."
+                    "Turn screen recordings into ready-to-file bug drafts, "
+                    "specs, backlogs and meeting actions — local Whisper "
+                    "transcript + keyframes + OCR + wall-clock evidence via "
+                    "the talkthrough MCP server."
                 ),
             }
         ],
@@ -497,7 +498,7 @@ def build_plugin_manifests() -> dict[str, str]:
         "description": (
             "Turn narrated screen recordings into structured evidence: local Whisper "
             "transcript, scene keyframes, OCR, wall-clock anchoring. Record, talk — "
-            "Claude files the bugs."
+            "Claude writes the bug report."
         ),
         "author": {"name": "korovin-aa97", "url": "https://github.com/korovin-aa97"},
         "license": "MIT",
