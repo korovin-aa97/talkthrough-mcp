@@ -12,7 +12,7 @@
     {
       "name": "talkthrough",
       "source": "./integrations/claude-code",
-      "description": "Turn screen recordings into filed bugs, specs, backlogs and meeting actions — local Whisper transcript + keyframes + OCR + wall-clock evidence via the talkthrough MCP server."
+      "description": "Turn screen recordings into ready-to-file bug drafts, specs, backlogs and meeting actions — local Whisper transcript + keyframes + OCR + wall-clock evidence via the talkthrough MCP server."
     }
   ]
 }

@@ -62,13 +62,32 @@ create the venv from a modern interpreter, e.g. `python3.12 -m venv`.
 ## Updated the plugin, but the server behaves like the old version
 
 A running session keeps its MCP server process alive: `claude plugin update
-talkthrough` (or editing the version in any client's config) updates the
-files immediately, but the already-spawned server keeps serving the OLD
-version until the session/client restarts. Restart the session (or the
+talkthrough@talkthrough` (or editing the version in any client's config)
+updates the files immediately, but the already-spawned server keeps serving
+the OLD version until the session/client restarts. Restart the session (or the
 client) after updating; headless and CI runs pick up the new version on
 their next launch because they spawn a fresh server every time. To verify
 what is actually running, check `tool_versions` in any `process_media`
 summary or manifest.
+
+The update command needs the marketplace-qualified id — plain `claude plugin
+update talkthrough` fails with `Plugin "talkthrough" not found`. `claude
+plugin list` prints the id to use.
+
+## The plugin says 0.2.3 but the server reports a newer version
+
+Also expected, and the reverse of the case above. The plugin launches the
+server unpinned (`uvx talkthrough-mcp[diarization]`), so a session started
+after a PyPI release resolves the NEWEST server even while the plugin — the
+slash commands, the skill, the triage agent — is still on your installed
+version. Sessions started before the release keep serving the older one in
+parallel, so two sessions on one machine can disagree.
+
+This is harmless for additive releases (a new server prompt simply has no
+matching slash command yet) and it is why server changes stay compatible with
+the previous release's command pack. `claude plugin update
+talkthrough@talkthrough` + a restart re-aligns both halves; `tool_versions`
+tells you what the server actually is.
 
 ## Processing a long recording times out my agent call
 
