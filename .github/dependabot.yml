@@ -10,6 +10,12 @@ updates:
       python-deps:
         patterns: ["*"]
     open-pull-requests-limit: 3
+    ignore:
+      # mcp 2.0 removed mcp.server.fastmcp and broke every fresh install
+      # (the 0.2.5 emergency pin, #39/#40). pyproject bounds mcp to <2 until
+      # the SDK 2.x port lands; major-bump PRs would rewrite that bound (#41).
+      - dependency-name: "mcp"
+        update-types: ["version-update:semver-major"]
 
   - package-ecosystem: "github-actions"
     directory: "/"
