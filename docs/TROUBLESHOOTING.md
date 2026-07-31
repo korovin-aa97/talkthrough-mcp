@@ -59,6 +59,27 @@ create the venv from a modern interpreter, e.g. `python3.12 -m venv`.
 - Healthy state: the client lists 7 tools, and `list_jobs()` returns `[]` on
   a fresh install.
 
+## Claude Code says `Failed to reconnect … -32000` / `No module named 'mcp.server.fastmcp'`
+
+The server process died on import before the MCP handshake. On any
+talkthrough-mcp **≤ 0.2.4** resolved after 2026-07-28 the cause is the MCP
+Python SDK: its 2.0.0 release removed the `mcp.server.fastmcp` module the
+server imports, and those talkthrough versions declared `mcp>=1.28.1` with no
+upper bound, so a fresh resolve picked the incompatible SDK. Machines with a
+warm pre-2.0 uv cache kept working until uv re-resolved — which made the
+breakage look intermittent and machine-specific. It is neither.
+
+Fixed in **0.2.5** (`mcp>=1.28.1,<2`). Unpinned `uvx` setups — the plugin
+included — pick 0.2.5 up on their next resolve; to force it now:
+
+```bash
+uvx --refresh "talkthrough-mcp[diarization]" --help
+```
+
+then reconnect (`/mcp`). If you applied the interim workaround of adding
+`"--with", "mcp<2"` to the server args, it is compatible with 0.2.5 and can
+be dropped at your leisure.
+
 ## Updated the plugin, but the server behaves like the old version
 
 A running session keeps its MCP server process alive: `claude plugin update

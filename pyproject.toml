@@ -1,6 +1,6 @@
 [project]
 name = "talkthrough-mcp"
-version = "0.2.4"
+version = "0.2.5"
 description = "Local MCP server: turn screen recordings into transcript, exact frames, OCR and wall-clock evidence for coding agents."
 readme = "README.md"
 authors = [
@@ -35,7 +35,10 @@ classifiers = [
 ]
 dependencies = [
     "faster-whisper>=1.2.1",
-    "mcp>=1.28.1",
+    # <2: SDK 2.0.0 (2026-07-28) removed mcp.server.fastmcp, which server.py
+    # imports — every environment resolved without this bound dies at startup.
+    # Porting to SDK 2.x is a separate task; the bound stays until it lands.
+    "mcp>=1.28.1,<2",
     "pillow>=12.3.0",
     "rapidocr>=3.9.1",
     "static-ffmpeg>=3.0",
