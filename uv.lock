@@ -1634,7 +1634,7 @@ wheels = [
 
 [[package]]
 name = "talkthrough-mcp"
-version = "0.2.4"
+version = "0.2.5"
 source = { editable = "." }
 dependencies = [
     { name = "faster-whisper" },
@@ -1660,7 +1660,7 @@ dev = [
 [package.metadata]
 requires-dist = [
     { name = "faster-whisper", specifier = ">=1.2.1" },
-    { name = "mcp", specifier = ">=1.28.1" },
+    { name = "mcp", specifier = ">=1.28.1,<2" },
     { name = "pillow", specifier = ">=12.3.0" },
     { name = "rapidocr", specifier = ">=3.9.1" },
     { name = "sherpa-onnx", marker = "extra == 'diarization'", specifier = ">=1.13.4" },

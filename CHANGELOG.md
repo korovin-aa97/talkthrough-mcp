@@ -4,6 +4,29 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions follow
 [SemVer](https://semver.org/).
 
+## [0.2.5] — 2026-07-31
+
+An emergency one-line release: a dependency bound, no code or behavior
+changes. Every step of the diagnosis below comes from an external incident
+report — reproduced verbatim before fixing.
+
+### Fixed
+
+- **Server could not start in any freshly resolved environment since
+  2026-07-28.** The MCP Python SDK released 2.0.0 on 2026-07-28, removing
+  the `mcp.server.fastmcp` module this server imports; talkthrough-mcp
+  declared `mcp>=1.28.1` with no upper bound, so every fresh resolve —
+  `uvx` first installs, plugin installs, cache refreshes — picked the
+  incompatible SDK and died at import with `ModuleNotFoundError: No module
+  named 'mcp.server.fastmcp'` (Claude Code surfaces it as `Failed to
+  reconnect … -32000`). Warm pre-2.0 uv caches kept working until their
+  next re-resolve, which made the breakage look intermittent and
+  machine-specific. The dependency is now bounded: `mcp>=1.28.1,<2`.
+  Porting to SDK 2.x is a separate, unhurried task — the bound stays until
+  it lands. Environments already broken heal on their next resolve; force
+  it with `uvx --refresh "talkthrough-mcp[diarization]"`. The interim
+  `--with 'mcp<2'` workaround is compatible and can be dropped.
+
 ## [0.2.4] — 2026-07-27
 
 A growth-and-honesty micro-release: one new workflow prompt, a hygiene fix
