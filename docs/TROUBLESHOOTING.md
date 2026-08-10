@@ -41,7 +41,13 @@ are offline and unaffected):
 
 Set both in the MCP server config (`"env": {...}`) or the shell that runs
 the first `process_media`. Once the models are cached, neither is needed —
-processing is zero-network by design.
+processing is zero-network by design. Since 0.2.6 the diarization download
+error itself names this fix when the failure looks like TLS interception.
+
+The same applies to running the test suite on such networks: the
+diarization integration tests download models on first run, so a fresh
+`uv run pytest tests/integration` can fail with certificate errors until
+`SSL_CERT_FILE` is set (the rest of the suite is unaffected).
 
 ## `pip install` says "No matching distribution found"
 
@@ -89,7 +95,10 @@ the OLD version until the session/client restarts. Restart the session (or the
 client) after updating; headless and CI runs pick up the new version on
 their next launch because they spawn a fresh server every time. To verify
 what is actually running, check `tool_versions` in any `process_media`
-summary or manifest.
+summary or manifest. Note the split (0.2.6+): `tool_versions` names what
+*transcribed* the job and is deliberately never re-stamped by a diarization
+amend; `diarization.produced_by` names the version that wrote the *current
+speaker labels* — after an amend the two can legitimately differ.
 
 The update command needs the marketplace-qualified id — plain `claude plugin
 update talkthrough` fails with `Plugin "talkthrough" not found`. `claude
@@ -151,11 +160,17 @@ same file is an instant re-call, and `list_jobs()` finds the job.
 - **Pass `num_speakers` first.** If the headcount is known, an exact k
   removes the failure mode entirely — unknown-count clustering is the
   fragile part, not the voice fingerprints.
+- `num_speakers` is a **target, not a guarantee**: the clusterer can
+  converge on fewer clusters than the k you passed. Since 0.2.6 a re-run
+  that changed nothing says so instead of reporting plain success — look for
+  `labels_changed: false` and the "nothing was relabelled" note.
 - No headcount? Tune `TALKTHROUGH_DIARIZATION_THRESHOLD` (default `0.5`):
   **too few** speakers detected (voices merged) → **lower** it (try `0.4`);
-  **too many** (one voice split) → **raise** it (try `0.6`). Re-run with
-  `diarize=true` — an explicit request re-clusters the stored job in seconds
-  without re-transcribing.
+  **too many** (one voice split) → **raise** it (try `0.6`), then re-process
+  with `force=true`. A threshold change alone does not invalidate the stored
+  labels (only an explicit `num_speakers` change or a failed previous run
+  triggers the cheap diarization-only amend), and a `force=true` re-run
+  redoes the whole pipeline — budget accordingly (see the note above).
 - Sub-second interjections ("yeah", "mhm") being absorbed into the other
   speaker's segment is expected at segment-level attribution — see README →
   Limitations.

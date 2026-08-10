@@ -182,6 +182,25 @@ def test_diarization_serializes_speaker_names_when_present() -> None:
     assert Diarization.from_dict(payload).speaker_names == {"S1": "Alice"}
 
 
+def test_diarization_round_trips_v026_outcome_fields() -> None:
+    """labels_changed + produced_by (v0.2.6): serialized only when set, so
+    pre-0.2.6 manifests stay byte-identical and load back to None."""
+    diarization = make_diarization()
+    diarization.labels_changed = False
+    diarization.produced_by = "0.2.6"
+    payload = diarization.to_dict()
+    assert payload["labels_changed"] is False
+    assert payload["produced_by"] == "0.2.6"
+    rebuilt = Diarization.from_dict(payload)
+    assert rebuilt.labels_changed is False
+    assert rebuilt.produced_by == "0.2.6"
+
+    bare = make_diarization().to_dict()
+    assert "labels_changed" not in bare and "produced_by" not in bare
+    legacy = Diarization.from_dict(bare)
+    assert legacy.labels_changed is None and legacy.produced_by is None
+
+
 def test_diarization_from_dict_ignores_unknown_and_malformed() -> None:
     payload = make_diarization().to_dict()
     payload["embedding_dim"] = 256  # field from a future version

@@ -570,6 +570,9 @@ def test_implausible_cluster_count_gets_the_stronger_note() -> None:
     assert "transcription is reused" in note
     assert "still takes minutes" in note
     assert "takes seconds" not in note
+    # v0.2.6 S1 escape hatch: a real 20-person all-hands is not accused
+    assert "if that many people really did speak" in note
+    assert "confirm it" in note
 
 
 def test_implausible_note_fires_even_when_every_cluster_is_substantial() -> None:
@@ -590,6 +593,7 @@ def test_boundary_sixteen_clusters_keeps_the_plain_escalation_text() -> None:
     assert "threshold clustering over-detected" in note
     assert "transcription is reused" in note
     assert "takes seconds" not in note
+    assert "really did speak" not in note  # the escape hatch is implausible-only
 
 
 def test_threshold_escalation_note_is_one_text_on_every_surface() -> None:
@@ -614,6 +618,168 @@ def test_threshold_escalation_note_is_one_text_on_every_surface() -> None:
 
     failed = Diarization(available=False, reason="engine exploded")
     assert threshold_escalation_note(failed) is None
+
+
+# --- v0.2.6 F2: the escalation note survives a no-op amend ----------------------
+
+
+def test_escalation_note_survives_a_noop_amend() -> None:
+    """Before 0.2.6 ANY requested_num_speakers silenced the note — so the
+    exact flow the note itself recommends (ask the user, re-run with k)
+    could end with the same dusty roster and NO warning, reading as
+    human-confirmed. A no-op amend must keep the warning."""
+    from talkthrough_mcp.core.pipeline import (
+        _summarize_diarization,
+        threshold_escalation_note,
+    )
+
+    dusty = dusty_diarization(majors=5, dust=118)
+    dusty.requested_num_speakers = 123
+    dusty.labels_changed = False
+    note = threshold_escalation_note(dusty)
+    assert note is not None and "NOT a headcount" in note
+    summary = _summarize_diarization(dusty)
+    assert summary["note"] == note
+    assert summary["labels_changed"] is False
+
+    dusty.labels_changed = True  # the amend DID change labels → user decided
+    assert threshold_escalation_note(dusty) is None
+    fresh = dusty_diarization(majors=5, dust=118)
+    fresh.requested_num_speakers = 123  # fresh k-run (labels_changed None)
+    assert threshold_escalation_note(fresh) is None
+
+
+def test_amend_noop_note_fires_only_for_explicit_k_noops() -> None:
+    from talkthrough_mcp.core.pipeline import _summarize_diarization, amend_noop_note
+
+    diarization = dusty_diarization(majors=2, dust=0)
+    assert amend_noop_note(diarization) is None  # fresh run: labels_changed unset
+    diarization.labels_changed = False
+    assert amend_noop_note(diarization) is None  # no explicit k requested
+    diarization.requested_num_speakers = 3
+    note = amend_noop_note(diarization)
+    assert note is not None
+    assert "SAME 2" in note and "num_speakers=3" in note
+    assert "nothing was relabelled" in note
+    assert "a target the clusterer may not reach" in note
+    assert _summarize_diarization(diarization)["amend_note"] == note  # one text, every surface
+
+    diarization.labels_changed = True
+    assert amend_noop_note(diarization) is None
+    failed = Diarization(available=False, reason="engine exploded")
+    failed.labels_changed = False
+    failed.requested_num_speakers = 3
+    assert amend_noop_note(failed) is None
+
+
+# --- v0.2.6 F2+F3: the real amend path measures its own outcome -----------------
+
+
+class _FakeDiarizer:
+    """Stands in for the sherpa engine so the REAL _run_diarization and
+    _amend_diarization run end-to-end (snapshot, attribution, provenance)."""
+
+    engine = "fake-engine"
+    engine_version = "0.0"
+    segmentation_model = "seg-model"
+    embedding_model = diarize.DEFAULT_EMBEDDING_MODEL
+    threshold = 0.5
+
+    def __init__(self, turns) -> None:  # type: ignore[no-untyped-def]
+        self._turns = turns
+
+    def diarize(self, samples, sample_rate, *, num_speakers=None, on_progress=None):  # type: ignore[no-untyped-def]
+        return list(self._turns)
+
+
+def _stored_attributed_job(tmp_path, monkeypatch: pytest.MonkeyPatch):
+    """A realistic diarized store entry: roster AND attributed segments,
+    saved with a stale tool_versions stamp (the F3 evidence shape)."""
+    from talkthrough_mcp.core import jobs
+    from talkthrough_mcp.core.diarize import Turn, attribute_segments, speaker_roster
+    from talkthrough_mcp.core.manifest import save_manifest
+
+    monkeypatch.setenv("TALKTHROUGH_HOME", str(tmp_path / "home"))
+    media = tmp_path / "meeting.mp4"
+    media.write_bytes(b"two voices, only ever hashed")
+    job_id = jobs.compute_job_id(media)
+    manifest = make_manifest(job_id=job_id)
+    manifest.media = type(manifest.media)(**{**manifest.media.__dict__, "path": str(media)})
+    turns = [Turn(0, 5000, "S1"), Turn(5000, 8000, "S2")]
+    manifest.transcript.segments = attribute_segments(manifest.transcript.segments, turns)
+    manifest.transcript.diarization = Diarization(
+        available=True,
+        reason="",
+        embedding_model=diarize.DEFAULT_EMBEDDING_MODEL,
+        requested_num_speakers=2,
+        detected_num_speakers=2,
+        speakers=speaker_roster(turns),
+        turns=turns,
+        produced_by="0.2.2",
+    )
+    manifest.tool_versions = {"talkthrough-mcp": "0.2.2"}
+    directory = jobs.job_dir(job_id)
+    directory.mkdir(parents=True)
+    save_manifest(manifest, directory)
+    return media, turns
+
+
+def _amend_through_fake_engine(media, monkeypatch: pytest.MonkeyPatch, *, turns, k: int):
+    from talkthrough_mcp.core import audio, pipeline
+
+    engine(monkeypatch, available=True)
+    monkeypatch.delenv("TALKTHROUGH_DIARIZATION_EMB_MODEL", raising=False)
+    monkeypatch.setattr(diarize, "create_diarizer", lambda: _FakeDiarizer(turns))
+    monkeypatch.setattr(diarize, "load_wav_float32", lambda path: ([], 16000))
+    monkeypatch.setattr(audio, "extract_wav", lambda *a, **kw: None)
+    return pipeline.process_media(str(media), diarize_speakers=True, num_speakers=k)
+
+
+def test_noop_amend_reports_labels_unchanged_and_keeps_provenance(
+    tmp_path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The tester's 353-second no-op: k'≠k re-run converges on the same
+    roster. The payload must say labels_changed=false + the noop note, the
+    stale transcription stamp must survive, and produced_by must move."""
+    from talkthrough_mcp import __version__
+    from talkthrough_mcp.core import jobs, pipeline
+
+    media, turns = _stored_attributed_job(tmp_path, monkeypatch)
+    result = _amend_through_fake_engine(media, monkeypatch, turns=turns, k=3)
+    assert result.amended is True  # the amend RAN and landed labels…
+    diarization = result.manifest.transcript.diarization
+    assert diarization is not None
+    assert diarization.labels_changed is False  # …but changed nothing, and says so
+    summary = pipeline.summarize(result)["diarization"]
+    assert summary["labels_changed"] is False
+    assert "nothing was relabelled" in summary["amend_note"]
+    assert "not a constraint" in summary["amend_note"]
+
+    stored = jobs.load_job(result.manifest.job_id)
+    assert stored.tool_versions == {"talkthrough-mcp": "0.2.2"}, (
+        "an amend must NOT re-stamp transcription provenance"
+    )
+    stored_diarization = stored.transcript.diarization
+    assert stored_diarization is not None
+    assert stored_diarization.produced_by == __version__
+    assert stored_diarization.labels_changed is False
+
+
+def test_relabelling_amend_reports_labels_changed_and_no_noop_note(
+    tmp_path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from talkthrough_mcp.core import pipeline
+    from talkthrough_mcp.core.diarize import Turn
+
+    media, _ = _stored_attributed_job(tmp_path, monkeypatch)
+    different = [Turn(0, 3000, "S1"), Turn(3000, 8000, "S2")]  # boundary moved
+    result = _amend_through_fake_engine(media, monkeypatch, turns=different, k=3)
+    diarization = result.manifest.transcript.diarization
+    assert diarization is not None
+    assert diarization.labels_changed is True
+    summary = pipeline.summarize(result)["diarization"]
+    assert summary["labels_changed"] is True
+    assert "amend_note" not in summary
 
 
 # --- longest_turn_ms roster anchor (v0.2.3) ------------------------------------

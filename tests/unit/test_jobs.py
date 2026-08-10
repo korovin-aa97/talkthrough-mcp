@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import hashlib
+import os
+import time
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
@@ -10,7 +12,7 @@ import pytest
 from tests.conftest import make_manifest
 
 from talkthrough_mcp.core import jobs
-from talkthrough_mcp.core.errors import UnknownJobError
+from talkthrough_mcp.core.errors import ToolFailureError, UnknownJobError
 from talkthrough_mcp.core.manifest import save_manifest
 
 
@@ -65,8 +67,9 @@ def test_gc_removes_only_stale_jobs(isolated_home: Path) -> None:
     _store_job("1111111111111111", fresh)
     _store_job("2222222222222222", stale)
 
-    removed = jobs.gc(keep_days=30)
-    assert removed == ["2222222222222222"]
+    result = jobs.gc(keep_days=30)
+    assert result.removed == ["2222222222222222"]
+    assert result.swept == []
     assert jobs.job_exists("1111111111111111")
     assert not jobs.job_exists("2222222222222222")
 
@@ -117,6 +120,115 @@ def test_partial_job_cleanup_context_removes_only_manifestless_dirs(
     ):
         raise RuntimeError("amend failed after the manifest existed")
     assert jobs.job_exists(completed)
+
+
+# --- v0.2.6 F6: gc sweeps manifest-less partial dirs ---------------------------
+
+
+def _partial_dir(job_id: str, *, age_days: float) -> Path:
+    """A failed-run leftover: a job dir holding only ``job.lock``."""
+    directory = jobs.job_dir(job_id)
+    directory.mkdir(parents=True)
+    (directory / jobs.LOCK_NAME).touch()
+    stamp = time.time() - age_days * 86_400
+    os.utime(directory, (stamp, stamp))
+    return directory
+
+
+def test_gc_sweeps_old_partial_dirs_but_not_fresh_ones(isolated_home: Path) -> None:
+    """The litter class 0.2.4 learned not to CREATE but could not remove:
+    invisible to list_jobs (no manifest), therefore invisible to the age
+    pass by construction."""
+    old = _partial_dir("600f9e1dc9c8d909", age_days=3)  # the real-store specimen
+    fresh = _partial_dir("aaaaaaaaaaaaaaaa", age_days=0)
+    result = jobs.gc(keep_days=30)
+    assert result.swept == ["600f9e1dc9c8d909"]
+    assert result.removed == []
+    assert not old.exists()
+    assert fresh.exists(), "a fresh dir may be a live run warming up — never swept"
+
+
+def test_gc_never_sweeps_a_dir_with_a_manifest_even_at_old_mtime(
+    isolated_home: Path,
+) -> None:
+    recent = (datetime.now(UTC) - timedelta(days=1)).isoformat(timespec="seconds")
+    _store_job("dddddddddddddddd", recent)
+    directory = jobs.job_dir("dddddddddddddddd")
+    stamp = time.time() - 10 * 86_400
+    os.utime(directory, (stamp, stamp))
+    result = jobs.gc(keep_days=30)
+    assert result.removed == [] and result.swept == []
+    assert jobs.job_exists("dddddddddddddddd")
+
+
+def test_gc_sweep_leaves_unreadable_manifest_dirs_alone(isolated_home: Path) -> None:
+    """A manifest that EXISTS but does not parse is a job to repair, not
+    litter — the sweep's contract is "no manifest file at all"."""
+    broken = jobs.jobs_root() / "cccccccccccccccc"
+    broken.mkdir(parents=True)
+    (broken / "manifest.json").write_text("{not json", encoding="utf-8")
+    stamp = time.time() - 10 * 86_400
+    os.utime(broken, (stamp, stamp))
+    assert jobs.gc(keep_days=30).swept == []
+    assert broken.exists()
+
+
+def test_gc_sweep_skips_a_partial_dir_under_a_held_lock(isolated_home: Path) -> None:
+    fcntl = pytest.importorskip("fcntl")
+    directory = _partial_dir("bbbbbbbbbbbbbbbb", age_days=3)
+    handle = (directory / jobs.LOCK_NAME).open("w")
+    try:
+        fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+        result = jobs.gc(keep_days=30)
+        assert result.swept == []
+        assert directory.exists(), "a held lock means a live run — never sweep it"
+    finally:
+        handle.close()
+
+
+# --- v0.2.6 F8: job_lock robustness --------------------------------------------
+
+
+def test_job_lock_retries_when_the_dir_vanishes_between_mkdir_and_open(
+    isolated_home: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A concurrent cleanup can remove the directory in the mkdir→open window;
+    the caller must get a retried acquisition, not a raw FileNotFoundError."""
+    pytest.importorskip("fcntl")
+    real_open = Path.open
+    tripped = {"done": False}
+
+    def flaky_open(self: Path, *args: object, **kwargs: object):  # type: ignore[no-untyped-def]
+        if self.name == jobs.LOCK_NAME and not tripped["done"]:
+            tripped["done"] = True
+            raise FileNotFoundError(self)
+        return real_open(self, *args, **kwargs)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(Path, "open", flaky_open)
+    with jobs.job_lock("a" * 16, wait_seconds=5):
+        assert (jobs.job_dir("a" * 16) / jobs.LOCK_NAME).exists()
+    assert tripped["done"], "the failure injection never fired"
+
+
+def test_job_lock_retake_loop_hits_the_deadline_instead_of_spinning(
+    isolated_home: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A lock file that keeps failing the identity re-check must end in a
+    clean ToolFailureError once wait_seconds is spent — the outer retake
+    loop used to have no deadline at all."""
+    pytest.importorskip("fcntl")
+    real_stat = os.stat
+
+    def stat_lock_missing(path, *args: object, **kwargs: object):  # type: ignore[no-untyped-def]
+        if str(path).endswith(jobs.LOCK_NAME):
+            raise FileNotFoundError(path)
+        return real_stat(path, *args, **kwargs)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(jobs.os, "stat", stat_lock_missing)
+    with pytest.raises(ToolFailureError, match="retry later"), jobs.job_lock(
+        "b" * 16, wait_seconds=0
+    ):
+        raise AssertionError("the lock must never be acquired here")
 
 
 def test_waiter_retakes_the_lock_after_holder_cleans_up(isolated_home: Path) -> None:

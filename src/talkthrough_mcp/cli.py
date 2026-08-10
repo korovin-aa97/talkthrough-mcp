@@ -139,10 +139,12 @@ def _cmd_process(args: argparse.Namespace) -> int:
 def _cmd_gc(args: argparse.Namespace) -> int:
     from .core import jobs
 
-    removed = jobs.gc(keep_days=args.keep_days)
-    if removed:
-        print(f"removed {len(removed)} job(s): {', '.join(removed)}")
-    else:
+    result = jobs.gc(keep_days=args.keep_days)
+    if result.removed:
+        print(f"removed {len(result.removed)} job(s): {', '.join(result.removed)}")
+    if result.swept:
+        print(f"swept {len(result.swept)} partial dir(s): {', '.join(result.swept)}")
+    if not result.removed and not result.swept:
         print(f"nothing to remove (keep-days={args.keep_days})")
     return 0
 

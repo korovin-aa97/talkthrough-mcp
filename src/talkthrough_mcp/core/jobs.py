@@ -15,6 +15,7 @@ import shutil
 import time
 from collections.abc import Iterator
 from contextlib import contextmanager
+from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
@@ -26,6 +27,9 @@ logger = logging.getLogger(__name__)
 JOB_ID_LENGTH = 16
 LOCK_NAME = "job.lock"
 _HASH_CHUNK_BYTES = 1 << 20
+# A manifest-less job dir this old cannot be a live run (processing is capped
+# at 2 h by default) — it is litter from a failure before cleanup existed.
+PARTIAL_SWEEP_MIN_AGE_S = 24 * 3600.0
 
 
 def talkthrough_home() -> Path:
@@ -72,7 +76,10 @@ def job_lock(job_id: str, *, wait_seconds: int = 600) -> Iterator[None]:
     is re-checked: the holder we waited on may have failed and cleaned up the
     whole partial job directory (``cleanup_partial_job``) — then the flock we
     hold is on an orphaned inode, and it must be retaken on the fresh path so
-    two waiters can never both "win" on different inodes.
+    two waiters can never both "win" on different inodes. Every retake
+    iteration honors the same ``wait_seconds`` deadline the flock wait does
+    (v0.2.6) — a lock file that keeps vanishing must end in a clean error,
+    not an unbounded busy loop.
     """
     directory = job_dir(job_id)
     lock_path = directory / LOCK_NAME
@@ -85,10 +92,26 @@ def job_lock(job_id: str, *, wait_seconds: int = 600) -> Iterator[None]:
         lock_path.touch(exist_ok=True)
         yield
         return
+
+    def check_deadline(deadline: float) -> None:
+        if time.monotonic() >= deadline:
+            raise ToolFailureError(
+                f"could not acquire the lock for job {job_id!r} within {wait_seconds}s "
+                "— another process keeps recreating it; retry later"
+            ) from None
+
     deadline = time.monotonic() + wait_seconds
     while True:
         directory.mkdir(parents=True, exist_ok=True)
-        handle = lock_path.open("w")
+        try:
+            handle = lock_path.open("w")
+        except FileNotFoundError:
+            # the directory vanished between mkdir and open (a concurrent
+            # cleanup_partial_job) — retry on a fresh directory instead of
+            # leaking a raw FileNotFoundError to the caller
+            check_deadline(deadline)
+            time.sleep(0.05)
+            continue
         try:
             while True:
                 try:
@@ -111,6 +134,8 @@ def job_lock(job_id: str, *, wait_seconds: int = 600) -> Iterator[None]:
         if same_file:
             break
         handle.close()  # lock file vanished/was replaced under us — retake
+        check_deadline(deadline)
+        time.sleep(0.05)
     try:
         yield
     finally:
@@ -174,8 +199,50 @@ def delete_job(job_id: str) -> None:
         shutil.rmtree(directory)
 
 
-def gc(keep_days: int) -> list[str]:
-    """Delete jobs older than ``keep_days``; returns the removed job ids."""
+@dataclass(frozen=True)
+class GcResult:
+    """What one ``gc`` pass did: completed jobs deleted by age, plus
+    manifest-less partial directories swept (litter from failures that
+    predate the in-run cleanup — invisible to ``list_jobs`` by construction,
+    so the age pass alone can never reach them)."""
+
+    removed: list[str]
+    swept: list[str]
+
+
+def _sweep_partial_dirs(min_age_s: float = PARTIAL_SWEEP_MIN_AGE_S) -> list[str]:
+    """Remove manifest-less job directories older than ``min_age_s``.
+
+    Each candidate is taken under its own job lock, non-blocking — a held
+    lock means a live run owns the directory, and a live run is never swept.
+    The removal itself goes through ``cleanup_partial_job``, which re-checks
+    under the lock that no manifest exists.
+    """
+    root = jobs_root()
+    if not root.is_dir():
+        return []
+    now = time.time()
+    swept: list[str] = []
+    for directory in root.iterdir():
+        if not directory.is_dir() or (directory / MANIFEST_NAME).is_file():
+            continue
+        try:
+            age_s = now - directory.stat().st_mtime
+        except OSError:
+            continue  # vanished mid-scan
+        if age_s < min_age_s:
+            continue
+        try:
+            with job_lock(directory.name, wait_seconds=0):
+                if cleanup_partial_job(directory.name):
+                    swept.append(directory.name)
+        except ToolFailureError:
+            continue  # a live run holds the lock — leave its directory alone
+    return swept
+
+
+def gc(keep_days: int) -> GcResult:
+    """Delete jobs older than ``keep_days`` and sweep stale partial dirs."""
     cutoff = datetime.now(UTC) - timedelta(days=keep_days)
     removed: list[str] = []
     for manifest in list_jobs():
@@ -188,4 +255,4 @@ def gc(keep_days: int) -> list[str]:
         if created < cutoff:
             delete_job(manifest.job_id)
             removed.append(manifest.job_id)
-    return removed
+    return GcResult(removed=removed, swept=_sweep_partial_dirs())

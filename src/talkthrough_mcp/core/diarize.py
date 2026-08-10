@@ -147,6 +147,14 @@ class Diarization:
     speakers: list[SpeakerStat] = field(default_factory=list)
     turns: list[Turn] = field(default_factory=list)
     speaker_names: dict[str, str] | None = None
+    # v0.2.6 — both None on manifests written before the fields existed.
+    # ``labels_changed``: set only by the amend path — did the re-run actually
+    # relabel anything? ``produced_by``: the package version that wrote THIS
+    # block; ``tool_versions`` keeps naming what transcribed the job (an amend
+    # must not re-stamp it — transcription provenance and diarization
+    # provenance are different facts).
+    labels_changed: bool | None = None
+    produced_by: str | None = None
 
     def to_dict(self) -> dict[str, Any]:
         payload: dict[str, Any] = {
@@ -173,6 +181,10 @@ class Diarization:
         }
         if self.speaker_names is not None:
             payload["speaker_names"] = dict(self.speaker_names)
+        if self.labels_changed is not None:
+            payload["labels_changed"] = self.labels_changed
+        if self.produced_by is not None:
+            payload["produced_by"] = self.produced_by
         return payload
 
     @staticmethod
@@ -430,10 +442,20 @@ def ensure_model_file(spec: ModelSpec) -> Path:
         try:
             _download(spec.url, download_path)
         except OSError as exc:
-            raise ToolFailureError(
+            message = (
                 f"could not download diarization model {spec.name!r} from {spec.url}: {exc} — "
                 "check network access; the download happens once, warm runs are offline"
-            ) from exc
+            )
+            detail = str(exc).lower()
+            if "certificate" in detail or "ssl" in detail:
+                # the 20-minute investigation a one-liner prevents: corporate
+                # TLS interception re-signs traffic with a CA Python's bundled
+                # store doesn't trust
+                message += (
+                    " (corporate TLS interception? point SSL_CERT_FILE at your "
+                    "system store — see docs/TROUBLESHOOTING.md)"
+                )
+            raise ToolFailureError(message) from exc
         digest = _sha256_file(download_path)
         if digest != spec.sha256:
             raise ToolFailureError(
@@ -569,8 +591,11 @@ class Diarizer:
     ) -> list[Turn]:
         """Run diarization over mono float32 samples → relabeled, sorted turns.
 
-        ``num_speakers`` > 0 clusters to exactly k (threshold is ignored by
-        the engine then); otherwise the threshold decides the speaker count.
+        ``num_speakers`` > 0 asks the engine to cluster toward k speakers
+        (threshold is ignored by the engine then) — a TARGET, not a
+        guarantee: the clusterer may converge on fewer clusters than k
+        (measured: k=8 and k=9 both yielded 7 on a real meeting). Otherwise
+        the threshold decides the speaker count.
         """
         import sherpa_onnx
 
