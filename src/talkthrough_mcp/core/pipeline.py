@@ -241,7 +241,7 @@ def _run_diarization(
             diarizer = diarize.create_diarizer()
         if diarizer is None:
             transcript.diarization = Diarization(
-                available=False, reason=diarize.MISSING_EXTRA_REASON
+                available=False, reason=diarize.MISSING_EXTRA_REASON, produced_by=__version__
             )
             return
 
@@ -266,10 +266,13 @@ def _run_diarization(
             threshold=diarizer.threshold,
             speakers=diarize.speaker_roster(turns),
             turns=turns,
+            produced_by=__version__,
         )
     except Exception as exc:
         logger.warning("diarization failed, keeping the transcript without speakers: %s", exc)
-        transcript.diarization = Diarization(available=False, reason=str(exc))
+        transcript.diarization = Diarization(
+            available=False, reason=str(exc), produced_by=__version__
+        )
 
 
 def _needs_diarize_amend(manifest: Manifest, request: _DiarizeRequest) -> bool:
@@ -301,6 +304,24 @@ def _needs_diarize_amend(manifest: Manifest, request: _DiarizeRequest) -> bool:
     )
 
 
+def _labels_snapshot(transcript: Transcript) -> tuple[Any, list[str | None]]:
+    """The comparable identity of a diarization outcome: the roster (label,
+    talk time, turn count) plus the per-segment speaker labels.
+
+    The amend path snapshots this before and after to answer the one question
+    the ``amended`` flag cannot: did the re-run actually relabel anything?
+    (Tester evidence, 2026-07-27: a 353 s amend with a different ``k``
+    returned the byte-identical roster — and reported plain success.)
+    """
+    diarization = transcript.diarization
+    roster = None
+    if diarization is not None and diarization.available:
+        roster = [
+            (stat.label, stat.talk_time_ms, stat.turn_count) for stat in diarization.speakers
+        ]
+    return roster, [segment.speaker for segment in transcript.segments]
+
+
 def _amend_diarization(
     media: Path, manifest: Manifest, request: _DiarizeRequest, report: ProgressFn
 ) -> Manifest:
@@ -329,12 +350,18 @@ def _amend_diarization(
     directory = jobs.job_dir(manifest.job_id)
     tool_timeout = max(600, int(manifest.media.duration_s * 4) + 120)
     wav_path = directory / "audio.wav"
+    before = _labels_snapshot(manifest.transcript)
     report("extracting audio", 0.10)
     try:
         audio.extract_wav(media, wav_path, timeout=tool_timeout)
         _run_diarization(wav_path, manifest.transcript, request, report, diarizer=diarizer)
     finally:
         wav_path.unlink(missing_ok=True)
+    diarization = manifest.transcript.diarization
+    if diarization is not None and diarization.available:
+        # outcome, not attempt (the ProcessResult.amended rule): a re-run that
+        # converged on the same labels must say so instead of reading as a fix
+        diarization.labels_changed = _labels_snapshot(manifest.transcript) != before
     report("writing manifest", 0.99)
     save_manifest(manifest, directory)
     report("done", 1.0)
@@ -480,7 +507,9 @@ def process_media(
                     _run_diarization(wav_path, transcript, diarize_request, report)
                 elif diarize_request.engine_missing:
                     transcript.diarization = Diarization(
-                        available=False, reason=diarize.MISSING_EXTRA_REASON
+                        available=False,
+                        reason=diarize.MISSING_EXTRA_REASON,
+                        produced_by=__version__,
                     )
             finally:
                 wav_path.unlink(missing_ok=True)
@@ -594,8 +623,15 @@ def threshold_escalation_note(diarization: Diarization) -> str | None:
     that serves it (``process_media`` summary, ``get_transcript`` header) —
     an agent starting from either entry point must meet the same escalation
     contract; a summary-only note never reaches transcript-first agents.
+
+    An explicit ``requested_num_speakers`` silences the note ONLY when the
+    re-run actually changed something (v0.2.6): a no-op amend
+    (``labels_changed`` False) left the exact roster the warning was about,
+    and dropping the warning then would read as "a human confirmed this".
     """
-    if not diarization.available or diarization.requested_num_speakers is not None:
+    if not diarization.available:
+        return None
+    if diarization.requested_num_speakers is not None and diarization.labels_changed is not False:
         return None
     detected = diarization.detected_num_speakers or 0
     if detected > IMPLAUSIBLE_SPEAKER_COUNT:
@@ -605,6 +641,7 @@ def threshold_escalation_note(diarization: Diarization) -> str | None:
             "a headcount. ASK YOUR USER how many people actually spoke (the "
             "talk_time_ms roster above shows which voices dominate), then "
             + _AMEND_HONESTY
+            + "; if that many people really did speak, pass num_speakers=N to confirm it"
         )
     if substantial_speaker_count(diarization) >= detected:
         return None
@@ -613,6 +650,29 @@ def threshold_escalation_note(diarization: Diarization) -> str | None:
         "count is unreliable and is NOT a headcount. ASK YOUR USER how many "
         "people actually spoke (the talk_time_ms roster above shows which "
         "voices dominate), then " + _AMEND_HONESTY
+    )
+
+
+def amend_noop_note(diarization: Diarization) -> str | None:
+    """The no-op amend note: a re-run with an explicit ``num_speakers`` that
+    converged on the exact same labels, or None.
+
+    Same contract as ``threshold_escalation_note``: ONE text, byte-identical
+    on every surface that serves it (``process_media`` summary,
+    ``get_transcript`` header). Without it, "353 s of CPU, same roster,
+    amended: true" reads as a successful fix (tester evidence, 2026-07-27).
+    """
+    if (
+        not diarization.available
+        or diarization.labels_changed is not False
+        or diarization.requested_num_speakers is None
+    ):
+        return None
+    return (
+        f"the re-run converged on the SAME {diarization.detected_num_speakers or 0} "
+        f"clusters for num_speakers={diarization.requested_num_speakers} — nothing was "
+        "relabelled; num_speakers is a target the clusterer may not reach, not a "
+        "constraint"
     )
 
 
@@ -672,16 +732,21 @@ def _summarize_diarization(diarization: Diarization) -> dict[str, Any]:
     }
     if hidden:
         payload["speakers_truncated"] = hidden
+    if diarization.labels_changed is not None:
+        payload["labels_changed"] = diarization.labels_changed
     if diarization.requested_num_speakers is not None:
         payload["requested_num_speakers"] = diarization.requested_num_speakers
-    else:
-        # threshold-mode honesty (v0.2.2): the cluster count is NOT a
-        # headcount, and no server heuristic is trusted to guess one — the
-        # note escalates to the user, who always knows their own meeting.
-        note = threshold_escalation_note(diarization)
-        if note is not None:
-            payload["speakers_with_30s_plus"] = substantial_speaker_count(diarization)
-            payload["note"] = note
+    noop = amend_noop_note(diarization)
+    if noop is not None:
+        payload["amend_note"] = noop
+    # threshold-mode honesty (v0.2.2): the cluster count is NOT a headcount,
+    # and no server heuristic is trusted to guess one — the note escalates to
+    # the user, who always knows their own meeting. Since v0.2.6 it also
+    # survives a no-op amend (the helper decides).
+    note = threshold_escalation_note(diarization)
+    if note is not None:
+        payload["speakers_with_30s_plus"] = substantial_speaker_count(diarization)
+        payload["note"] = note
     return payload
 
 

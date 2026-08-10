@@ -422,13 +422,16 @@ torch, no accounts, no GPU):
   roster with talk time in `get_transcript`, `speakers_in_range` in
   `get_moment`, `speaker` on `search` hits, `S1:` prefixes in the text/SRT
   formats, a speaker count in `list_jobs`.
-- **Know the headcount? Pass `num_speakers`.** Clustering to an exact k
+- **Know the headcount? Pass `num_speakers`.** Clustering toward an exact k
   removes the main failure mode of unknown-count mode (similar voices merging
-  or one voice splitting). Agents are instructed to do this via the tool
-  guidance; do the same in your own calls.
+  or one voice splitting). It is a target, not a guarantee: the clusterer can
+  converge on fewer clusters than k, and a re-run that changed nothing says
+  so in the payload (`labels_changed: false`). Agents are instructed to pass
+  the headcount via the tool guidance; do the same in your own calls.
 - **Already processed a recording?** Calling `process_media(diarize=true)` on
-  it re-runs *only* diarization — whisper is not re-run, and labels appear in
-  the existing job in seconds. Same for changing `num_speakers`.
+  it re-runs *only* diarization — whisper is not re-run, and labels land in
+  the existing job. Same for changing `num_speakers`. The diarization stage
+  itself still re-scans the full audio: minutes on long recordings.
 - Labels are anonymous by design; mapping `S1` → "Alice" is the calling
   agent's job (self-introductions, vocatives, the `attendees` argument of the
   `meeting-actions` prompt). The server never guesses names.
@@ -466,7 +469,9 @@ ONNX inference, and there is no telemetry. The only network access is one-time
 tool/model downloads (ffmpeg build, whisper model, OCR models, diarization
 models — the latter pinned by URL + sha256). Diarization keeps no voiceprint
 database: voice embeddings live only in process memory, and only anonymous
-turn labels (`S1`/`S2`) land on disk.
+turn labels (`S1`/`S2`) land on disk. Your agent sees only the payloads the
+MCP tools return (text and selected frames) in your existing session;
+talkthrough itself makes no LLM calls.
 
 ## Languages
 

@@ -29,7 +29,7 @@ speech locally (whisper), extracts scene-change keyframes, OCRs on-screen text, 
 the wall-clock start time, and (opt-in) labels who said what via local speaker diarization. \
 Returns a compact summary (job_id, media info, wall_clock, transcript preview, speaker \
 roster when diarized) — full data stays on disk and is served lazily by the other tools. \
-Idempotent by content hash: re-calling on an already-processed file returns instantly. For MULTI-PERSON recordings (meetings, interviews, calls) diarize=true is part of a proper analysis — pass it even when the user only asks for a summary.
+Idempotent by content hash: re-calling on an already-processed file returns instantly. For MULTI-PERSON recordings (meetings, interviews, calls) diarize=true is part of a proper analysis — pass it even when the user only asks for a summary. num_speakers is a target the clusterer may not reach, not a constraint — the payload says when a re-run changed nothing (labels_changed).
 When NOT to use: to re-fetch data you already processed (use the retrieval tools), or for \
 URLs — local file paths only.
 Examples:
@@ -245,9 +245,11 @@ before everything else — and this is a bug report, not a fix: change no code.
    whole. Long recording: search(job_id="{job_id}", query="<distinctive
    word>") (error text, feature names) and read only the relevant ranges.
    If the job_id looks wrong, verify with list_jobs().
-2. A silent recording (no narration) is a VALID input, not an error: the
-   transcript is empty, but frames and on-screen text are still indexed —
-   orient with search (OCR hits) and get_frames across the timeline instead.
+2. A silent recording (no narration) is a VALID input, not an error:
+   get_transcript returns an empty transcript with a note (and list_jobs
+   shows has_transcript: false), while frames and on-screen text are still
+   indexed — orient with search (OCR hits) and get_frames across the
+   timeline instead.
 3. Pick ONE bug — the highest-confidence, highest-severity problem the
    evidence supports. Mention anything else in a single "Also observed" line
    at the end of the draft; do not investigate it.

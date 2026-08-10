@@ -19,6 +19,11 @@ static ffmpeg build once:
 uv run pytest -q
 ```
 
+On corporate networks with TLS interception the first full run can fail on
+the diarization model downloads with certificate errors — set
+`SSL_CERT_FILE` (see docs/TROUBLESHOOTING.md → "Corporate networks") and
+re-run; warm runs never touch the network.
+
 ## Checks that must be green
 
 ```bash

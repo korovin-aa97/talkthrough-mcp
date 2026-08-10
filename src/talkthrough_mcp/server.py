@@ -193,9 +193,36 @@ def get_transcript(
 ) -> dict[str, Any]:
     manifest = _load(job_id)
     if not manifest.transcript.available:
-        raise ToolError(
-            f"job {job_id!r} has no transcript ({manifest.transcript.reason or 'unavailable'})"
-        )
+        # honesty, not an error (v0.2.6): silent recordings are a headline
+        # input, and the `bug` prompt's step 1 sends agents here first — an
+        # empty transcript is the truthful answer, in the exact shape of a
+        # served one so the calling code never branches
+        empty: dict[str, Any] = {
+            "job_id": job_id,
+            "format": format,
+            "language": manifest.transcript.language,
+            "media_kind": manifest.media.kind,
+            "transcript_available": False,
+            "reason": manifest.transcript.reason or "unavailable",
+            "segment_count_total": 0,
+            "segments_returned": 0,
+            "range": {"start_ms": start_ms, "end_ms": end_ms},
+            "truncated": False,
+            "next_start_ms": None,
+            "note": (
+                "no audio stream in this recording — narration was never captured; "
+                "the frames and on-screen text ARE indexed: use search(job_id, "
+                "query=...) for OCR hits and get_frames/get_moment for the visual "
+                "timeline"
+            ),
+        }
+        if format == "segments":
+            empty["segments"] = []
+        elif format == "text":
+            empty["text"] = ""
+        else:
+            empty["srt"] = ""
+        return empty
     picked = slice_segments(manifest.transcript.segments, start_ms, end_ms)
 
     served: list[Any] = []
@@ -230,12 +257,20 @@ def get_transcript(
         payload["speakers"], hidden = pipeline.roster_payload(diarization)
         if hidden:
             payload["speakers_truncated"] = hidden
+        if diarization.labels_changed is not None:
+            # additive (v0.2.6): the amend outcome rides the same header the
+            # roster does — whether the last re-run relabelled anything must
+            # not require re-running process_media to find out
+            payload["labels_changed"] = diarization.labels_changed
         escalation = pipeline.threshold_escalation_note(diarization)
         if escalation is not None:
             # additive (v0.2.3): the same byte-identical text the process
             # summary carries — agents that start transcript-first (list_jobs
             # → get_transcript) never see that summary
             payload["diarization_note"] = escalation
+        noop = pipeline.amend_noop_note(diarization)
+        if noop is not None:
+            payload["amend_note"] = noop
     if format == "segments":
         payload["segments"] = [
             {
@@ -520,6 +555,9 @@ def list_jobs() -> dict[str, Any]:
                 ),
                 "wall_clock_source": manifest.wall_clock.source if manifest.wall_clock else None,
                 "segment_count": len(manifest.transcript.segments),
+                # v0.2.6: segment_count alone cannot tell a silent recording
+                # from "sound present but nobody spoke" — the flag can
+                "has_transcript": manifest.transcript.available,
                 "frames_unique": manifest.frames.unique_count,
                 "frames_total": manifest.frames.count,
                 **(

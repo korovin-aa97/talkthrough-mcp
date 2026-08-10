@@ -4,6 +4,82 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions follow
 [SemVer](https://semver.org/).
 
+## [0.2.6] — 2026-08-10
+
+One theme: **the payload tells the truth about the outcome, not the
+attempt** — the same line 0.2.2 (amend honesty) and 0.2.3 (fail-fast,
+`diarization_note`) followed. Every item traces to an external evaluation of
+0.2.4 (2026-07-27); each finding was reproduced against the code before
+fixing. No new features.
+
+### Fixed
+
+- **`get_transcript` on a silent recording returns an honest empty payload
+  instead of an error.** Silent recordings are a headline input, and the
+  flagship `bug` prompt described the silent case as "the transcript is
+  empty" while the tool raised `ToolError`. Now the payload has the same
+  shape as a served transcript (`segments: []` / `text: ""` / `srt: ""`,
+  zero counts), plus `transcript_available: false`, the stored `reason`, and
+  a note routing to `search` (OCR is indexed) and `get_frames`/`get_moment`.
+  `list_jobs` entries carry `has_transcript` — `segment_count: 0` alone
+  could not tell "no audio stream" from "sound present, nobody spoke". The
+  `bug` prompt text now matches the behavior it promises.
+- **A diarization amend that changed nothing now says so.** A re-run with a
+  different `num_speakers` can converge on the exact same clusters (measured
+  on a real meeting: k=8 and k=9 both → 7 clusters, 0 of 605 segments
+  relabelled — reported as plain success). The amend path now compares the
+  roster and per-segment labels before/after and records
+  `diarization.labels_changed`; when nothing changed, the summary and
+  `get_transcript` serve one byte-identical note: "nothing was relabelled;
+  num_speakers is a target the clusterer may not reach, not a constraint".
+- **A no-op amend no longer silences the over-detection warning.** Any
+  explicit `num_speakers` used to suppress the threshold-escalation note —
+  so the exact flow the note recommends (ask the user, re-run with k) could
+  end with the same dusty roster and no warning, reading as
+  "human-confirmed". The note now survives when `labels_changed` is false.
+- **Amend provenance is no longer ambiguous.** An amend re-saves the
+  manifest but must not re-stamp `tool_versions` (that records what
+  *transcribed* the job). The new `diarization.produced_by` records which
+  version wrote the *current speaker labels*, on fresh runs and amends
+  alike; after an amend the two can legitimately differ, and
+  TROUBLESHOOTING explains the split.
+- **`gc` now sweeps manifest-less partial directories.** A failure before
+  the manifest exists could leave a directory holding only `job.lock`
+  (litter 0.2.4 learned not to create but could not remove) — invisible to
+  `list_jobs` and therefore to the age-based pass by construction. `gc`
+  adds a second pass: manifest-less directories older than a day are
+  removed under their own non-blocking job lock via the same
+  "no manifest ⇒ safe" cleanup a live run uses; a held lock (a live run) is
+  never touched. The CLI reports "removed N job(s)" and "swept M partial
+  dir(s)" separately.
+- **`job_lock` hardening.** The lock-retake loop (after a holder cleaned up
+  the directory) now honors the same `wait_seconds` deadline as the flock
+  wait, with a short backoff, instead of looping unbounded; a directory
+  vanishing between `mkdir` and opening the lock file is retried instead of
+  leaking a raw `FileNotFoundError`.
+- Docs: two surviving falsified "in seconds" claims removed (README
+  Speakers, TROUBLESHOOTING threshold advice), and the threshold-tuning
+  advice corrected — a `TALKTHROUGH_DIARIZATION_THRESHOLD` change alone
+  does not invalidate stored labels; applying it means a `force=true`
+  re-run of the whole pipeline.
+
+### Added
+
+- The implausible-speaker-count note names the escape hatch for genuinely
+  large meetings: "if that many people really did speak, pass
+  num_speakers=N to confirm it" — the 16-cluster boundary itself is
+  unchanged.
+- Diarization model download failures that look like TLS interception
+  (certificate errors) now point at `SSL_CERT_FILE` and TROUBLESHOOTING in
+  the error text; CONTRIBUTING notes the same for first
+  `pytest tests/integration` runs on corporate networks.
+- `num_speakers` is documented as a target, not a guarantee — engine
+  docstring, tool guidance, and README now agree, and the payload proves it
+  via `labels_changed`.
+- README Privacy names what the calling agent actually sees: only the
+  payloads the MCP tools return (text and selected frames) in your existing
+  session; talkthrough itself makes no LLM calls.
+
 ## [0.2.5] — 2026-07-31
 
 An emergency one-line release: a dependency bound, no code or behavior
