@@ -6,13 +6,17 @@ Only the latest released version is supported with security fixes.
 
 ## Reporting a vulnerability
 
-Please use GitHub's **private vulnerability reporting** on this repository
-(Security → Report a vulnerability). If that is unavailable, open a minimal
-public issue that says "security — requesting private contact" without
-details, and a private channel will be arranged.
+Please use this repository's
+[private vulnerability reporting form](https://github.com/korovin-aa97/talkthrough-mcp/security/advisories/new).
+This sends the report privately to the maintainer; do not include vulnerability
+details in a public issue. If the private form is unavailable, open a minimal
+public issue that says "security — requesting private contact" without details,
+and a private channel will be arranged.
 
-You can expect an acknowledgement within a few days. Please include a
-reproduction and your assessment of impact.
+You can expect an acknowledgement within 3 business days. Please include a
+reproduction and your assessment of impact. We will coordinate disclosure with
+you and aim to publish a fix or status update within 90 days, depending on the
+severity and complexity of the vulnerability.
 
 ## Threat-model notes for reporters
 

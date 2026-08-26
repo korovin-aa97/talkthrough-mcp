@@ -23,14 +23,40 @@ permissions:
 jobs:
   build:
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write # OIDC certificate for the Sigstore-signed provenance.
+      attestations: write # Store the signed attestation in GitHub.
+      artifact-metadata: write # Associate the attestation with its artifacts.
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
       - run: uv build
+
+      - name: Generate signed build provenance
+        id: attest
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
+        with:
+          subject-path: |
+            dist/*.whl
+            dist/*.tar.gz
+
+      - name: Prepare provenance release asset
+        run: cp "$ATTESTATION_BUNDLE" "dist/talkthrough-mcp-${RELEASE_TAG}.intoto.jsonl"
+        env:
+          ATTESTATION_BUNDLE: ${{ steps.attest.outputs.bundle-path }}
+          RELEASE_TAG: ${{ github.ref_name }}
+
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: dist
-          path: dist/
+          path: |
+            dist/*.whl
+            dist/*.tar.gz
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: provenance
+          path: dist/*.intoto.jsonl
 
   publish-pypi:
     needs: build
@@ -56,6 +82,10 @@ jobs:
         with:
           name: dist
           path: dist/
-      - run: gh release create "$GITHUB_REF_NAME" dist/* --generate-notes
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        with:
+          name: provenance
+          path: provenance/
+      - run: gh release create "$GITHUB_REF_NAME" dist/* provenance/* --generate-notes
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
