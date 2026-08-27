@@ -39,6 +39,11 @@ are offline and unaffected):
   SSL_CERT_FILE=/etc/ssl/cert.pem
   ```
 
+  On a machine without system ffmpeg, the first cold-start download may
+  instead come from the third-party `static-ffmpeg` package. Its raw
+  certificate error has the same cause, and the same `SSL_CERT_FILE` setting
+  applies to that one-time ffmpeg download too.
+
 Set both in the MCP server config (`"env": {...}`) or the shell that runs
 the first `process_media`. Once the models are cached, neither is needed —
 processing is zero-network by design. Since 0.2.6 the diarization download
