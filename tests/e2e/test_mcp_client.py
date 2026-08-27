@@ -250,9 +250,12 @@ async def _run_session(home: Path) -> None:
             assert block["available"] is True
             assert block["detected_num_speakers"] == TWO_VOICE_NUM_SPEAKERS
             assert [speaker["label"] for speaker in block["speakers"]] == ["S1", "S2"]
-            # v0.2.3: the roster carries the screen-check anchor on the wire
+            # v0.3.0: the roster names both the screen-check anchor and duration;
+            # the old ambiguous field remains an additive compatibility alias.
             assert all(
-                isinstance(speaker["longest_turn_ms"], int)
+                isinstance(speaker["longest_turn_at_ms"], int)
+                and isinstance(speaker["longest_turn_duration_ms"], int)
+                and speaker["longest_turn_ms"] == speaker["longest_turn_at_ms"]
                 for speaker in block["speakers"]
             )
             assert any(

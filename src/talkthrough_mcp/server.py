@@ -269,6 +269,8 @@ def get_transcript(
             # roster does — whether the last re-run relabelled anything must
             # not require re-running process_media to find out
             payload["labels_changed"] = diarization.labels_changed
+        if diarization.amend_reason is not None:
+            payload["amend_reason"] = diarization.amend_reason
         escalation = pipeline.threshold_escalation_note(diarization)
         if escalation is not None:
             # additive (v0.2.3): the same byte-identical text the process

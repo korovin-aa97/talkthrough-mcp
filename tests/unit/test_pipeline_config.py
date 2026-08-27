@@ -649,7 +649,7 @@ def test_escalation_note_survives_a_noop_amend() -> None:
     assert threshold_escalation_note(fresh) is None
 
 
-def test_amend_noop_note_fires_only_for_explicit_k_noops() -> None:
+def test_amend_noop_note_explains_k_and_embedding_model_noops() -> None:
     from talkthrough_mcp.core.pipeline import _summarize_diarization, amend_noop_note
 
     diarization = dusty_diarization(majors=2, dust=0)
@@ -663,6 +663,23 @@ def test_amend_noop_note_fires_only_for_explicit_k_noops() -> None:
     assert "nothing was relabelled" in note
     assert "a target the clusterer may not reach" in note
     assert _summarize_diarization(diarization)["amend_note"] == note  # one text, every surface
+
+    diarization.requested_num_speakers = None
+    diarization.amend_reason = "embedding_model"
+    diarization.embedding_model = "new-embedding.onnx"
+    model_note = amend_noop_note(diarization)
+    assert model_note is not None
+    assert "new embedding model new-embedding.onnx" in model_note
+    assert "agreed with the stored labels" in model_note
+    model_summary = _summarize_diarization(diarization)
+    assert model_summary["amend_reason"] == "embedding_model"
+    assert model_summary["amend_note"] == model_note
+
+    diarization.requested_num_speakers = 3
+    diarization.amend_reason = "both"
+    both_note = amend_noop_note(diarization)
+    assert both_note is not None
+    assert "new embedding model" in both_note and "num_speakers=3" in both_note
 
     diarization.labels_changed = True
     assert amend_noop_note(diarization) is None
@@ -750,6 +767,7 @@ def test_noop_amend_reports_labels_unchanged_and_keeps_provenance(
     diarization = result.manifest.transcript.diarization
     assert diarization is not None
     assert diarization.labels_changed is False  # …but changed nothing, and says so
+    assert diarization.amend_reason == "num_speakers"
     summary = pipeline.summarize(result)["diarization"]
     assert summary["labels_changed"] is False
     assert "nothing was relabelled" in summary["amend_note"]
@@ -763,6 +781,30 @@ def test_noop_amend_reports_labels_unchanged_and_keeps_provenance(
     assert stored_diarization is not None
     assert stored_diarization.produced_by == __version__
     assert stored_diarization.labels_changed is False
+    assert stored_diarization.amend_reason == "num_speakers"
+
+
+def test_embedding_model_noop_amend_persists_and_explains_reason(
+    tmp_path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from talkthrough_mcp.core import jobs, pipeline
+    from talkthrough_mcp.core.manifest import save_manifest
+
+    media, turns = _stored_attributed_job(tmp_path, monkeypatch)
+    stored = jobs.load_job(jobs.compute_job_id(media))
+    diarization = stored.transcript.diarization
+    assert diarization is not None
+    diarization.embedding_model = "old-embedding-model"
+    save_manifest(stored, jobs.job_dir(stored.job_id))
+
+    result = _amend_through_fake_engine(media, monkeypatch, turns=turns, k=2)
+    amended = result.manifest.transcript.diarization
+    assert amended is not None
+    assert amended.labels_changed is False
+    assert amended.amend_reason == "embedding_model"
+    summary = pipeline.summarize(result)["diarization"]
+    assert summary["amend_reason"] == "embedding_model"
+    assert "new embedding model" in summary["amend_note"]
 
 
 def test_relabelling_amend_reports_labels_changed_and_no_noop_note(
@@ -782,7 +824,7 @@ def test_relabelling_amend_reports_labels_changed_and_no_noop_note(
     assert "amend_note" not in summary
 
 
-# --- longest_turn_ms roster anchor (v0.2.3) ------------------------------------
+# --- longest-turn roster anchor + duration (v0.3.0) -----------------------------
 
 
 def test_roster_payload_carries_longest_turn_anchor() -> None:
@@ -807,8 +849,12 @@ def test_roster_payload_carries_longest_turn_anchor() -> None:
     entries, hidden = roster_payload(diarization)
     assert hidden == 0
     by_label = {entry["label"]: entry for entry in entries}
-    assert by_label["S1"]["longest_turn_ms"] == 0  # 4000ms tie → earliest t0
-    assert by_label["S2"]["longest_turn_ms"] == 9000  # 11000ms beats 1000ms
+    assert by_label["S1"]["longest_turn_at_ms"] == 0  # 4000ms tie → earliest t0
+    assert by_label["S1"]["longest_turn_duration_ms"] == 4000
+    assert by_label["S1"]["longest_turn_ms"] == 0  # deprecated alias through 0.3.x
+    assert by_label["S2"]["longest_turn_at_ms"] == 9000  # 11000ms beats 1000ms
+    assert by_label["S2"]["longest_turn_duration_ms"] == 11_000
+    assert by_label["S2"]["longest_turn_ms"] == 9000
 
     shuffled = Diarization(
         available=True,
@@ -822,4 +868,6 @@ def test_roster_payload_carries_longest_turn_anchor() -> None:
 
     no_turns = dusty_diarization(majors=2, dust=0)
     bare_entries, _ = roster_payload(no_turns)
+    assert all("longest_turn_at_ms" not in entry for entry in bare_entries)
+    assert all("longest_turn_duration_ms" not in entry for entry in bare_entries)
     assert all("longest_turn_ms" not in entry for entry in bare_entries)

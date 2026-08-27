@@ -300,8 +300,10 @@ def test_get_transcript_serves_amend_outcome_and_noop_note(isolated_home: Path) 
     assert diarization is not None
     diarization.requested_num_speakers = 4
     diarization.labels_changed = False
+    diarization.amend_reason = "num_speakers"
     payload = get_transcript(_store(manifest))
     assert payload["labels_changed"] is False
+    assert payload["amend_reason"] == "num_speakers"
     assert payload["amend_note"] == pipeline.amend_noop_note(diarization)
     assert "nothing was relabelled" in payload["amend_note"]
 

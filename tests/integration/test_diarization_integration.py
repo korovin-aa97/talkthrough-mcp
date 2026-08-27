@@ -152,9 +152,14 @@ def test_summary_carries_compact_diarization_block(two_voice: ProcessResult) -> 
     assert block["available"] is True
     assert block["detected_num_speakers"] == TWO_VOICE_NUM_SPEAKERS
     assert block["requested_num_speakers"] == TWO_VOICE_NUM_SPEAKERS
-    assert {"label", "talk_time_ms", "turn_count", "longest_turn_ms"} == set(
-        block["speakers"][0]
-    )
+    assert {
+        "label",
+        "talk_time_ms",
+        "turn_count",
+        "longest_turn_at_ms",
+        "longest_turn_duration_ms",
+        "longest_turn_ms",
+    } == set(block["speakers"][0])
     preview = summary["transcript"]["preview_segments"]
     assert any(entry.get("speaker") for entry in preview)
 
@@ -187,16 +192,23 @@ def test_get_transcript_serves_speakers_roster_and_prefixes(two_voice: ProcessRe
     payload = get_transcript(job_id)
     assert payload["diarized"] is True
     assert [entry["label"] for entry in payload["speakers"]] == ["S1", "S2"]
-    assert {"label", "talk_time_ms", "turn_count", "longest_turn_ms"} == set(
-        payload["speakers"][0]
-    )
+    assert {
+        "label",
+        "talk_time_ms",
+        "turn_count",
+        "longest_turn_at_ms",
+        "longest_turn_duration_ms",
+        "longest_turn_ms",
+    } == set(payload["speakers"][0])
     # the anchor points INSIDE one of that speaker's stored turns
     diarization = two_voice.manifest.transcript.diarization
     assert diarization is not None
     for entry in payload["speakers"]:
         own_turns = [t for t in diarization.turns if t.speaker == entry["label"]]
-        assert any(t.t0_ms == entry["longest_turn_ms"] for t in own_turns)
-        longest = max(own_turns, key=lambda t: t.t1_ms - t.t0_ms)
+        assert any(t.t0_ms == entry["longest_turn_at_ms"] for t in own_turns)
+        longest = max(own_turns, key=lambda t: (t.t1_ms - t.t0_ms, -t.t0_ms))
+        assert entry["longest_turn_at_ms"] == longest.t0_ms
+        assert entry["longest_turn_duration_ms"] == longest.t1_ms - longest.t0_ms
         assert entry["longest_turn_ms"] == longest.t0_ms
     speakers_seen = {entry.get("speaker") for entry in payload["segments"]}
     assert {"S1", "S2"} <= speakers_seen
@@ -328,6 +340,7 @@ def test_explicit_diarize_amends_on_embedding_model_change(
     after = amended.manifest.transcript.diarization
     assert after is not None and after.available
     assert after.embedding_model == str(wespeaker)
+    assert after.amend_reason == "embedding_model"
     assert after.detected_num_speakers == TWO_VOICE_NUM_SPEAKERS
     assert [stat.label for stat in after.speakers] == ["S1", "S2"]
 

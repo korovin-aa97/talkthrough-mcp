@@ -26,7 +26,7 @@ from typing import Any
 
 from .. import __version__
 from . import audio, dedup, diarize, frames, jobs, ocr, stt
-from .diarize import Diarization
+from .diarize import AmendReason, Diarization
 from .errors import ValidationError
 from .ffmpeg import ffmpeg_version
 from .manifest import (
@@ -293,15 +293,35 @@ def _needs_diarize_amend(manifest: Manifest, request: _DiarizeRequest) -> bool:
     stored = manifest.transcript.diarization
     if stored is None or not stored.available:
         return True
-    if (
-        stored.embedding_model is not None
-        and stored.embedding_model != diarize.resolved_embedding_label()
-    ):
-        return True
     return (
-        request.num_speakers is not None
-        and stored.requested_num_speakers != request.num_speakers
+        _amend_reason(stored, request, diarize.resolved_embedding_label()) is not None
     )
+
+
+def _amend_reason(
+    stored: Diarization | None,
+    request: _DiarizeRequest,
+    current_embedding_model: str,
+) -> AmendReason | None:
+    """Why an explicit request invalidates stored labels, if it does."""
+    k_changed = request.num_speakers is not None and (
+        stored is None
+        or not stored.available
+        or stored.requested_num_speakers != request.num_speakers
+    )
+    model_changed = (
+        stored is not None
+        and stored.available
+        and stored.embedding_model is not None
+        and stored.embedding_model != current_embedding_model
+    )
+    if k_changed and model_changed:
+        return "both"
+    if k_changed:
+        return "num_speakers"
+    if model_changed:
+        return "embedding_model"
+    return None
 
 
 def _labels_snapshot(transcript: Transcript) -> tuple[Any, list[str | None]]:
@@ -347,6 +367,11 @@ def _amend_diarization(
         # unreachable through the tool layer (explicit requests without the
         # extra fail in _resolve_diarize_request) — kept for direct callers
         raise ValidationError(diarize.MISSING_EXTRA_REASON)
+    amend_reason = _amend_reason(
+        manifest.transcript.diarization,
+        request,
+        getattr(diarizer, "embedding_model", diarize.resolved_embedding_label()),
+    )
     directory = jobs.job_dir(manifest.job_id)
     tool_timeout = max(600, int(manifest.media.duration_s * 4) + 120)
     wav_path = directory / "audio.wav"
@@ -362,6 +387,7 @@ def _amend_diarization(
         # outcome, not attempt (the ProcessResult.amended rule): a re-run that
         # converged on the same labels must say so instead of reading as a fix
         diarization.labels_changed = _labels_snapshot(manifest.transcript) != before
+        diarization.amend_reason = amend_reason
     report("writing manifest", 0.99)
     save_manifest(manifest, directory)
     report("done", 1.0)
@@ -654,36 +680,50 @@ def threshold_escalation_note(diarization: Diarization) -> str | None:
 
 
 def amend_noop_note(diarization: Diarization) -> str | None:
-    """The no-op amend note: a re-run with an explicit ``num_speakers`` that
-    converged on the exact same labels, or None.
+    """Explain an intentional k/model amend that converged on the same labels.
 
     Same contract as ``threshold_escalation_note``: ONE text, byte-identical
     on every surface that serves it (``process_media`` summary,
     ``get_transcript`` header). Without it, "353 s of CPU, same roster,
     amended: true" reads as a successful fix (tester evidence, 2026-07-27).
     """
-    if (
-        not diarization.available
-        or diarization.labels_changed is not False
-        or diarization.requested_num_speakers is None
-    ):
+    if not diarization.available or diarization.labels_changed is not False:
         return None
+    reason = diarization.amend_reason
+    # Compatibility with 0.2.6 manifests, which persisted labels_changed and
+    # requested_num_speakers but did not yet record amend_reason.
+    if reason is None and diarization.requested_num_speakers is not None:
+        reason = "num_speakers"
+    if reason is None:
+        return None
+    same = f"the re-run converged on the SAME {diarization.detected_num_speakers or 0} clusters"
+    if reason == "embedding_model":
+        return (
+            f"{same} with the new embedding model {diarization.embedding_model or 'unknown'} "
+            "— nothing was relabelled; the new model agreed with the stored labels"
+        )
+    if reason == "both":
+        return (
+            f"{same} with the new embedding model {diarization.embedding_model or 'unknown'} "
+            f"and num_speakers={diarization.requested_num_speakers} — nothing was "
+            "relabelled; the new model and target agreed with the stored labels"
+        )
     return (
-        f"the re-run converged on the SAME {diarization.detected_num_speakers or 0} "
-        f"clusters for num_speakers={diarization.requested_num_speakers} — nothing was "
+        f"{same} for num_speakers={diarization.requested_num_speakers} — nothing was "
         "relabelled; num_speakers is a target the clusterer may not reach, not a "
         "constraint"
     )
 
 
-def _longest_turn_starts(diarization: Diarization) -> dict[str, int]:
-    """label → ``t0_ms`` of that speaker's longest turn (ties → the earliest).
+def _longest_turns(diarization: Diarization) -> dict[str, tuple[int, int]]:
+    """label → ``(t0_ms, duration_ms)`` for the longest turn.
 
     Serve-time only, computed from the stored turns — the manifest schema
     stays untouched. This is the "where to LOOK" anchor for screen-evidence
-    speaker mapping: ``get_frames(at_ms=<longest_turn_ms>)`` lands
+    speaker mapping: ``get_frames(at_ms=<longest_turn_at_ms>)`` lands
     mid-monologue, where name plates and the active-speaker highlight are
-    most likely to show the person actually talking.
+    most likely to show the person actually talking. Equal durations resolve
+    to the earliest turn for deterministic output.
     """
     best: dict[str, tuple[int, int]] = {}
     for turn in diarization.turns:
@@ -691,7 +731,7 @@ def _longest_turn_starts(diarization: Diarization) -> dict[str, int]:
         current = best.get(turn.speaker)
         if current is None or (duration, -turn.t0_ms) > (current[0], -current[1]):
             best[turn.speaker] = (duration, turn.t0_ms)
-    return {label: t0_ms for label, (_, t0_ms) in best.items()}
+    return {label: (t0_ms, duration) for label, (duration, t0_ms) in best.items()}
 
 
 def roster_payload(diarization: Diarization) -> tuple[list[dict[str, Any]], int]:
@@ -704,14 +744,22 @@ def roster_payload(diarization: Diarization) -> tuple[list[dict[str, Any]], int]
     """
     ranked = sorted(diarization.speakers, key=lambda s: -s.talk_time_ms)[:SUMMARY_ROSTER_CAP]
     kept = {stat.label for stat in ranked}
-    longest = _longest_turn_starts(diarization)
+    longest = _longest_turns(diarization)
     entries = [
         {
             "label": stat.label,
             "talk_time_ms": stat.talk_time_ms,
             "turn_count": stat.turn_count,
             **(
-                {"longest_turn_ms": longest[stat.label]} if stat.label in longest else {}
+                {
+                    "longest_turn_at_ms": longest[stat.label][0],
+                    "longest_turn_duration_ms": longest[stat.label][1],
+                    # Deprecated compatibility alias for the 0.2.6 command
+                    # pack. Remove no earlier than 0.4.0.
+                    "longest_turn_ms": longest[stat.label][0],
+                }
+                if stat.label in longest
+                else {}
             ),
         }
         for stat in diarization.speakers
@@ -734,6 +782,8 @@ def _summarize_diarization(diarization: Diarization) -> dict[str, Any]:
         payload["speakers_truncated"] = hidden
     if diarization.labels_changed is not None:
         payload["labels_changed"] = diarization.labels_changed
+    if diarization.amend_reason is not None:
+        payload["amend_reason"] = diarization.amend_reason
     if diarization.requested_num_speakers is not None:
         payload["requested_num_speakers"] = diarization.requested_num_speakers
     noop = amend_noop_note(diarization)
