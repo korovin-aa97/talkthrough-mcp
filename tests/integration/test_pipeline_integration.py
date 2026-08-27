@@ -158,7 +158,7 @@ def test_get_transcript_srt_is_valid(demo: ProcessResult) -> None:
 
 
 def test_get_moment_bundles_slice_frames_ocr(demo: ProcessResult) -> None:
-    from mcp.server.fastmcp import Image as McpImage
+    from mcp.server.mcpserver import Image as McpImage
 
     from talkthrough_mcp.server import get_moment
 
@@ -254,7 +254,7 @@ def test_audio_only_yields_transcript_only_manifest(meeting: ProcessResult) -> N
 
 
 def test_audio_only_frame_tools_error_clearly(meeting: ProcessResult) -> None:
-    from mcp.server.fastmcp.exceptions import ToolError
+    from mcp.server.mcpserver.exceptions import ToolError
 
     from talkthrough_mcp.server import extract_frame, get_frames, get_moment
 

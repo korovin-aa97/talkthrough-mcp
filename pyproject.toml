@@ -35,10 +35,9 @@ classifiers = [
 ]
 dependencies = [
     "faster-whisper>=1.2.1",
-    # <2: SDK 2.0.0 (2026-07-28) removed mcp.server.fastmcp, which server.py
-    # imports — every environment resolved without this bound dies at startup.
-    # Porting to SDK 2.x is a separate task; the bound stays until it lands.
-    "mcp>=1.28.1,<2",
+    # 2.1.1 is the first stable 2.x release tested by the v0.3 port. Keep the
+    # next-major bound explicit: MCP 3.x may change the public server contract.
+    "mcp>=2.1.1,<3",
     "pillow>=12.3.0",
     "rapidocr>=3.9.1",
     "static-ffmpeg>=3.0",

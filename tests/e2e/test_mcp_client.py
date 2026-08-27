@@ -13,7 +13,6 @@ from __future__ import annotations
 import asyncio
 import json
 import os
-from datetime import timedelta
 from pathlib import Path
 from typing import Any
 
@@ -22,11 +21,12 @@ from mcp import ClientSession, StdioServerParameters, types
 from mcp.client.stdio import stdio_client
 from tests.integration.fixture_facts import DEMO_MP4, TWO_VOICE_M4A, TWO_VOICE_NUM_SPEAKERS
 
+from talkthrough_mcp import __version__ as package_version
 from talkthrough_mcp import guidance
 from talkthrough_mcp.core import diarize
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
-PROCESS_TIMEOUT = timedelta(seconds=600)
+PROCESS_TIMEOUT = 600.0
 
 
 def _preseed_model_env() -> dict[str, str]:
@@ -76,9 +76,9 @@ def _server_params(home: Path) -> StdioServerParameters:
 
 
 def _payload(result: types.CallToolResult) -> dict[str, Any]:
-    assert not result.isError, f"tool errored: {result.content}"
-    if isinstance(result.structuredContent, dict) and result.structuredContent:
-        candidate = result.structuredContent
+    assert not result.is_error, f"tool errored: {result.content}"
+    if isinstance(result.structured_content, dict) and result.structured_content:
+        candidate = result.structured_content
         return candidate.get("result", candidate) if "result" in candidate else candidate
     first = result.content[0]
     assert isinstance(first, types.TextContent)
@@ -92,14 +92,22 @@ async def _run_session(home: Path) -> None:
         stdio_client(_server_params(home)) as (read, write),
         ClientSession(read, write) as session,
     ):
-        await session.initialize()
+        initialized = await session.initialize()
+        assert initialized.server_info.name == "talkthrough"
+        assert initialized.server_info.version == package_version
+        assert (
+            initialized.instructions
+            and "Local-first recording analysis" in initialized.instructions
+        )
 
         # 1. Tool discovery: 7 tools, schemas, guidance examples ON THE WIRE.
         tools_result = await session.list_tools()
         tools = {tool.name: tool for tool in tools_result.tools}
         assert sorted(tools) == sorted(guidance.TOOL_NAMES), sorted(tools)
         for name, tool in tools.items():
-            assert tool.inputSchema and tool.inputSchema.get("type") == "object", name
+            assert tool.input_schema and tool.input_schema.get("type") == "object", name
+            assert tool.annotations is not None, name
+            assert tool.annotations.destructive_hint is False, name
             lines = guidance.example_lines(tool.description or "")
             assert len(lines) >= 10, f"{name}: only {len(lines)} example lines over the wire"
 
@@ -109,17 +117,28 @@ async def _run_session(home: Path) -> None:
         assert prompt_names == sorted(guidance.PROMPT_NAMES)
 
         # 3. Process the committed fixture (the long call).
+        progress_updates: list[tuple[float, float | None, str | None]] = []
+
+        async def record_progress(
+            progress: float, total: float | None, message: str | None
+        ) -> None:
+            progress_updates.append((progress, total, message))
+
         process_result = await session.call_tool(
             "process_media",
             {"path": str(DEMO_MP4)},
             read_timeout_seconds=PROCESS_TIMEOUT,
+            progress_callback=record_progress,
         )
+        assert isinstance(process_result, types.CallToolResult)
         summary = _payload(process_result)
         job_id = summary["job_id"]
         assert summary["transcript"]["segment_count"] >= 1
         assert summary["frames"]["unique_count"] >= 3
         assert summary["wall_clock"]["source"] == "metadata"
         assert summary["transcript"]["preview_segments"], "summary must carry a preview"
+        assert progress_updates, "process_media must report progress over MCP"
+        assert progress_updates[-1][:2] == (1.0, 1.0)
 
         # 3b. Prompt renders non-empty for the real job and names its tools.
         prompt = await session.get_prompt("triage-recording", {"job_id": job_id})
@@ -134,7 +153,8 @@ async def _run_session(home: Path) -> None:
         moment_result = await session.call_tool(
             "get_moment", {"job_id": job_id, "start_ms": 5000, "end_ms": 9000}
         )
-        assert not moment_result.isError
+        assert isinstance(moment_result, types.CallToolResult)
+        assert not moment_result.is_error
         image_blocks = [
             block for block in moment_result.content if isinstance(block, types.ImageContent)
         ]
@@ -142,7 +162,7 @@ async def _run_session(home: Path) -> None:
             block for block in moment_result.content if isinstance(block, types.TextContent)
         ]
         assert len(image_blocks) >= 1, "moment must return at least one image content block"
-        assert image_blocks[0].mimeType.startswith("image/")
+        assert image_blocks[0].mime_type.startswith("image/")
         assert len(image_blocks[0].data) > 1000, "image payload suspiciously small"
         moment_meta = json.loads(text_blocks[0].text)
         assert moment_meta["transcript"], "moment must include transcript text"
@@ -205,7 +225,8 @@ async def _run_session(home: Path) -> None:
         extract_result = await session.call_tool(
             "extract_frame", {"job_id": job_id, "at_ms": 6500}
         )
-        assert not extract_result.isError
+        assert isinstance(extract_result, types.CallToolResult)
+        assert not extract_result.is_error
         extract_text = next(
             block for block in extract_result.content if isinstance(block, types.TextContent)
         )
@@ -284,7 +305,8 @@ async def _run_session(home: Path) -> None:
                 {"path": str(TWO_VOICE_M4A), "diarize": True},
                 read_timeout_seconds=PROCESS_TIMEOUT,
             )
-            assert failed.isError, "explicit diarize without the extra must error"
+            assert isinstance(failed, types.CallToolResult)
+            assert failed.is_error, "explicit diarize without the extra must error"
             error_text = failed.content[0]
             assert isinstance(error_text, types.TextContent)
             assert "[diarization]" in error_text.text
