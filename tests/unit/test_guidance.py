@@ -156,6 +156,27 @@ def test_install_buttons_encode_the_batteries_included_command() -> None:
     assert "quality=insiders" in block
 
 
+def test_claude_plugin_server_is_pinned_to_its_generated_pack_version() -> None:
+    """The versioned plugin and server move together; general latest-install
+    snippets stay intentionally unpinned."""
+    import json
+
+    from scripts.gen_integrations import (
+        CLAUDE_PLUGIN_UVX_ARGS,
+        PROJECT_VERSION,
+        UVX_ARGS,
+    )
+
+    assert UVX_ARGS == ["talkthrough-mcp[diarization]"]
+    assert [f"talkthrough-mcp[diarization]=={PROJECT_VERSION}"] == CLAUDE_PLUGIN_UVX_ARGS
+    plugin_config = json.loads(
+        (REPO_ROOT / "integrations" / "claude-code" / ".mcp.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    assert plugin_config["mcpServers"]["talkthrough"]["args"] == CLAUDE_PLUGIN_UVX_ARGS
+
+
 def test_generator_covers_every_engine_folder() -> None:
     """No hand-made stragglers: every integrations/<engine>/ has generated docs."""
     artifacts = _generated_artifacts()

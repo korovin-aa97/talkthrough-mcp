@@ -75,7 +75,7 @@ friendly), `correlate-with-logs`.
 - Speaker labels are anonymous (`S1`/`S2`, ordered by first voice). Mapping
   them to names is YOUR job: self-introductions, vocatives, the attendees
   list — and on video jobs the screen check is MANDATORY: for every label
-  you map, `get_frames(at_ms=<that label's longest_turn_ms from the
+  you map, `get_frames(at_ms=<that label's longest_turn_at_ms from the
   roster>)` and read the meeting-app name plates, the recording's title
   card, the active-speaker highlight BEFORE asserting the mapping. STT
   homophones lie about name spellings (spoken "profit" vs on-screen

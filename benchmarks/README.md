@@ -67,7 +67,7 @@ failing scenario (0/12 recurrences on the headcount case).
   don't auto-fetch MCP prompt or skill text, so instruction steps that
   live there — e.g. the mandatory on-screen name-plate check before
   asserting a speaker mapping — reach interactive clients only. The
-  payload half (per-speaker `longest_turn_ms` anchors) is served to every
+  payload half (per-speaker `longest_turn_at_ms` anchors) is served to every
   client; in the v0.2.3 battery, transcript evidence alone sufficed for
   correct mappings, but that's this corpus, not a guarantee.
 

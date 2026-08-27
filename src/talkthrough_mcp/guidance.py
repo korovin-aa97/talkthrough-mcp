@@ -423,7 +423,7 @@ them, and that is fine.
    vocatives ("thanks, Tom"), the attendees list above — and, on video
    jobs, the SCREEN. The screen check is MANDATORY on video jobs, not
    optional: for EVERY label you map, call get_frames(job_id="{job_id}",
-   at_ms=<that label's longest_turn_ms from the roster>) and read the
+   at_ms=<that label's longest_turn_at_ms from the roster>) and read the
    meeting-app name plates, the recording's title card (who
    started/organized it), and the active-speaker highlight BEFORE asserting
    the mapping — vocative evidence alone mis-attributes (a remark spoken TO

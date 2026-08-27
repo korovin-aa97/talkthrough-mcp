@@ -61,6 +61,11 @@ PROJECT_VERSION: str = tomllib.loads((REPO / "pyproject.toml").read_text(encodin
     "project"
 ]["version"]
 
+# A released Claude Code plugin pack must always start its matching server.
+# User-facing install snippets intentionally remain unpinned latest via
+# UVX_ARGS; only the versioned plugin artifact gets this exact pin.
+CLAUDE_PLUGIN_UVX_ARGS = [f"{_PYPI_SPEC}=={PROJECT_VERSION}"]
+
 ENV_DOC = (
     "Optional env vars: TALKTHROUGH_WHISPER_MODEL (default `small`; use "
     "`large-v3-turbo` for non-English narration — agents can also pass "
@@ -411,7 +416,11 @@ def build_mcp_configs() -> dict[str, str]:
     return {
         # Plugin config: distribution form (uvx).
         "integrations/claude-code/.mcp.json": _jsonc(
-            {"mcpServers": {"talkthrough": {"command": "uvx", "args": UVX_ARGS}}}
+            {
+                "mcpServers": {
+                    "talkthrough": {"command": "uvx", "args": CLAUDE_PLUGIN_UVX_ARGS}
+                }
+            }
         ),
         # Checkout config: contributors get the LOCAL server when opening this repo.
         ".mcp.json": _jsonc(

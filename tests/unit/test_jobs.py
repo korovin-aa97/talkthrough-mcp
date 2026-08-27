@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import logging
 import os
 import time
 from datetime import UTC, datetime, timedelta
@@ -135,17 +136,26 @@ def _partial_dir(job_id: str, *, age_days: float) -> Path:
     return directory
 
 
-def test_gc_sweeps_old_partial_dirs_but_not_fresh_ones(isolated_home: Path) -> None:
+def test_gc_sweeps_old_partial_dirs_but_not_fresh_ones(
+    isolated_home: Path, caplog: pytest.LogCaptureFixture
+) -> None:
     """The litter class 0.2.4 learned not to CREATE but could not remove:
     invisible to list_jobs (no manifest), therefore invisible to the age
     pass by construction."""
     old = _partial_dir("600f9e1dc9c8d909", age_days=3)  # the real-store specimen
     fresh = _partial_dir("aaaaaaaaaaaaaaaa", age_days=0)
-    result = jobs.gc(keep_days=30)
+    with caplog.at_level(logging.INFO, logger=jobs.__name__):
+        result = jobs.gc(keep_days=30)
     assert result.swept == ["600f9e1dc9c8d909"]
     assert result.removed == []
     assert not old.exists()
     assert fresh.exists(), "a fresh dir may be a live run warming up — never swept"
+    assert not [record for record in caplog.records if record.levelno >= logging.WARNING]
+    assert "found partial dir 600f9e1dc9c8d909, swept" in caplog.text
+    assert (
+        "found partial dir aaaaaaaaaaaaaaaa, left in place (younger than 24 hours)"
+        in caplog.text
+    )
 
 
 def test_gc_never_sweeps_a_dir_with_a_manifest_even_at_old_mtime(
@@ -173,15 +183,20 @@ def test_gc_sweep_leaves_unreadable_manifest_dirs_alone(isolated_home: Path) -> 
     assert broken.exists()
 
 
-def test_gc_sweep_skips_a_partial_dir_under_a_held_lock(isolated_home: Path) -> None:
+def test_gc_sweep_skips_a_partial_dir_under_a_held_lock(
+    isolated_home: Path, caplog: pytest.LogCaptureFixture
+) -> None:
     fcntl = pytest.importorskip("fcntl")
     directory = _partial_dir("bbbbbbbbbbbbbbbb", age_days=3)
     handle = (directory / jobs.LOCK_NAME).open("w")
     try:
         fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
-        result = jobs.gc(keep_days=30)
+        with caplog.at_level(logging.INFO, logger=jobs.__name__):
+            result = jobs.gc(keep_days=30)
         assert result.swept == []
         assert directory.exists(), "a held lock means a live run — never sweep it"
+        assert "left in place (job lock is held)" in caplog.text
+        assert not [record for record in caplog.records if record.levelno >= logging.WARNING]
     finally:
         handle.close()
 

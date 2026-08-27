@@ -182,23 +182,30 @@ def test_diarization_serializes_speaker_names_when_present() -> None:
     assert Diarization.from_dict(payload).speaker_names == {"S1": "Alice"}
 
 
-def test_diarization_round_trips_v026_outcome_fields() -> None:
-    """labels_changed + produced_by (v0.2.6): serialized only when set, so
-    pre-0.2.6 manifests stay byte-identical and load back to None."""
+def test_diarization_round_trips_amend_outcome_fields() -> None:
+    """Outcome fields serialize only when set, preserving legacy manifests."""
     diarization = make_diarization()
     diarization.labels_changed = False
+    diarization.amend_reason = "embedding_model"
     diarization.produced_by = "0.2.6"
     payload = diarization.to_dict()
     assert payload["labels_changed"] is False
+    assert payload["amend_reason"] == "embedding_model"
     assert payload["produced_by"] == "0.2.6"
     rebuilt = Diarization.from_dict(payload)
     assert rebuilt.labels_changed is False
+    assert rebuilt.amend_reason == "embedding_model"
     assert rebuilt.produced_by == "0.2.6"
 
     bare = make_diarization().to_dict()
-    assert "labels_changed" not in bare and "produced_by" not in bare
+    assert "labels_changed" not in bare and "amend_reason" not in bare
+    assert "produced_by" not in bare
     legacy = Diarization.from_dict(bare)
-    assert legacy.labels_changed is None and legacy.produced_by is None
+    assert legacy.labels_changed is None and legacy.amend_reason is None
+    assert legacy.produced_by is None
+
+    bare["amend_reason"] = "future_reason"
+    assert Diarization.from_dict(bare).amend_reason is None
 
 
 def test_diarization_from_dict_ignores_unknown_and_malformed() -> None:

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
 from PIL import Image, ImageDraw
 
 from talkthrough_mcp.core.dedup import dhash_file, dhash_image, hamming, mark_duplicates
@@ -48,6 +49,35 @@ def test_mark_duplicates_chains_to_last_unique(tmp_path: Path) -> None:
     assert frames[1].duplicate_of == 0
     assert frames[2].duplicate_of == 0  # chained to the last UNIQUE frame, not the previous one
     assert frames[3].duplicate_of is None
+
+
+@pytest.mark.parametrize(
+    ("first", "second"),
+    [("red", "blue"), ("black", "white")],
+)
+def test_solid_color_cuts_stay_unique(tmp_path: Path, first: str, second: str) -> None:
+    """dHash alone is all zeroes for every uniform frame; mean luma keeps
+    materially different screens from lying about their validity span."""
+    Image.new("RGB", (320, 180), first).save(tmp_path / "first.jpg")
+    Image.new("RGB", (320, 180), second).save(tmp_path / "second.jpg")
+    frames = [Frame(ms=0, file="first.jpg"), Frame(ms=3000, file="second.jpg")]
+
+    mark_duplicates(frames, tmp_path)
+
+    assert all(frame.duplicate_of is None for frame in frames)
+
+
+def test_nearly_identical_jpegs_stay_duplicates(tmp_path: Path) -> None:
+    first = _image_with_box(30)
+    second = _image_with_box(30)
+    ImageDraw.Draw(second).point((0, 0), fill=239)
+    first.save(tmp_path / "first.jpg", quality=90)
+    second.save(tmp_path / "second.jpg", quality=92)
+    frames = [Frame(ms=0, file="first.jpg"), Frame(ms=1000, file="second.jpg")]
+
+    mark_duplicates(frames, tmp_path)
+
+    assert frames[1].duplicate_of == 0
 
 
 def test_dhash_file_round_trip(tmp_path: Path) -> None:

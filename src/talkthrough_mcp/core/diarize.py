@@ -36,7 +36,7 @@ import wave
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field, fields, replace
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Literal
 
 from .errors import ToolFailureError, ValidationError
 from .stt import SttSegment
@@ -44,6 +44,9 @@ from .stt import SttSegment
 if TYPE_CHECKING:
     import numpy as np
     from numpy.typing import NDArray
+
+AmendReason = Literal["num_speakers", "embedding_model", "both"]
+AMEND_REASONS: frozenset[str] = frozenset({"num_speakers", "embedding_model", "both"})
 
 logger = logging.getLogger(__name__)
 
@@ -147,13 +150,14 @@ class Diarization:
     speakers: list[SpeakerStat] = field(default_factory=list)
     turns: list[Turn] = field(default_factory=list)
     speaker_names: dict[str, str] | None = None
-    # v0.2.6 — both None on manifests written before the fields existed.
+    # Amend outcome metadata; each field stays absent on legacy manifests.
     # ``labels_changed``: set only by the amend path — did the re-run actually
-    # relabel anything? ``produced_by``: the package version that wrote THIS
-    # block; ``tool_versions`` keeps naming what transcribed the job (an amend
-    # must not re-stamp it — transcription provenance and diarization
-    # provenance are different facts).
+    # relabel anything? ``amend_reason``: which explicit input invalidated the
+    # old labels. ``produced_by``: the package version that wrote THIS block;
+    # ``tool_versions`` keeps naming what transcribed the job (an amend must
+    # not re-stamp it — transcription and diarization provenance differ).
     labels_changed: bool | None = None
+    amend_reason: AmendReason | None = None
     produced_by: str | None = None
 
     def to_dict(self) -> dict[str, Any]:
@@ -183,6 +187,8 @@ class Diarization:
             payload["speaker_names"] = dict(self.speaker_names)
         if self.labels_changed is not None:
             payload["labels_changed"] = self.labels_changed
+        if self.amend_reason is not None:
+            payload["amend_reason"] = self.amend_reason
         if self.produced_by is not None:
             payload["produced_by"] = self.produced_by
         return payload
@@ -203,6 +209,8 @@ class Diarization:
         known["speaker_names"] = (
             {str(k): str(v) for k, v in names.items()} if isinstance(names, dict) else None
         )
+        amend_reason = payload.get("amend_reason")
+        known["amend_reason"] = amend_reason if amend_reason in AMEND_REASONS else None
         return Diarization(**known)
 
 
