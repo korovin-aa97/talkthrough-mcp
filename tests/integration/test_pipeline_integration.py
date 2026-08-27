@@ -10,6 +10,7 @@ from __future__ import annotations
 import itertools
 import json
 import os
+import subprocess
 from collections.abc import Iterator
 from pathlib import Path
 
@@ -142,6 +143,54 @@ def test_frame_budget_spreads_across_the_whole_video(tmp_path: Path) -> None:
         f"budgeted frames stop at {last_ms}ms of {duration_s * 1000:.0f}ms — "
         f"head-truncation regressed: {[f.ms for f in extracted]}"
     )
+
+
+def test_solid_color_cut_remains_reachable_through_frame_serving(
+    integration_home: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Full F1 repro: dHash alone collapses every uniform screen to zero."""
+    from PIL import Image
+
+    from talkthrough_mcp.core.ffmpeg import ffmpeg_path
+    from talkthrough_mcp.server import get_frames
+
+    assert integration_home.is_dir()
+    media = tmp_path / "red-blue.mp4"
+    subprocess.run(
+        [
+            ffmpeg_path(),
+            "-y",
+            "-hide_banner",
+            "-loglevel",
+            "error",
+            "-f",
+            "lavfi",
+            "-i",
+            "color=c=red:s=320x240:d=2:r=10",
+            "-f",
+            "lavfi",
+            "-i",
+            "color=c=blue:s=320x240:d=2:r=10",
+            "-filter_complex",
+            "[0:v][1:v]concat=n=2:v=1[v]",
+            "-map",
+            "[v]",
+            "-an",
+            str(media),
+        ],
+        check=True,
+        capture_output=True,
+    )
+    monkeypatch.setenv("TALKTHROUGH_OCR", "off")
+    result = pipeline.process_media(str(media))
+    assert result.manifest.frames.count == 4
+    assert len(result.manifest.unique_frames()) == 2
+
+    payload = json.loads(get_frames(result.manifest.job_id, at_ms=3000, max_frames=1)[0])
+    assert payload["frames"][0]["t_ms"] >= 1900
+    with Image.open(payload["frames"][0]["path"]).convert("RGB") as image:
+        red, _green, blue = image.resize((1, 1)).getpixel((0, 0))
+    assert blue > red, "the 3-second lookup must serve blue, not the red predecessor"
 
 
 # --- server tool layer on the processed job ---------------------------------
