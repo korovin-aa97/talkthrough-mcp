@@ -11,9 +11,8 @@ updates:
         patterns: ["*"]
     open-pull-requests-limit: 3
     ignore:
-      # mcp 2.0 removed mcp.server.fastmcp and broke every fresh install
-      # (the 0.2.5 emergency pin, #39/#40). pyproject bounds mcp to <2 until
-      # the SDK 2.x port lands; major-bump PRs would rewrite that bound (#41).
+      # The runtime is deliberately bounded to the tested MCP 2.x line.
+      # Ignore the future 3.x major; minor/patch 2.x updates remain enabled.
       - dependency-name: "mcp"
         update-types: ["version-update:semver-major"]
 
