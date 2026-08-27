@@ -176,8 +176,8 @@ def partial_job_cleanup(job_id: str) -> Iterator[None]:
         raise
 
 
-def list_jobs() -> list[Manifest]:
-    """All readable job manifests, newest first. Unreadable job dirs are skipped."""
+def _list_jobs(*, warn_missing_manifest: bool) -> list[Manifest]:
+    """Implementation hook letting gc defer expected partial-dir reporting."""
     root = jobs_root()
     if not root.is_dir():
         return []
@@ -187,10 +187,18 @@ def list_jobs() -> list[Manifest]:
             continue
         try:
             manifests.append(load_manifest(directory))
+        except FileNotFoundError as exc:
+            if warn_missing_manifest:
+                logger.warning("skipping unreadable job dir %s: %s", directory.name, exc)
         except Exception as exc:
             logger.warning("skipping unreadable job dir %s: %s", directory.name, exc)
     manifests.sort(key=lambda manifest: manifest.created_at, reverse=True)
     return manifests
+
+
+def list_jobs() -> list[Manifest]:
+    """All readable job manifests, newest first. Unreadable job dirs are skipped."""
+    return _list_jobs(warn_missing_manifest=True)
 
 
 def delete_job(job_id: str) -> None:
@@ -231,12 +239,19 @@ def _sweep_partial_dirs(min_age_s: float = PARTIAL_SWEEP_MIN_AGE_S) -> list[str]
         except OSError:
             continue  # vanished mid-scan
         if age_s < min_age_s:
+            logger.info(
+                "found partial dir %s, left in place (younger than %.0f hours)",
+                directory.name,
+                min_age_s / 3600,
+            )
             continue
         try:
             with job_lock(directory.name, wait_seconds=0):
                 if cleanup_partial_job(directory.name):
                     swept.append(directory.name)
+                    logger.info("found partial dir %s, swept", directory.name)
         except ToolFailureError:
+            logger.info("found partial dir %s, left in place (job lock is held)", directory.name)
             continue  # a live run holds the lock — leave its directory alone
     return swept
 
@@ -245,7 +260,10 @@ def gc(keep_days: int) -> GcResult:
     """Delete jobs older than ``keep_days`` and sweep stale partial dirs."""
     cutoff = datetime.now(UTC) - timedelta(days=keep_days)
     removed: list[str] = []
-    for manifest in list_jobs():
+    # A missing manifest is precisely the partial-dir class handled by the
+    # sweep below, so gc defers that expected case instead of warning first.
+    # Corrupt manifests remain warnings: the sweep deliberately preserves them.
+    for manifest in _list_jobs(warn_missing_manifest=False):
         try:
             created = datetime.fromisoformat(manifest.created_at)
         except ValueError:
