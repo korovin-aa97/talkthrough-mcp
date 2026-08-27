@@ -27,7 +27,7 @@ CI = ruff + mypy + unit + integration + e2e on ubuntu; ruff + unit on macos.
 
 `src/talkthrough_mcp/core/` — deterministic pipeline (no MCP imports):
 probe → wallclock → stt → frames → dedup → ocr → manifest → jobs, orchestrated
-by `core/pipeline.py`. `server.py` — thin FastMCP layer (7 tools, 6 prompts).
+by `core/pipeline.py`. `server.py` — thin MCPServer layer (7 tools, 6 prompts).
 `cli.py` — serve/process/gc. Full map: `docs/DESIGN.md`.
 
 ## Hard rules

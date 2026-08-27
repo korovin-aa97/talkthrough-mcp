@@ -37,7 +37,7 @@ CI runs the same three on ubuntu (full suite) and macos (lint + unit).
 ## Layout in one breath
 
 `core/` is the deterministic pipeline (no MCP imports); `server.py` is a thin
-FastMCP layer over it; `guidance.py` is the single source of truth for tool
+MCPServer layer over it; `guidance.py` is the single source of truth for tool
 descriptions and prompt templates — **never edit a tool description or prompt
 anywhere else**. Everything under `integrations/` (plus `examples/prompts/`
 and `.mcp.json`) is rendered by `scripts/gen_integrations.py`; edit the

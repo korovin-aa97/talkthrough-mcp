@@ -67,6 +67,18 @@ create the venv from a modern interpreter, e.g. `python3.12 -m venv`.
 
 ## Claude Code says `Failed to reconnect … -32000` / `No module named 'mcp.server.fastmcp'`
 
+Talkthrough **0.3.0 and newer** use the MCP Python SDK 2.x public API
+(`mcp>=2.1.1,<3`) and import `mcp.server.mcpserver`; the old `mcp<2`
+workaround must be removed. `uvx --with 'mcp<2' ...` adds a real dependency
+constraint rather than overriding the package metadata, so using it with
+0.3.0 fails resolution as unsatisfiable. Refresh the tool environment instead:
+
+```bash
+uvx --refresh "talkthrough-mcp[diarization]" --help
+```
+
+The history below applies only to older Talkthrough releases.
+
 The server process died on import before the MCP handshake. On any
 talkthrough-mcp **≤ 0.2.4** resolved after 2026-07-28 the cause is the MCP
 Python SDK: its 2.0.0 release removed the `mcp.server.fastmcp` module the
@@ -75,16 +87,16 @@ upper bound, so a fresh resolve picked the incompatible SDK. Machines with a
 warm pre-2.0 uv cache kept working until uv re-resolved — which made the
 breakage look intermittent and machine-specific. It is neither.
 
-Fixed in **0.2.5** (`mcp>=1.28.1,<2`). Unpinned `uvx` setups — the plugin
-included — pick 0.2.5 up on their next resolve; to force it now:
+Fixed for the 0.2.x line in **0.2.5** (`mcp>=1.28.1,<2`). Unpinned `uvx`
+setups picked that bound up on their next resolve; the historical refresh was:
 
 ```bash
 uvx --refresh "talkthrough-mcp[diarization]" --help
 ```
 
-then reconnect (`/mcp`). If you applied the interim workaround of adding
-`"--with", "mcp<2"` to the server args, it is compatible with 0.2.5 and can
-be dropped at your leisure.
+then reconnect (`/mcp`). The interim `"--with", "mcp<2"` launch argument is
+compatible only with the old 0.2.x dependency line and must not remain in a
+0.3.0 config.
 
 ## Updated the plugin, but the server behaves like the old version
 

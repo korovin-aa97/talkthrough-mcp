@@ -38,7 +38,7 @@ exact instants.
 
 | Module | Responsibility |
 |---|---|
-| `server.py` | FastMCP app: 7 tools, 6 prompts, progress, MCP error mapping |
+| `server.py` | MCPServer app: 7 tools, 6 prompts, progress, MCP error mapping |
 | `guidance.py` | Tool descriptions (10-15 examples each) + prompt templates; unit-gated |
 | `cli.py` | `serve` (default) / `process` / `gc` |
 | `core/pipeline.py` | Orchestrates stages, caps, progress callbacks, summary |

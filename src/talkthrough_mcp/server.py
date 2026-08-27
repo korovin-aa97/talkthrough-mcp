@@ -1,4 +1,4 @@
-"""FastMCP server: 7 lazy-retrieval tools + 6 workflow prompts, stdio transport.
+"""MCP server: 7 lazy-retrieval tools + 6 workflow prompts, stdio transport.
 
 Design rule: ``process_media`` returns a compact summary, never the full
 payload; everything else is lazy and capped. Image responses are MCP image
@@ -17,11 +17,11 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Literal
 
-from mcp.server.fastmcp import Context, FastMCP, Image
-from mcp.server.fastmcp.exceptions import ToolError
+from mcp.server.mcpserver import Context, Image, MCPServer
+from mcp.server.mcpserver.exceptions import ToolError
 from mcp.types import ToolAnnotations
 
-from . import guidance
+from . import __version__, guidance
 from .core import jobs, pipeline
 from .core.diarize import Diarization, speakers_in_range
 from .core.errors import AudioOnlyJobError, TalkthroughError
@@ -49,16 +49,23 @@ LIST_JOBS_MAX = 50
 # silently cancels un-annotated calls). Both shapes stay honest: nothing here
 # destroys user data or reaches beyond the local machine.
 READONLY_TOOL = ToolAnnotations(
-    readOnlyHint=True, destructiveHint=False, idempotentHint=True, openWorldHint=False
+    read_only_hint=True,
+    destructive_hint=False,
+    idempotent_hint=True,
+    open_world_hint=False,
 )
 # Writes only inside TALKTHROUGH_HOME (new job dirs / frame extracts);
 # content-addressing keeps it idempotent.
 LOCAL_WRITE_TOOL = ToolAnnotations(
-    readOnlyHint=False, destructiveHint=False, idempotentHint=True, openWorldHint=False
+    read_only_hint=False,
+    destructive_hint=False,
+    idempotent_hint=True,
+    open_world_hint=False,
 )
 
-mcp = FastMCP(
+mcp = MCPServer(
     "talkthrough",
+    version=__version__,
     instructions=(
         "Local-first recording analysis. Workflow: process_media(path) once per file "
         "(idempotent, content-addressed), then query lazily by job_id — get_transcript "
@@ -133,7 +140,7 @@ class _ProgressState:
 @mcp.tool(description=guidance.TOOL_DESCRIPTIONS["process_media"], annotations=LOCAL_WRITE_TOOL)
 async def process_media(
     path: str,
-    ctx: Context,  # type: ignore[type-arg]
+    ctx: Context,
     recorded_at: str | None = None,
     vocabulary: str | None = None,
     language: str | None = None,

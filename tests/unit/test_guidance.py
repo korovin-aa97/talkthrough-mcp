@@ -67,10 +67,10 @@ def test_every_tool_carries_honest_annotations() -> None:
     for tool in tools:
         ann = tool.annotations
         assert ann is not None, f"{tool.name}: missing ToolAnnotations"
-        assert ann.destructiveHint is False
-        assert ann.idempotentHint is True
-        assert ann.openWorldHint is False
-        assert ann.readOnlyHint is (tool.name not in writers), tool.name
+        assert ann.destructive_hint is False
+        assert ann.idempotent_hint is True
+        assert ann.open_world_hint is False
+        assert ann.read_only_hint is (tool.name not in writers), tool.name
 
 
 def test_exactly_six_prompts_registered() -> None:
