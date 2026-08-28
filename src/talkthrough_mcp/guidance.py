@@ -53,7 +53,8 @@ Examples:
 Retrieve the transcript of a processed job, lazily and paginated. Formats: "segments" \
 (default — seq, t_ms, t_wall when known, speaker when diarized, text), "text" (plain \
 prose; "S1:" prefixes at speaker changes), "srt" (subtitles, speaker-prefixed cues). \
-Diarized jobs also return the speaker roster (talk time, turns) in the header. Responses \
+Diarized jobs also return the roster, attribution_precision, saved speaker_name values, \
+and raw OCR name_candidates. Raw S<n> labels remain canonical. Responses \
 are capped (~8k tokens): when truncated=true, continue from the returned next_start_ms.
 When NOT to use: to find one keyword (use search) or to inspect one moment with visuals \
 (use get_moment).
@@ -68,9 +69,9 @@ Examples:
 - user: "what was said between 5:00 and 6:30?" → start_ms=300000, end_ms=390000
 - meeting recording (audio-only job): this tool is the main surface — frames don't exist there
 - correlate speech with logs: each segment's t_wall lines up with your log timestamps
-- wall_clock=null on the job → segments carry t_ms only (relative to video start)
-- 60-min video: page by ranges (e.g. 10-min windows), don't pull from 0 repeatedly
 - no speaker fields on a meeting job → re-run process_media with diarize=true (adds them without re-transcribing)
+- attribution_precision="segment" → force=true+diarize=true is required for exact word boundaries
+- speaker_name is verified; name_candidates are unverified OCR hints, never identities
 - anti-example: "where did they mention checkout?" → search(job_id, "checkout"), not full paging
 - anti-example: screenshots around a remark → get_moment(job_id, start_ms, end_ms)
 """,
@@ -122,7 +123,8 @@ Case-insensitive word search across BOTH transcript segments and frame OCR text:
 hits when EVERY word of the query matches it as a substring — any order, any distance \
 (ё and е are interchangeable). Hits carry source (transcript|ocr), t_ms, t_wall when \
 known, the matched text, and the nearest frame position — everything needed to jump \
-straight to evidence. Optional speaker="S2" narrows to one voice's transcript hits. No \
+straight to evidence. Optional speaker accepts a raw label ("S2") or saved name and narrows \
+to that voice's transcript hits. Duplicate saved names search all matching labels honestly. No \
 embeddings.
 When NOT to use: fuzzy/semantic questions ("anything about performance?") — page \
 get_transcript and read; regex is not supported.
@@ -138,10 +140,33 @@ Examples:
 - every hit has nearest_frame_ms → get_frames(job_id, at_ms=<that>) shows the moment
 - diarized job: transcript hits carry "speaker" — "who mentioned the deadline?" is answered by the hit itself
 - search(job_id, "deadline", speaker="S2") — only S2's mentions; OCR hits are excluded (screens have no voice)
+- search(job_id, "deadline", speaker="Vera") — saved names are matched case-insensitively
 - audio-only job → transcript hits only (there is no OCR index)
 - anti-example: "summarize the pricing discussion" → get_transcript(format="text") and read it
-- anti-example: finding an icon or layout glitch with no text → get_frames over the range; OCR sees text only
 - anti-example: "everything S2 said" → get_transcript and collect speaker=="S2" — search always needs a query
+""",
+    "label_speakers": """\
+Persist VERIFIED human-readable names for anonymous S1/S2/… labels on one diarized job. \
+`labels` is a patch: a 1-100 character name saves it; null or blank removes it. Optional \
+`evidence` (max 500 characters per label) records why the mapping is trusted. Raw labels \
+remain canonical in JSON; names appear separately and in text/SRT display. The write is \
+atomic, locked, local, and idempotent. OCR name_candidates are raw hints only and are never \
+saved automatically.
+When NOT to use: before diarization, or when a name is only a guess without human/screen evidence.
+Examples:
+- label_speakers(job_id="...", labels={"S1":"Vera"}) — save one verified mapping
+- label_speakers(job_id="...", labels={"S1":"Vera","S2":"Tom"}) — patch several labels
+- save evidence: label_speakers(job_id="...", labels={"S1":"Vera"}, evidence={"S1":"intro at 1200ms"})
+- screen name plate confirms S2 → save the name and cite its frame timestamp in evidence
+- label_speakers(job_id="...", labels={"S2":null}) — remove S2's name and evidence together
+- label_speakers(job_id="...", labels={"S2":"   "}) — blank also removes the mapping
+- named S1, new proof → label_speakers(job_id="...", labels={}, evidence={"S1":"title card at 0ms"})
+- two Alexanders may map to S2 and S5 — duplicate names are allowed and search covers both
+- response roster carries speaker_name beside label; raw S<n> labels are never replaced
+- name_candidates may be UI text or another person's name → inspect frames before deciding
+- unknown label or a name over 100 characters → error lists the valid roster labels
+- fresh session: get_transcript returns saved names; do not infer the mapping again
+- anti-example: uncertain identity → keep S<n> anonymous until evidence verifies the name
 """,
     "extract_frame": """\
 Re-extract ONE frame at an exact timestamp from the ORIGINAL source video at native \
@@ -432,11 +457,15 @@ them, and that is fine.
    OCR/frames over the transcript for names. State the mapping first (e.g.
    `S1 = Vera, S2 = Tom, S3 = unidentified`) — never guess beyond the
    evidence.
-5. Collect: action items (who committed to what), decisions (what was agreed),
+5. Persist every defensible mapping with label_speakers(job_id="{job_id}",
+   labels={{"S1":"<name>"}}, evidence={{"S1":"<intro, frame, or attendee proof>"}}).
+   Never save OCR name_candidates directly: they are raw hints that may be UI
+   text, a job title, or somebody else's name.
+6. Collect: action items (who committed to what), decisions (what was agreed),
    open questions (raised but unresolved). Keep exact quotes and t_ms for each.
-6. search(job_id="{job_id}", query="<name or topic>") to trace scattered
+7. search(job_id="{job_id}", query="<name or topic>") to trace scattered
    follow-ups on one topic before summarizing it.
-7. If the job has video (a screen-share was recorded), attach visual evidence to
+8. If the job has video (a screen-share was recorded), attach visual evidence to
    items that reference the screen via get_moment(job_id="{job_id}",
    start_ms=..., end_ms=...).
 

@@ -17,10 +17,15 @@ from __future__ import annotations
 
 import os
 from collections.abc import Iterator
+from itertools import pairwise
 from pathlib import Path
 
 import pytest
 from tests.integration.fixture_facts import (
+    INTERRUPT_KEYWORDS,
+    INTERRUPT_M4A,
+    INTERRUPT_NUM_SPEAKERS,
+    INTERRUPT_TURNS_MS,
     MEETING_M4A,
     TWO_VOICE_KEYWORDS,
     TWO_VOICE_M4A,
@@ -92,9 +97,26 @@ def two_voice(diarization_home: Path) -> ProcessResult:
     )
 
 
+@pytest.fixture(scope="session")
+def interrupted(diarization_home: Path) -> ProcessResult:
+    return pipeline.process_media(
+        str(INTERRUPT_M4A),
+        diarize_speakers=True,
+        num_speakers=INTERRUPT_NUM_SPEAKERS,
+    )
+
+
 def _expected_label(t0_ms: int, t1_ms: int) -> str | None:
     midpoint = (t0_ms + t1_ms) / 2
     for start, end, label in TWO_VOICE_TURNS_MS:
+        if start <= midpoint <= end:
+            return label
+    return None
+
+
+def _interrupt_expected_label(t0_ms: int, t1_ms: int) -> str | None:
+    midpoint = (t0_ms + t1_ms) / 2
+    for start, end, label in INTERRUPT_TURNS_MS:
         if start <= midpoint <= end:
             return label
     return None
@@ -111,6 +133,7 @@ def test_exactly_two_speakers_detected(two_voice: ProcessResult) -> None:
     assert [stat.label for stat in diarization.speakers] == ["S1", "S2"]
     assert diarization.engine == "sherpa-onnx"
     assert diarization.turns, "turns must be persisted for range queries and amends"
+    assert two_voice.manifest.transcript.words, "new diarized jobs persist word timings"
 
 
 def test_segments_attributed_per_fixture_facts(two_voice: ProcessResult) -> None:
@@ -128,6 +151,43 @@ def test_segments_attributed_per_fixture_facts(two_voice: ProcessResult) -> None
 def test_two_voice_keywords_survive_whisper(two_voice: ProcessResult) -> None:
     text = two_voice.manifest.transcript.full_text().lower()
     assert any(keyword in text for keyword in TWO_VOICE_KEYWORDS), text
+
+
+def test_interrupt_fixture_splits_at_words_without_text_loss(
+    interrupted: ProcessResult,
+) -> None:
+    transcript = interrupted.manifest.transcript
+    diarization = transcript.diarization
+    assert diarization is not None and diarization.available
+    assert diarization.detected_num_speakers == INTERRUPT_NUM_SPEAKERS
+    assert transcript.words
+    assert any(keyword in transcript.full_text().lower() for keyword in INTERRUPT_KEYWORDS)
+
+    expected = " ".join("".join(word.text for word in transcript.words).split())
+    served = " ".join(" ".join(segment.text for segment in transcript.segments).split())
+    assert served == expected, "word attribution must neither lose nor duplicate text"
+
+    labelled = [segment for segment in transcript.segments if segment.speaker]
+    assert {segment.speaker for segment in labelled} == {"S1", "S2"}
+    transitions = [
+        (left, right)
+        for left, right in pairwise(labelled)
+        if left.speaker != right.speaker
+    ]
+    assert len(transitions) >= 2, [(item.text, item.speaker) for item in labelled]
+    word_starts = {word.t0_ms for word in transcript.words}
+    word_ends = {word.t1_ms for word in transcript.words}
+    assert all(
+        left.t1_ms in word_ends and right.t0_ms in word_starts
+        for left, right in transitions
+    )
+
+    comparable = [
+        (segment.speaker, _interrupt_expected_label(segment.t0_ms, segment.t1_ms))
+        for segment in labelled
+        if _interrupt_expected_label(segment.t0_ms, segment.t1_ms) is not None
+    ]
+    assert sum(got == want for got, want in comparable) / len(comparable) >= 0.8, comparable
 
 
 def test_roster_aggregates_are_consistent(two_voice: ProcessResult) -> None:
@@ -152,6 +212,7 @@ def test_summary_carries_compact_diarization_block(two_voice: ProcessResult) -> 
     assert block["available"] is True
     assert block["detected_num_speakers"] == TWO_VOICE_NUM_SPEAKERS
     assert block["requested_num_speakers"] == TWO_VOICE_NUM_SPEAKERS
+    assert block["attribution_precision"] == "word"
     assert {
         "label",
         "talk_time_ms",
@@ -191,6 +252,8 @@ def test_get_transcript_serves_speakers_roster_and_prefixes(two_voice: ProcessRe
     job_id = two_voice.manifest.job_id
     payload = get_transcript(job_id)
     assert payload["diarized"] is True
+    assert payload["attribution_precision"] == "word"
+    assert "attribution_note" not in payload
     assert [entry["label"] for entry in payload["speakers"]] == ["S1", "S2"]
     assert {
         "label",

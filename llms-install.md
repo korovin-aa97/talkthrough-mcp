@@ -69,9 +69,9 @@ will answer with the one-line reinstall hint — relay it verbatim.
 
 ## Verify the installation
 
-1. The client should list 7 tools: `process_media`, `get_transcript`,
-   `get_frames`, `get_moment`, `search`, `extract_frame`, `list_jobs`, and
-   6 prompts (`bug`, `triage-recording`, `spec-from-workshop`,
+1. The client should list 8 tools: `process_media`, `get_transcript`,
+   `get_frames`, `get_moment`, `search`, `label_speakers`, `extract_frame`,
+   `list_jobs`, and 6 prompts (`bug`, `triage-recording`, `spec-from-workshop`,
    `backlog-from-demo`, `meeting-actions`, `correlate-with-logs`).
 2. Smoke test: call `list_jobs()` — an empty result is a healthy first run.
 3. Full test (optional): `process_media(path="<any short local .mp4/.mov/.m4a>")`

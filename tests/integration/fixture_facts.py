@@ -65,3 +65,14 @@ TWO_VOICE_TURNS_MS = (
 )
 # Narration keywords that must survive whisper `tiny` (>=1 required).
 TWO_VOICE_KEYWORDS = ("release", "database", "issue")
+
+# Interrupted/resumed two-voice meeting. Boundaries were measured from the
+# per-turn say clips; the AAC edge caveat above applies here too.
+INTERRUPT_M4A = FIXTURES_DIR / "meeting-interrupt.m4a"
+INTERRUPT_NUM_SPEAKERS = 2
+INTERRUPT_TURNS_MS = (
+    (0, 3820, "S1"),
+    (3820, 8223, "S2"),
+    (8223, 11870, "S1"),
+)
+INTERRUPT_KEYWORDS = ("checklist", "migration", "rollout")

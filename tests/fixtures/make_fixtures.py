@@ -13,6 +13,9 @@ Outputs (committed, consumed as-is by CI — `say` is macOS-only):
   different voices (Samantha en_US / Daniel en_GB), every turn well above
   the sub-second-backchannel weakness of diarization models; the builder
   prints the measured turn boundaries to paste into ``fixture_facts.py``.
+- ``meeting-interrupt.m4a`` — one speaker is interrupted and then resumes,
+  with no inserted silence at either hand-off; this pins word-boundary
+  attribution where a Whisper segment can span the voice change.
 - ``multilang-ja-demo.mp4`` — one scene with a katakana-heavy heading,
   narrated in Japanese (Kyoko voice): the auto-OCR-pack fixture. Helvetica
   carries no CJK glyphs, so the heading renders with the first installed
@@ -22,7 +25,7 @@ Scene boundaries and the script keywords are mirrored in
 ``tests/integration/fixture_facts.py`` — update both together.
 
 Rebuild selectively: ``python make_fixtures.py ru`` (targets: demo, meeting,
-ru, two-voice, ja; default all) — so adding a fixture never rewrites the
+ru, two-voice, interrupt, ja; default all) — so adding a fixture never rewrites the
 committed bytes of the others.
 """
 
@@ -86,6 +89,24 @@ TWO_VOICE_TURNS = [
         "Samantha",
         "Understood. Then let us move the release to next Thursday and review "
         "the progress again on Monday morning.",
+    ),
+]
+
+# Short hand-offs with no padding: Samantha starts a sentence, Daniel cuts
+# in, then Samantha resumes. The middle turn remains several seconds long so
+# the fixture tests a word boundary rather than diarizer backchannel limits.
+INTERRUPT_TURNS = [
+    (
+        "Samantha",
+        "The release checklist is ready, and the database migration owner is",
+    ),
+    (
+        "Daniel",
+        "Sorry to interrupt. Priya owns the migration and already approved the plan.",
+    ),
+    (
+        "Samantha",
+        "Thanks Daniel. I will update the notes and continue with the rollout.",
     ),
 ]
 
@@ -327,6 +348,50 @@ def build_two_voice_m4a(ffmpeg: str) -> Path:
     return out
 
 
+def build_interrupt_m4a(ffmpeg: str) -> Path:
+    """Interrupted/resumed speech + measured ground-truth turn boundaries."""
+    out = FIXTURES_DIR / "meeting-interrupt.m4a"
+    ffprobe = _ffprobe()
+    clips: list[Path] = []
+    durations_ms: list[int] = []
+    for index, (voice, text) in enumerate(INTERRUPT_TURNS):
+        clip = BUILD_DIR / f"interrupt-{index}.aiff"
+        subprocess.run(
+            ["/usr/bin/say", "-r", SAY_RATE, "-v", voice, "-o", str(clip), text],
+            check=True,
+            capture_output=True,
+        )
+        clips.append(clip)
+        durations_ms.append(round(_duration_s(ffprobe, clip) * 1000))
+
+    cmd = [ffmpeg, "-y", "-hide_banner", "-loglevel", "error"]
+    for clip in clips:
+        cmd += ["-i", str(clip)]
+    streams = "".join(f"[{index}:a]" for index in range(len(clips)))
+    cmd += [
+        "-filter_complex",
+        f"{streams}concat=n={len(clips)}:v=0:a=1[a]",
+        "-map",
+        "[a]",
+        "-c:a",
+        "aac",
+        "-b:a",
+        "96k",
+        "-metadata",
+        f"creation_time={CREATION_TIME}",
+        str(out),
+    ]
+    subprocess.run(cmd, check=True, capture_output=True, text=True)
+
+    labels = {"Samantha": "S1", "Daniel": "S2"}
+    cursor = 0
+    print("paste into fixture_facts.py INTERRUPT_TURNS_MS:")
+    for (voice, _), duration_ms in zip(INTERRUPT_TURNS, durations_ms, strict=True):
+        print(f"    ({cursor}, {cursor + duration_ms}, {labels[voice]!r}),")
+        cursor += duration_ms
+    return out
+
+
 def build_ja_mp4(ffmpeg: str) -> Path:
     """One-scene Japanese screencast: Kyoko narration + kana/kanji heading."""
     out = FIXTURES_DIR / "multilang-ja-demo.mp4"
@@ -414,6 +479,7 @@ BUILDERS = {
     "meeting": build_meeting_m4a,
     "ru": build_ru_m4a,
     "two-voice": build_two_voice_m4a,
+    "interrupt": build_interrupt_m4a,
     "ja": build_ja_mp4,
 }
 

@@ -1,4 +1,4 @@
-"""MCP server: 7 lazy-retrieval tools + 6 workflow prompts, stdio transport.
+"""MCP server: 8 local tools + 6 workflow prompts, stdio transport.
 
 Design rule: ``process_media`` returns a compact summary, never the full
 payload; everything else is lazy and capped. Image responses are MCP image
@@ -24,7 +24,7 @@ from mcp.types import ToolAnnotations
 from . import __version__, guidance
 from .core import jobs, pipeline
 from .core.diarize import Diarization, speakers_in_range
-from .core.errors import AudioOnlyJobError, TalkthroughError
+from .core.errors import AudioOnlyJobError, TalkthroughError, ValidationError
 from .core.frames import Frame, extract_exact_frame
 from .core.manifest import (
     Manifest,
@@ -34,10 +34,12 @@ from .core.manifest import (
     frames_in_range,
     nearest_frames,
     representative_frame,
+    save_manifest,
     search_manifest,
     slice_segments,
     straddle_hint_t_ms,
 )
+from .core.speaker_labels import apply_speaker_label_patch
 
 GET_FRAMES_HARD_CAP = 6
 MOMENT_MAX_FRAMES = 3
@@ -71,7 +73,8 @@ mcp = MCPServer(
         "(idempotent, content-addressed), then query lazily by job_id — get_transcript "
         "(paginated), search (transcript + on-screen OCR text), get_moment (transcript "
         "slice + frames + OCR for one remark), get_frames (keyframe images), "
-        "extract_frame (exact-instant full-res re-extract), list_jobs (what is already "
+        "label_speakers (persist verified S<n>-to-name mappings), extract_frame "
+        "(exact-instant full-res re-extract), list_jobs (what is already "
         "processed). Timestamps: t_ms is video-relative; t_wall is real wall-clock time "
         "when the recording start could be resolved. Speaker diarization (optional "
         "[diarization] extra): process_media(diarize=true, num_speakers=N when known) "
@@ -108,6 +111,19 @@ def _load(job_id: str) -> Manifest:
 def _require_video(manifest: Manifest) -> None:
     if not manifest.media.has_video:
         raise ToolError(str(AudioOnlyJobError(manifest.job_id)))
+
+
+def _speaker_fields(
+    diarization: Diarization | None, label: str | None, *, key: str = "speaker"
+) -> dict[str, str]:
+    if label is None:
+        return {}
+    payload = {key: label}
+    if diarization is not None:
+        name = pipeline.speaker_name(diarization, label)
+        if name is not None:
+            payload["speaker_name"] = name
+    return payload
 
 
 def _frame_payload(manifest: Manifest, frame: Frame) -> dict[str, Any]:
@@ -261,7 +277,13 @@ def get_transcript(
     diarization = manifest.transcript.diarization
     if diarization is not None and diarization.available:
         payload["diarized"] = True
-        payload["speakers"], hidden = pipeline.roster_payload(diarization)
+        payload["speakers"], hidden = pipeline.roster_payload(diarization, manifest)
+        payload["attribution_precision"] = pipeline.attribution_precision(manifest.transcript)
+        if payload["attribution_precision"] == "segment":
+            payload["attribution_note"] = (
+                "speaker boundaries use segment-level timestamps; exact word splitting "
+                "requires process_media(..., force=true, diarize=true)"
+            )
         if hidden:
             payload["speakers_truncated"] = hidden
         if diarization.labels_changed is not None:
@@ -286,15 +308,15 @@ def get_transcript(
                 "seq": segment.seq,
                 "t_ms": segment.t0_ms,
                 "t_wall": manifest.t_wall_iso(segment.t0_ms),
-                **({"speaker": segment.speaker} if segment.speaker else {}),
+                **_speaker_fields(diarization, segment.speaker),
                 "text": segment.text,
             }
             for segment in served
         ]
     elif format == "text":
-        payload["text"] = format_text(served)
+        payload["text"] = format_text(served, diarization.speaker_names if diarization else None)
     else:
-        payload["srt"] = format_srt(served)
+        payload["srt"] = format_srt(served, diarization.speaker_names if diarization else None)
     return payload
 
 
@@ -355,6 +377,7 @@ def get_moment(job_id: str, start_ms: int, end_ms: int) -> list[str | Image]:
     if end_ms < start_ms:
         raise ToolError(f"end_ms {end_ms} is before start_ms {start_ms}")
     manifest = _load(job_id)
+    diarization = manifest.transcript.diarization
     segments = slice_segments(manifest.transcript.segments, start_ms, end_ms)
     picked = []
     fallback_note: str | None = None
@@ -382,7 +405,7 @@ def get_moment(job_id: str, start_ms: int, end_ms: int) -> list[str | Image]:
                 "seq": segment.seq,
                 "t_ms": segment.t0_ms,
                 "t_wall": manifest.t_wall_iso(segment.t0_ms),
-                **({"speaker": segment.speaker} if segment.speaker else {}),
+                **_speaker_fields(diarization, segment.speaker),
                 "text": segment.text,
             }
             for segment in segments
@@ -393,9 +416,12 @@ def get_moment(job_id: str, start_ms: int, end_ms: int) -> list[str | Image]:
             for frame in picked
         ],
     }
-    diarization = manifest.transcript.diarization
     if diarization is not None and diarization.available:
-        payload["speakers_in_range"] = speakers_in_range(diarization.turns, start_ms, end_ms)
+        labels = speakers_in_range(diarization.turns, start_ms, end_ms)
+        payload["speakers_in_range"] = labels
+        named = [_speaker_fields(diarization, label) for label in labels]
+        if any("speaker_name" in item for item in named):
+            payload["speaker_details_in_range"] = named
     if not manifest.media.has_video:
         payload["note"] = "audio-only job: transcript evidence only, no frames exist"
     elif fallback_note:
@@ -411,15 +437,17 @@ def search(job_id: str, query: str, speaker: str | None = None) -> dict[str, Any
     manifest = _load(job_id)
     if not query.strip():
         raise ToolError("query is empty — pass a distinctive word or phrase")
-    speaker_label = speaker.strip().upper() if speaker and speaker.strip() else None
-    if speaker_label is not None:
-        diarization = manifest.transcript.diarization
+    diarization = manifest.transcript.diarization
+    speaker_query = speaker.strip() if speaker and speaker.strip() else None
+    speaker_labels: list[str] = []
+    speaker_value: str | None = None
+    if speaker_query is not None:
         if diarization is None or not diarization.available:
             # honesty, not an error: the labels the filter needs don't exist yet
             return {
                 "job_id": job_id,
                 "query": query,
-                "speaker": speaker_label,
+                "speaker": speaker_query.upper(),
                 "hit_count": 0,
                 "truncated": False,
                 "hits": [],
@@ -430,7 +458,19 @@ def search(job_id: str, query: str, speaker: str | None = None) -> dict[str, Any
                 ),
             }
         roster_labels = [stat.label for stat in diarization.speakers]
-        if roster_labels and speaker_label not in roster_labels:
+        canonical_label = speaker_query.upper()
+        if canonical_label in roster_labels:
+            speaker_labels = [canonical_label]
+            speaker_value = canonical_label
+        else:
+            folded = speaker_query.casefold()
+            speaker_labels = [
+                label
+                for label in roster_labels
+                if (diarization.speaker_names or {}).get(label, "").casefold() == folded
+            ]
+            speaker_value = speaker_query
+        if roster_labels and not speaker_labels:
             # honesty again (v0.2.3): a label outside the roster would return
             # a bare empty list indistinguishable from "this voice never said
             # it" — name the mistake and the valid range instead
@@ -439,31 +479,59 @@ def search(job_id: str, query: str, speaker: str | None = None) -> dict[str, Any
                 if len(roster_labels) == 1
                 else f"{roster_labels[0]}-{roster_labels[-1]}"
             )
+            looks_like_label = canonical_label.startswith("S") and canonical_label[1:].isdigit()
+            if looks_like_label:
+                note = (
+                    f"label {canonical_label!r} is not in this job's roster ({span}) — "
+                    "0 hits here means the label does not exist, not that the words "
+                    "were never said; use a roster label or saved speaker name"
+                )
+            else:
+                known_names = sorted(set((diarization.speaker_names or {}).values()))[:12]
+                note = (
+                    f"speaker name {speaker_query!r} is not saved for this job; roster "
+                    f"labels: {span}; known names: {', '.join(known_names) or 'none'} — "
+                    "0 hits means the filter is unknown, not that the words were never said"
+                )
             return {
                 "job_id": job_id,
                 "query": query,
-                "speaker": speaker_label,
+                "speaker": canonical_label if canonical_label.startswith("S") else speaker_query,
                 "hit_count": 0,
                 "truncated": False,
                 "hits": [],
-                "note": (
-                    f"label {speaker_label!r} is not in this job's roster ({span}) — "
-                    "0 hits here means the label does not exist, not that the words "
-                    "were never said; use a roster label"
-                ),
+                "note": note,
             }
-    hits = search_manifest(manifest, query, speaker=speaker_label)
+    if speaker_labels:
+        hits = [
+            hit
+            for label in speaker_labels
+            for hit in search_manifest(manifest, query, speaker=label)
+        ]
+        hits.sort(key=lambda hit: (hit.t_ms, hit.source, hit.seq or 0))
+    else:
+        hits = search_manifest(manifest, query)
     truncated = len(hits) > SEARCH_MAX_HITS
     notes: list[str] = []
-    if speaker_label:
+    if speaker_labels:
         notes.append(
             "ocr hits are excluded when filtering by speaker — on-screen text has no voice"
         )
+        if len(speaker_labels) > 1:
+            notes.append(
+                f"saved name {speaker_value!r} maps to multiple labels: "
+                + ", ".join(speaker_labels)
+            )
     if not hits and len(query.split()) >= 2:
         # v0.2.3: a zero-hit multi-word query stops being mute. Word-AND is
         # per-segment; the cheap adjacent-pair scan tells apart "phrase
         # straddles a segment boundary" from "words never co-occur".
-        straddle_ms = straddle_hint_t_ms(manifest, query, speaker=speaker_label)
+        straddle_candidates = [
+            straddle_hint_t_ms(manifest, query, speaker=label) for label in speaker_labels
+        ] if speaker_labels else [straddle_hint_t_ms(manifest, query)]
+        straddle_ms = min(
+            (value for value in straddle_candidates if value is not None), default=None
+        )
         if straddle_ms is not None:
             notes.append(
                 f"the words appear together around t_ms={straddle_ms}, split across "
@@ -477,7 +545,8 @@ def search(job_id: str, query: str, speaker: str | None = None) -> dict[str, Any
     return {
         "job_id": job_id,
         "query": query,
-        **({"speaker": speaker_label} if speaker_label else {}),
+        **({"speaker": speaker_value} if speaker_value else {}),
+        **({"speaker_labels": speaker_labels} if len(speaker_labels) > 1 else {}),
         "hit_count": len(hits),
         "truncated": truncated,
         **({"note": "; ".join(notes)} if notes else {}),
@@ -486,7 +555,7 @@ def search(job_id: str, query: str, speaker: str | None = None) -> dict[str, Any
                 "source": hit.source,
                 "t_ms": hit.t_ms,
                 "t_wall": hit.t_wall,
-                **({"speaker": hit.speaker} if hit.speaker else {}),
+                **_speaker_fields(diarization, hit.speaker),
                 "text": hit.text,
                 "segment_seq": hit.seq,
                 "frame_ms": hit.frame_ms,
@@ -494,6 +563,44 @@ def search(job_id: str, query: str, speaker: str | None = None) -> dict[str, Any
             }
             for hit in hits[:SEARCH_MAX_HITS]
         ],
+    }
+
+
+@mcp.tool(
+    description=guidance.TOOL_DESCRIPTIONS["label_speakers"],
+    annotations=LOCAL_WRITE_TOOL,
+)
+def label_speakers(
+    job_id: str,
+    labels: dict[str, str | None],
+    evidence: dict[str, str] | None = None,
+) -> dict[str, Any]:
+    """Persist a validated speaker-name patch under the existing job lock."""
+    # Fail unknown ids before job_lock creates its marker directory. The
+    # authoritative manifest is still re-read only after the lock below.
+    _load(job_id)
+    with _tool_errors(), jobs.job_lock(job_id), jobs.partial_job_cleanup(job_id):
+        # Re-read only after acquiring the lock: concurrent patches compose
+        # instead of overwriting the manifest snapshot seen before the wait.
+        manifest = jobs.load_job(job_id)
+        diarization = manifest.transcript.diarization
+        if diarization is None or not diarization.available:
+            raise ValidationError(
+                "job is not diarized — run process_media(diarize=true) before labeling speakers"
+            )
+        apply_speaker_label_patch(diarization, labels, evidence)
+        save_manifest(manifest, jobs.job_dir(job_id))
+
+    speakers, hidden = pipeline.roster_payload(diarization, manifest)
+    return {
+        "job_id": job_id,
+        "mapping_count": len(diarization.speaker_names or {}),
+        "speakers": speakers,
+        **({"speakers_truncated": hidden} if hidden else {}),
+        "note": (
+            "names are user/agent-verified labels; raw S<n> identifiers remain canonical "
+            "and OCR name_candidates are only unverified screen hints"
+        ),
     }
 
 

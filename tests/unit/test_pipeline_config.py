@@ -760,14 +760,23 @@ def test_noop_amend_reports_labels_unchanged_and_keeps_provenance(
     stale transcription stamp must survive, and produced_by must move."""
     from talkthrough_mcp import __version__
     from talkthrough_mcp.core import jobs, pipeline
+    from talkthrough_mcp.core.manifest import save_manifest
 
     media, turns = _stored_attributed_job(tmp_path, monkeypatch)
+    before_amend = jobs.load_job(jobs.compute_job_id(media))
+    before_diarization = before_amend.transcript.diarization
+    assert before_diarization is not None
+    before_diarization.speaker_names = {"S1": "Vera"}
+    before_diarization.speaker_name_evidence = {"S1": "intro"}
+    save_manifest(before_amend, jobs.job_dir(before_amend.job_id))
     result = _amend_through_fake_engine(media, monkeypatch, turns=turns, k=3)
     assert result.amended is True  # the amend RAN and landed labels…
     diarization = result.manifest.transcript.diarization
     assert diarization is not None
     assert diarization.labels_changed is False  # …but changed nothing, and says so
     assert diarization.amend_reason == "num_speakers"
+    assert diarization.speaker_names == {"S1": "Vera"}
+    assert diarization.speaker_name_evidence == {"S1": "intro"}
     summary = pipeline.summarize(result)["diarization"]
     assert summary["labels_changed"] is False
     assert "nothing was relabelled" in summary["amend_note"]
@@ -810,15 +819,24 @@ def test_embedding_model_noop_amend_persists_and_explains_reason(
 def test_relabelling_amend_reports_labels_changed_and_no_noop_note(
     tmp_path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    from talkthrough_mcp.core import pipeline
+    from talkthrough_mcp.core import jobs, pipeline
     from talkthrough_mcp.core.diarize import Turn
+    from talkthrough_mcp.core.manifest import save_manifest
 
     media, _ = _stored_attributed_job(tmp_path, monkeypatch)
+    before_amend = jobs.load_job(jobs.compute_job_id(media))
+    before_diarization = before_amend.transcript.diarization
+    assert before_diarization is not None
+    before_diarization.speaker_names = {"S1": "Stale name"}
+    before_diarization.speaker_name_evidence = {"S1": "stale proof"}
+    save_manifest(before_amend, jobs.job_dir(before_amend.job_id))
     different = [Turn(0, 3000, "S1"), Turn(3000, 8000, "S2")]  # boundary moved
     result = _amend_through_fake_engine(media, monkeypatch, turns=different, k=3)
     diarization = result.manifest.transcript.diarization
     assert diarization is not None
     assert diarization.labels_changed is True
+    assert diarization.speaker_names is None
+    assert diarization.speaker_name_evidence is None
     summary = pipeline.summarize(result)["diarization"]
     assert summary["labels_changed"] is True
     assert "amend_note" not in summary

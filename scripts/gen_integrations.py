@@ -78,8 +78,8 @@ ENV_DOC = (
 )
 
 VERIFY_DOC = (
-    "Verify: the client should list 7 tools (process_media, get_transcript, get_frames, "
-    "get_moment, search, extract_frame, list_jobs). A `list_jobs` call returning an empty "
+    "Verify: the client should list 8 tools (process_media, get_transcript, get_frames, "
+    "get_moment, search, label_speakers, extract_frame, list_jobs). A `list_jobs` call returning an empty "
     "list is a healthy first run."
 )
 
@@ -337,7 +337,7 @@ def readme_install_region() -> str:
         "Two install paths — **pick one**, not both (the plugin already includes\n"
         "the server; installing both would register it twice):\n"
         "\n"
-        "**Server only** — the 7 tools + 6 prompts, and nothing else on your\n"
+        "**Server only** — the 8 tools + 6 prompts, and nothing else on your\n"
         "system. Choose this for a minimal setup, or when you manage MCP servers\n"
         "yourself across several clients:\n"
         "\n"

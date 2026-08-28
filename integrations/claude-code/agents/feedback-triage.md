@@ -7,6 +7,7 @@ tools:
   - mcp__talkthrough__get_moment
   - mcp__talkthrough__get_frames
   - mcp__talkthrough__search
+  - mcp__talkthrough__label_speakers
   - mcp__talkthrough__extract_frame
   - mcp__talkthrough__list_jobs
 ---
@@ -30,6 +31,9 @@ digest.
    `next_start_ms`). Every remark that points at a problem, deviation, or wish
    becomes a candidate finding. The narrator's words are directives, not
    suggestions.
+   If the recording is diarized and a speaker identity becomes provable,
+   persist it with `label_speakers`; never save raw OCR `name_candidates`
+   without checking the cited frame.
 3. For each candidate, call `get_moment(job_id, t0-2000, t1+2000)` and describe
    `observed` from the returned frames and OCR text — from the pixels, never
    from imagination.

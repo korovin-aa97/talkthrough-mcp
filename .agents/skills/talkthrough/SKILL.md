@@ -45,7 +45,11 @@ install it: `claude mcp add -s user talkthrough -- uvx talkthrough-mcp`
    `extract_frame(job_id, at_ms, crop={x,y,w,h})` for an exact instant at
    native resolution (keyframes capture scene changes + a 1 fps floor, so
    sub-second moments can fall between them).
-5. **Recall across sessions**: `list_jobs()` — the store persists; a file
+5. **Keep verified names**: after proving an anonymous label's identity,
+   call `label_speakers(job_id, labels={"S1":"Name"},
+   evidence={"S1":"intro or frame proof"})`. Saved names appear in later
+   transcript, moment, and search calls while raw `S1`/`S2` labels remain.
+6. **Recall across sessions**: `list_jobs()` — the store persists; a file
    processed yesterday (even via CLI) is queryable by `job_id` today.
 
 ## Timestamps
@@ -81,6 +85,10 @@ friendly), `correlate-with-logs`.
   homophones lie about name spellings (spoken "profit" vs on-screen
   "Prophet") — trust OCR/frames over the transcript for names. State the
   mapping explicitly and mark unmapped labels "unidentified".
+  Roster `name_candidates` are raw OCR hints, not identities: they may be
+  UI text, a job title, or somebody else's name. Inspect the cited frame and
+  persist only defensible mappings with `label_speakers`; never auto-save a
+  candidate.
   `diarize=true` needs the `[diarization]` extra — its absence produces an
   actionable install-hint error.
 - Findings/quotes must cite the narrator's exact words + `t_ms` (+ `t_wall`

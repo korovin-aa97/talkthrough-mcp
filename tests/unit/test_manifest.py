@@ -2,9 +2,12 @@
 
 from __future__ import annotations
 
+import json
+from dataclasses import replace
 from datetime import UTC, datetime
 from pathlib import Path
 
+import pytest
 from tests.conftest import make_manifest
 
 from talkthrough_mcp.core.diarize import (
@@ -30,6 +33,7 @@ from talkthrough_mcp.core.manifest import (
     slice_segments,
     straddle_hint_t_ms,
 )
+from talkthrough_mcp.core.stt import SttWord
 from talkthrough_mcp.core.wallclock import WallClock
 
 CLOCK = WallClock(
@@ -255,7 +259,67 @@ def _diarized_manifest() -> Manifest:
 def test_non_diarized_manifest_serializes_exactly_like_v01x() -> None:
     payload = make_manifest().to_dict()
     assert "diarization" not in payload["transcript"]
+    assert "words" not in payload["transcript"]
     assert all("speaker" not in segment for segment in payload["transcript"]["segments"])
+
+
+def test_word_timings_use_compact_triplets_and_round_trip(tmp_path: Path) -> None:
+    manifest = _diarized_manifest()
+    manifest.transcript.segments[0] = replace(
+        manifest.transcript.segments[0], source_seq=1
+    )
+    manifest.transcript.words = [
+        SttWord(0, 400, " This"),
+        SttWord(400, 900, " works."),
+    ]
+    payload = manifest.to_dict()
+    assert payload["transcript"]["words"] == [[0, 400, " This"], [400, 900, " works."]]
+    assert payload["transcript"]["segments"][0]["source_seq"] == 1
+    save_manifest(manifest, tmp_path)
+    encoded = (tmp_path / "manifest.json").read_text(encoding="utf-8")
+    assert '"words": [[0,400," This"],[400,900," works."]]' in encoded
+    assert load_manifest(tmp_path).transcript.words == manifest.transcript.words
+    assert load_manifest(tmp_path).transcript.segments[0].source_seq == 1
+
+
+def test_manifest_save_replaces_only_complete_json(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from talkthrough_mcp.core import manifest as manifest_module
+
+    original = make_manifest()
+    save_manifest(original, tmp_path)
+    replacement = make_manifest(created_at="2026-08-27T20:00:00+00:00")
+    real_replace = manifest_module.os.replace
+    observed: list[dict[str, object]] = []
+
+    def checked_replace(source: Path, destination: Path) -> None:
+        observed.append(json.loads(Path(source).read_text(encoding="utf-8")))
+        real_replace(source, destination)
+
+    monkeypatch.setattr(manifest_module.os, "replace", checked_replace)
+    save_manifest(replacement, tmp_path)
+    assert observed[0]["created_at"] == replacement.created_at
+    assert load_manifest(tmp_path).created_at == replacement.created_at
+    assert not list(tmp_path.glob(".manifest.json.*.tmp"))
+
+
+def test_failed_atomic_replace_keeps_the_previous_manifest(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from talkthrough_mcp.core import manifest as manifest_module
+
+    original = make_manifest()
+    save_manifest(original, tmp_path)
+
+    def fail_replace(source: Path, destination: Path) -> None:
+        raise OSError("injected replace failure")
+
+    monkeypatch.setattr(manifest_module.os, "replace", fail_replace)
+    with pytest.raises(OSError, match="injected replace failure"):
+        save_manifest(make_manifest(created_at="2099-01-01T00:00:00+00:00"), tmp_path)
+    assert load_manifest(tmp_path) == original
+    assert not list(tmp_path.glob(".manifest.json.*.tmp"))
 
 
 def test_diarized_round_trip(tmp_path: Path) -> None:

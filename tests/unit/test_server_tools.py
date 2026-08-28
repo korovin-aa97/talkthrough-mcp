@@ -7,14 +7,18 @@ transport needed.
 
 from __future__ import annotations
 
+import json
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import replace
 from pathlib import Path
 
+import pytest
 from tests.conftest import make_manifest
 
 from talkthrough_mcp.core.diarize import Diarization, Turn, attribute_segments, speaker_roster
 from talkthrough_mcp.core.jobs import job_dir
 from talkthrough_mcp.core.manifest import Manifest, Transcript, save_manifest
+from talkthrough_mcp.core.stt import SttWord
 
 
 def _store(manifest: Manifest) -> str:
@@ -349,3 +353,164 @@ def test_search_zero_hit_multiword_respects_the_speaker_filter(
     assert "ocr hits are excluded" in payload["note"]  # 0.2.2 note survives, joined
     assert "no single segment contains ALL the words" in payload["note"]
     assert "t_ms=" not in payload["note"]  # segments 2|3 are S1|S2 — not S1's pair
+
+
+# --- v0.3.0 durable speaker names --------------------------------------------
+
+
+def test_label_speakers_persists_names_evidence_and_all_read_surfaces(
+    isolated_home: Path,
+) -> None:
+    from talkthrough_mcp.core import jobs
+    from talkthrough_mcp.server import get_moment, get_transcript, label_speakers, search
+
+    manifest = _diarize(make_manifest())
+    manifest.transcript.words = [SttWord(0, 500, " This")]
+    job_id = _store(manifest)
+    saved = label_speakers(
+        job_id,
+        {"s1": " Vera ", "S2": "Tom"},
+        {"S1": " introduction at 1200 ms ", "S2": "name plate at 6006 ms"},
+    )
+    assert saved["mapping_count"] == 2
+    assert saved["speakers"][0]["speaker_name"] == "Vera"
+    assert saved["speakers"][0]["speaker_name_evidence"] == "introduction at 1200 ms"
+    stored = jobs.load_job(job_id).transcript.diarization
+    assert stored is not None
+    assert stored.speaker_names == {"S1": "Vera", "S2": "Tom"}
+
+    segments = get_transcript(job_id)
+    assert segments["attribution_precision"] == "word"
+    assert "attribution_note" not in segments
+    assert any(
+        item.get("speaker") == "S1" and item.get("speaker_name") == "Vera"
+        for item in segments["segments"]
+    )
+    assert "Vera (S1):" in get_transcript(job_id, format="text")["text"]
+    assert "Tom (S2):" in get_transcript(job_id, format="srt")["srt"]
+
+    hit = search(job_id, "dashboard", speaker="vErA")
+    assert hit["speaker"] == "vErA"
+    assert hit["hits"][0]["speaker"] == "S1"
+    assert hit["hits"][0]["speaker_name"] == "Vera"
+    moment = json.loads(get_moment(job_id, 0, 4_000)[0])
+    assert moment["speakers_in_range"] == ["S1"]
+    assert moment["speaker_details_in_range"] == [
+        {"speaker": "S1", "speaker_name": "Vera"}
+    ]
+    assert moment["transcript"][0]["speaker_name"] == "Vera"
+
+    removed = label_speakers(job_id, {"S1": None})
+    assert removed["mapping_count"] == 1
+    assert "speaker_name" not in get_transcript(job_id)["segments"][0]
+    assert jobs.load_job(job_id).transcript.diarization.speaker_name_evidence == {
+        "S2": "name plate at 6006 ms"
+    }
+
+
+def test_old_diarized_job_reports_segment_precision_and_force_note(
+    isolated_home: Path,
+) -> None:
+    from talkthrough_mcp.server import get_transcript, label_speakers
+
+    job_id = _store(_diarize(make_manifest()))
+    payload = get_transcript(job_id)
+    assert payload["attribution_precision"] == "segment"
+    assert "force=true" in payload["attribution_note"]
+    assert "diarize=true" in payload["attribution_note"]
+    assert label_speakers(job_id, {"S1": "Legacy Vera"})["mapping_count"] == 1
+
+
+def test_label_speakers_rejects_plain_jobs_and_keeps_invalid_writes_byte_identical(
+    isolated_home: Path,
+) -> None:
+    from mcp.server.mcpserver.exceptions import ToolError
+
+    from talkthrough_mcp.core import jobs
+    from talkthrough_mcp.server import label_speakers
+
+    plain_job = _store(make_manifest())
+    with pytest.raises(ToolError, match="not diarized"):
+        label_speakers(plain_job, {"S1": "Vera"})
+
+    diarized_job = _store(_diarize(make_manifest(job_id="fedcba9876543210")))
+    path = jobs.job_dir(diarized_job) / "manifest.json"
+    before = path.read_bytes()
+    with pytest.raises(ToolError, match="valid labels: S1, S2"):
+        label_speakers(diarized_job, {"S99": "Nobody"})
+    assert path.read_bytes() == before
+
+    with pytest.raises(ToolError, match="job not found"):
+        label_speakers("9999999999999999", {"S1": "Nobody"})
+    assert not jobs.job_dir("9999999999999999").exists()
+
+
+def test_duplicate_saved_name_searches_every_matching_label(
+    isolated_home: Path,
+) -> None:
+    from talkthrough_mcp.server import label_speakers, search
+
+    job_id = _store(_diarize(make_manifest()))
+    label_speakers(job_id, {"S1": "Alex", "S2": "Alex"})
+    payload = search(job_id, "s", speaker="alex")
+    assert payload["speaker_labels"] == ["S1", "S2"]
+    assert {hit["speaker"] for hit in payload["hits"]} == {"S1", "S2"}
+    assert "maps to multiple labels: S1, S2" in payload["note"]
+
+
+def test_unknown_saved_name_returns_bounded_honesty_note(isolated_home: Path) -> None:
+    from talkthrough_mcp.server import label_speakers, search
+
+    job_id = _store(_diarize(make_manifest()))
+    label_speakers(job_id, {"S1": "Vera"})
+    payload = search(job_id, "dashboard", speaker="Nobody")
+    assert payload["hits"] == []
+    assert "is not saved" in payload["note"]
+    assert "known names: Vera" in payload["note"]
+    assert "roster labels: S1-S2" in payload["note"]
+
+
+def test_name_candidates_are_bounded_deduplicated_raw_ocr_hints(
+    isolated_home: Path,
+) -> None:
+    from talkthrough_mcp.server import get_transcript
+
+    manifest = _diarize(make_manifest())
+    manifest.frames.items[0].ocr_text = "Vera Smith\nVERA SMITH\n12345"
+    manifest.frames.items[2].ocr_text = "Product Lead\n" + "A" * 140
+    payload = get_transcript(_store(manifest))
+    candidates = payload["speakers"][0]["name_candidates"]
+    assert candidates[0] == {"text": "Vera Smith", "frame_ms": 0}
+    assert len(candidates) == 3
+    assert len({item["text"].casefold() for item in candidates}) == len(candidates)
+    assert all(item["text"] != "12345" for item in candidates)
+    second = payload["speakers"][1]["name_candidates"]
+    assert len(second) <= 3
+    assert all(len(item["text"]) <= 120 for item in second)
+    assert all(any(character.isalpha() for character in item["text"]) for item in second)
+
+    audio = _diarize(make_manifest(job_id="fedcba9876543210", kind="audio"))
+    audio_speakers = get_transcript(_store(audio))["speakers"]
+    assert all("name_candidates" not in entry for entry in audio_speakers)
+
+    no_ocr = _diarize(make_manifest(job_id="1111111111111111"))
+    no_ocr.caps = replace(no_ocr.caps, ocr=False)
+    no_ocr_speakers = get_transcript(_store(no_ocr))["speakers"]
+    assert all("name_candidates" not in entry for entry in no_ocr_speakers)
+
+
+def test_concurrent_label_patches_compose_under_the_job_lock(isolated_home: Path) -> None:
+    from talkthrough_mcp.core import jobs
+    from talkthrough_mcp.server import label_speakers
+
+    job_id = _store(_diarize(make_manifest()))
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        calls = [
+            pool.submit(label_speakers, job_id, {"S1": "Vera"}),
+            pool.submit(label_speakers, job_id, {"S2": "Tom"}),
+        ]
+        for call in calls:
+            call.result(timeout=10)
+    stored = jobs.load_job(job_id).transcript.diarization
+    assert stored is not None
+    assert stored.speaker_names == {"S1": "Vera", "S2": "Tom"}

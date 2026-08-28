@@ -9,9 +9,15 @@ survive, because real speech carries verbs and prepositions.
 
 from __future__ import annotations
 
+from pathlib import Path
+from types import SimpleNamespace
+
+import pytest
+
 from talkthrough_mcp.core.stt import (
     VOCAB_ECHO_WINDOW_MS,
     SttSegment,
+    transcribe,
     trim_vocabulary_echo,
 )
 
@@ -104,3 +110,71 @@ def test_yo_normalization_applies_to_vocabulary_matching() -> None:
     kept, trimmed = trim_vocabulary_echo(segments, "Артём, Семён")
     assert kept == []
     assert len(trimmed) == 1
+
+
+def test_transcribe_trims_echo_words_with_their_segment(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from talkthrough_mcp.core import stt
+
+    raw = [
+        SimpleNamespace(
+            start=0.0,
+            end=2.0,
+            text=" Анастасия, Диана, Анастасия, Диана, Анастасия.",
+            words=[
+                SimpleNamespace(start=0.0, end=0.5, word=" Анастасия"),
+                SimpleNamespace(start=0.5, end=1.0, word=", Диана"),
+            ],
+        ),
+        SimpleNamespace(
+            start=3.0,
+            end=5.0,
+            text=" Начинаем встречу.",
+            words=[
+                SimpleNamespace(start=3.0, end=3.8, word=" Начинаем"),
+                SimpleNamespace(start=3.8, end=5.0, word=" встречу."),
+            ],
+        ),
+    ]
+
+    class FakeModel:
+        def transcribe(self, path: str, **kwargs: object):  # type: ignore[no-untyped-def]
+            assert kwargs["word_timestamps"] is True
+            return iter(raw), SimpleNamespace(language="ru", language_probability=0.99)
+
+    monkeypatch.setattr(stt, "_load_model", lambda name: FakeModel())
+    result = transcribe(
+        Path("unused.wav"),
+        model_name="tiny",
+        vocabulary=VOCABULARY,
+        word_timestamps=True,
+    )
+    assert [segment.text for segment in result.segments] == ["Начинаем встречу."]
+    assert [word.text for word in result.words] == [" Начинаем", " встречу."]
+    assert result.vocabulary_echo_trimmed == 1
+
+
+def test_transcribe_does_not_request_or_store_words_by_default(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from talkthrough_mcp.core import stt
+
+    raw = [
+        SimpleNamespace(
+            start=0.0,
+            end=1.0,
+            text=" Plain transcript.",
+            words=[SimpleNamespace(start=0.0, end=1.0, word=" Plain transcript.")],
+        )
+    ]
+
+    class FakeModel:
+        def transcribe(self, path: str, **kwargs: object):  # type: ignore[no-untyped-def]
+            assert "word_timestamps" not in kwargs
+            return iter(raw), SimpleNamespace(language="en", language_probability=0.9)
+
+    monkeypatch.setattr(stt, "_load_model", lambda name: FakeModel())
+    result = transcribe(Path("unused.wav"), model_name="tiny")
+    assert result.words == ()
+    assert [segment.text for segment in result.segments] == ["Plain transcript."]

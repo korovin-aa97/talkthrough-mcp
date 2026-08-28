@@ -177,9 +177,13 @@ def test_diarization_round_trip_with_compact_turn_triplets() -> None:
 def test_diarization_serializes_speaker_names_when_present() -> None:
     diarization = make_diarization()
     diarization.speaker_names = {"S1": "Alice"}
+    diarization.speaker_name_evidence = {"S1": "introduced herself at 1200 ms"}
     payload = diarization.to_dict()
     assert payload["speaker_names"] == {"S1": "Alice"}
-    assert Diarization.from_dict(payload).speaker_names == {"S1": "Alice"}
+    assert payload["speaker_name_evidence"] == {"S1": "introduced herself at 1200 ms"}
+    rebuilt = Diarization.from_dict(payload)
+    assert rebuilt.speaker_names == {"S1": "Alice"}
+    assert rebuilt.speaker_name_evidence == {"S1": "introduced herself at 1200 ms"}
 
 
 def test_diarization_round_trips_amend_outcome_fields() -> None:

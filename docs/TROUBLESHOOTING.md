@@ -67,7 +67,7 @@ create the venv from a modern interpreter, e.g. `python3.12 -m venv`.
 - Check `uvx` is on the PATH the client uses: `uvx --version`.
 - Run the server command from your config manually in a terminal — import and
   download errors print to stderr there.
-- Healthy state: the client lists 7 tools, and `list_jobs()` returns `[]` on
+- Healthy state: the client lists 8 tools, and `list_jobs()` returns `[]` on
   a fresh install.
 
 ## Claude Code says `Failed to reconnect … -32000` / `No module named 'mcp.server.fastmcp'`
@@ -188,9 +188,9 @@ same file is an instant re-call, and `list_jobs()` finds the job.
   labels (only an explicit `num_speakers` change or a failed previous run
   triggers the cheap diarization-only amend), and a `force=true` re-run
   redoes the whole pipeline — budget accordingly (see the note above).
-- Sub-second interjections ("yeah", "mhm") being absorbed into the other
-  speaker's segment is expected at segment-level attribution — see README →
-  Limitations.
+- Sub-second interjections ("yeah", "mhm") can still be absorbed when the
+  diarization engine does not emit a separate turn; word-level attribution
+  cannot recover a turn the engine never detected — see README → Limitations.
 
 ## `diarize=true` fails with "[diarization]" in the error
 

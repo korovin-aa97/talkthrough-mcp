@@ -33,13 +33,14 @@ import shutil
 import tarfile
 import urllib.request
 import wave
+from bisect import bisect_left
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field, fields, replace
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal
 
 from .errors import ToolFailureError, ValidationError
-from .stt import SttSegment
+from .stt import SttSegment, SttWord
 
 if TYPE_CHECKING:
     import numpy as np
@@ -150,6 +151,7 @@ class Diarization:
     speakers: list[SpeakerStat] = field(default_factory=list)
     turns: list[Turn] = field(default_factory=list)
     speaker_names: dict[str, str] | None = None
+    speaker_name_evidence: dict[str, str] | None = None
     # Amend outcome metadata; each field stays absent on legacy manifests.
     # ``labels_changed``: set only by the amend path — did the re-run actually
     # relabel anything? ``amend_reason``: which explicit input invalidated the
@@ -185,6 +187,8 @@ class Diarization:
         }
         if self.speaker_names is not None:
             payload["speaker_names"] = dict(self.speaker_names)
+        if self.speaker_name_evidence is not None:
+            payload["speaker_name_evidence"] = dict(self.speaker_name_evidence)
         if self.labels_changed is not None:
             payload["labels_changed"] = self.labels_changed
         if self.amend_reason is not None:
@@ -208,6 +212,12 @@ class Diarization:
         names = payload.get("speaker_names")
         known["speaker_names"] = (
             {str(k): str(v) for k, v in names.items()} if isinstance(names, dict) else None
+        )
+        evidence = payload.get("speaker_name_evidence")
+        known["speaker_name_evidence"] = (
+            {str(k): str(v) for k, v in evidence.items()}
+            if isinstance(evidence, dict)
+            else None
         )
         amend_reason = payload.get("amend_reason")
         known["amend_reason"] = amend_reason if amend_reason in AMEND_REASONS else None
@@ -250,6 +260,41 @@ def _overlap_ms(t0_a: int, t1_a: int, t0_b: int, t1_b: int) -> int:
     return max(0, min(t1_a, t1_b) - max(t0_a, t0_b))
 
 
+@dataclass(frozen=True)
+class _IntervalLookup:
+    """Start-sorted interval index with exact overlap candidate pruning."""
+
+    order: tuple[int, ...]
+    starts: tuple[int, ...]
+    prefix_max_ends: tuple[int, ...]
+    bounds: tuple[tuple[int, int], ...]
+
+
+def _interval_lookup(bounds: Sequence[tuple[int, int]]) -> _IntervalLookup:
+    order = tuple(sorted(range(len(bounds)), key=lambda index: (*bounds[index], index)))
+    starts = tuple(bounds[index][0] for index in order)
+    prefix: list[int] = []
+    highest = -(1 << 63)
+    for index in order:
+        highest = max(highest, bounds[index][1])
+        prefix.append(highest)
+    return _IntervalLookup(order, starts, tuple(prefix), tuple(bounds))
+
+
+def _overlapping_indices(lookup: _IntervalLookup, t0_ms: int, t1_ms: int) -> list[int]:
+    """All intervals with positive overlap, without scanning the full timeline."""
+    right = bisect_left(lookup.starts, t1_ms)
+    found: list[int] = []
+    position = right - 1
+    while position >= 0 and lookup.prefix_max_ends[position] > t0_ms:
+        index = lookup.order[position]
+        start, end = lookup.bounds[index]
+        if start < t1_ms and end > t0_ms:
+            found.append(index)
+        position -= 1
+    return found
+
+
 def attribute_segments(
     segments: Sequence[SttSegment], turns: Sequence[Turn]
 ) -> list[SttSegment]:
@@ -274,6 +319,153 @@ def attribute_segments(
         )
         attributed.append(replace(segment, speaker=winner))
     return attributed
+
+
+def _word_speaker(
+    word: SttWord, turns: Sequence[Turn], lookup: _IntervalLookup | None = None
+) -> str | None:
+    """Best-overlap turn; ties go to earlier turn, then lower S<n>."""
+    lookup = lookup or _interval_lookup([(turn.t0_ms, turn.t1_ms) for turn in turns])
+    ranked = [
+        (
+            _overlap_ms(word.t0_ms, word.t1_ms, turns[index].t0_ms, turns[index].t1_ms),
+            turns[index],
+        )
+        for index in _overlapping_indices(lookup, word.t0_ms, word.t1_ms)
+    ]
+    if not ranked:
+        return None
+    _shared, winner = min(
+        ranked,
+        key=lambda item: (-item[0], item[1].t0_ms, _label_number(item[1].speaker)),
+    )
+    return winner.speaker
+
+
+def attribute_segments_with_words(
+    segments: Sequence[SttSegment],
+    words: Sequence[SttWord],
+    turns: Sequence[Turn],
+) -> list[SttSegment]:
+    """Split each Whisper segment at word-level speaker boundaries.
+
+    Words are first assigned to exactly one source segment by maximum time
+    overlap, preventing boundary tokens from being duplicated. A source
+    segment without a complete usable word list falls back intact to the
+    established maximum-overlap segment attribution.
+    """
+    valid_words: list[SttWord] = []
+    invalid_count = 0
+    for word in words:
+        if word.t0_ms < 0 or word.t1_ms <= word.t0_ms or not word.text.strip():
+            invalid_count += 1
+        else:
+            valid_words.append(word)
+    if invalid_count:
+        logger.warning(
+            "found %d invalid word timestamp(s); using segment-level attribution "
+            "for this transcript",
+            invalid_count,
+        )
+        fallback = attribute_segments(segments, turns)
+        return [replace(segment, seq=index) for index, segment in enumerate(fallback, start=1)]
+
+    # A previous word-level diarization may already have split one Whisper
+    # segment into several stored segments. Coalesce those pieces by their
+    # durable source_seq before assigning words again, otherwise every amend
+    # could split more finely but could never merge a former boundary.
+    source_groups: list[tuple[int, list[SttSegment]]] = []
+    for segment in segments:
+        source_seq = segment.source_seq if segment.source_seq is not None else segment.seq
+        if (
+            segment.source_seq is not None
+            and source_groups
+            and source_groups[-1][0] == source_seq
+        ):
+            source_groups[-1][1].append(segment)
+        else:
+            # Segments without source_seq are original/legacy inputs and must
+            # remain distinct even if a malformed manifest repeats seq.
+            source_groups.append((source_seq, [segment]))
+
+    source_bounds = [
+        (
+            min(segment.t0_ms for segment in members),
+            max(segment.t1_ms for segment in members),
+        )
+        for _source_seq, members in source_groups
+    ]
+    segment_lookup = _interval_lookup(source_bounds)
+    turn_lookup = _interval_lookup([(turn.t0_ms, turn.t1_ms) for turn in turns])
+    by_segment: dict[int, list[SttWord]] = {
+        index: [] for index in range(len(source_groups))
+    }
+    unassigned_count = 0
+    for word in valid_words:
+        overlapping = [
+            (
+                _overlap_ms(
+                    word.t0_ms,
+                    word.t1_ms,
+                    source_bounds[index][0],
+                    source_bounds[index][1],
+                ),
+                index,
+            )
+            for index in _overlapping_indices(segment_lookup, word.t0_ms, word.t1_ms)
+        ]
+        if not overlapping:
+            unassigned_count += 1
+            continue
+        _shared, chosen = min(
+            overlapping,
+            key=lambda item: (
+                -item[0],
+                source_bounds[item[1]][0],
+                source_groups[item[1]][0],
+            ),
+        )
+        by_segment[chosen].append(word)
+
+    if unassigned_count:
+        logger.warning(
+            "found %d word timestamp(s) outside every source segment; using "
+            "segment-level attribution for this transcript",
+            unassigned_count,
+        )
+        fallback = attribute_segments(segments, turns)
+        return [replace(segment, seq=index) for index, segment in enumerate(fallback, start=1)]
+
+    split: list[SttSegment] = []
+    for index, (source_seq, source_members) in enumerate(source_groups):
+        segment_words = sorted(by_segment[index], key=lambda word: (word.t0_ms, word.t1_ms))
+        if not segment_words:
+            split.extend(attribute_segments(source_members, turns))
+            continue
+
+        groups: list[tuple[str | None, list[SttWord]]] = []
+        for word in segment_words:
+            speaker = _word_speaker(word, turns, turn_lookup)
+            if groups and groups[-1][0] == speaker:
+                groups[-1][1].append(word)
+            else:
+                groups.append((speaker, [word]))
+        for speaker, group_words in groups:
+            text = "".join(word.text for word in group_words).strip()
+            if not text:
+                continue
+            split.append(
+                SttSegment(
+                    seq=0,
+                    t0_ms=group_words[0].t0_ms,
+                    t1_ms=group_words[-1].t1_ms,
+                    text=text,
+                    speaker=speaker,
+                    source_seq=source_seq,
+                )
+            )
+
+    return [replace(segment, seq=index) for index, segment in enumerate(split, start=1)]
 
 
 def speaker_roster(turns: Sequence[Turn]) -> list[SpeakerStat]:

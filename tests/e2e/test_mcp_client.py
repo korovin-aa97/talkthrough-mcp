@@ -88,6 +88,7 @@ def _payload(result: types.CallToolResult) -> dict[str, Any]:
 
 
 async def _run_session(home: Path) -> None:
+    diarized_job_id: str | None = None
     async with (
         stdio_client(_server_params(home)) as (read, write),
         ClientSession(read, write) as session,
@@ -100,7 +101,7 @@ async def _run_session(home: Path) -> None:
             and "Local-first recording analysis" in initialized.instructions
         )
 
-        # 1. Tool discovery: 7 tools, schemas, guidance examples ON THE WIRE.
+        # 1. Tool discovery: 8 tools, schemas, guidance examples ON THE WIRE.
         tools_result = await session.list_tools()
         tools = {tool.name: tool for tool in tools_result.tools}
         assert sorted(tools) == sorted(guidance.TOOL_NAMES), sorted(tools)
@@ -246,9 +247,11 @@ async def _run_session(home: Path) -> None:
                 read_timeout_seconds=PROCESS_TIMEOUT,
             )
             diarized_summary = _payload(diarized_result)
+            diarized_job_id = diarized_summary["job_id"]
             block = diarized_summary["diarization"]
             assert block["available"] is True
             assert block["detected_num_speakers"] == TWO_VOICE_NUM_SPEAKERS
+            assert block["attribution_precision"] == "word"
             assert [speaker["label"] for speaker in block["speakers"]] == ["S1", "S2"]
             # v0.3.0: the roster names both the screen-check anchor and duration;
             # the old ambiguous field remains an additive compatibility alias.
@@ -270,6 +273,13 @@ async def _run_session(home: Path) -> None:
             )
             assert "S1: " in srt_diarized["srt"]
             assert srt_diarized["media_kind"] == "audio"
+            transcript_json = _payload(
+                await session.call_tool(
+                    "get_transcript", {"job_id": diarized_summary["job_id"]}
+                )
+            )
+            assert transcript_json["attribution_precision"] == "word"
+            assert "words" not in transcript_json, "raw word timings stay manifest-only"
 
             # v0.2.2: speaker= filter on the wire — one voice, case-normalized,
             # with the ocr-exclusion note in the payload.
@@ -302,6 +312,24 @@ async def _run_session(home: Path) -> None:
             )
             assert bogus_label["hits"] == []
             assert "not in this job's roster (S1-S2)" in bogus_label["note"]
+
+            # v0.3.0: persist names through the eighth tool. The actual reads
+            # happen in a newly initialized session below.
+            labelled = _payload(
+                await session.call_tool(
+                    "label_speakers",
+                    {
+                        "job_id": diarized_summary["job_id"],
+                        "labels": {"S1": "Samantha", "S2": "Daniel"},
+                        "evidence": {
+                            "S1": "fixture voice order",
+                            "S2": "fixture voice order",
+                        },
+                    },
+                )
+            )
+            assert labelled["mapping_count"] == 2
+            assert labelled["speakers"][0]["speaker_name"] == "Samantha"
         else:
             failed = await session.call_tool(
                 "process_media",
@@ -313,6 +341,46 @@ async def _run_session(home: Path) -> None:
             error_text = failed.content[0]
             assert isinstance(error_text, types.TextContent)
             assert "[diarization]" in error_text.text
+
+    if diarized_job_id is not None:
+        # A second MCP process/session proves the mapping is durable rather
+        # than cached in one Python object.
+        async with (
+            stdio_client(_server_params(home)) as (read, write),
+            ClientSession(read, write) as session,
+        ):
+            await session.initialize()
+            transcript = _payload(
+                await session.call_tool("get_transcript", {"job_id": diarized_job_id})
+            )
+            assert {entry["speaker_name"] for entry in transcript["speakers"]} == {
+                "Samantha",
+                "Daniel",
+            }
+            assert any(
+                item.get("speaker") == "S1" and item.get("speaker_name") == "Samantha"
+                for item in transcript["segments"]
+            )
+            named_srt = _payload(
+                await session.call_tool(
+                    "get_transcript", {"job_id": diarized_job_id, "format": "srt"}
+                )
+            )["srt"]
+            assert "Samantha (S1): " in named_srt
+            named_hits = _payload(
+                await session.call_tool(
+                    "search",
+                    {"job_id": diarized_job_id, "query": "the", "speaker": "samantha"},
+                )
+            )
+            assert named_hits["hits"]
+            assert all(hit["speaker_name"] == "Samantha" for hit in named_hits["hits"])
+            removed = _payload(
+                await session.call_tool(
+                    "label_speakers", {"job_id": diarized_job_id, "labels": {"S1": None}}
+                )
+            )
+            assert removed["mapping_count"] == 1
 
 
 @pytest.mark.timeout(900)

@@ -9,6 +9,8 @@ from __future__ import annotations
 
 import itertools
 import json
+import os
+import tempfile
 import unicodedata
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
@@ -16,7 +18,7 @@ from typing import Any
 
 from .diarize import Diarization, known_fields
 from .frames import Frame, frame_floor_s
-from .stt import SttSegment
+from .stt import SttSegment, SttWord
 from .wallclock import WallClock
 
 SCHEMA = "talkthrough-manifest/v1"
@@ -46,6 +48,7 @@ class Transcript:
     model: str | None
     language_probability: float | None = None
     segments: list[SttSegment] = field(default_factory=list)
+    words: list[SttWord] | None = None
     diarization: Diarization | None = None
 
     def full_text(self) -> str:
@@ -95,6 +98,14 @@ class Manifest:
         for segment_payload in transcript_payload["segments"]:
             if segment_payload.get("speaker") is None:
                 del segment_payload["speaker"]
+            if segment_payload.get("source_seq") is None:
+                del segment_payload["source_seq"]
+        if self.transcript.words is None:
+            del transcript_payload["words"]
+        else:
+            transcript_payload["words"] = [
+                [word.t0_ms, word.t1_ms, word.text] for word in self.transcript.words
+            ]
         if self.transcript.diarization is None:
             del transcript_payload["diarization"]
         else:
@@ -111,6 +122,16 @@ class Manifest:
             SttSegment(**known_fields(SttSegment, segment))
             for segment in transcript_raw.get("segments", [])
         ]
+        words_raw = transcript_raw.get("words")
+        transcript_raw["words"] = (
+            [
+                SttWord(t0_ms=int(item[0]), t1_ms=int(item[1]), text=str(item[2]))
+                for item in words_raw
+                if isinstance(item, (list, tuple)) and len(item) == 3
+            ]
+            if isinstance(words_raw, list)
+            else None
+        )
         diarization_raw = transcript_raw.get("diarization")
         transcript_raw["diarization"] = (
             Diarization.from_dict(diarization_raw) if isinstance(diarization_raw, dict) else None
@@ -133,11 +154,53 @@ class Manifest:
 
 
 def save_manifest(manifest: Manifest, job_dir: Path) -> Path:
+    """Atomically replace the durable manifest from a same-directory temp file."""
     path = job_dir / MANIFEST_NAME
-    path.write_text(
-        json.dumps(manifest.to_dict(), ensure_ascii=False, indent=2), encoding="utf-8"
-    )
+    job_dir.mkdir(parents=True, exist_ok=True)
+    encoded = _encode_manifest(manifest)
+    temp_path: Path | None = None
+    try:
+        with tempfile.NamedTemporaryFile(
+            mode="w",
+            encoding="utf-8",
+            dir=job_dir,
+            prefix=f".{MANIFEST_NAME}.",
+            suffix=".tmp",
+            delete=False,
+        ) as handle:
+            temp_path = Path(handle.name)
+            handle.write(encoded)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(temp_path, path)
+    finally:
+        if temp_path is not None:
+            temp_path.unlink(missing_ok=True)
     return path
+
+
+def _encode_manifest(manifest: Manifest) -> str:
+    """Keep the human-readable manifest while encoding the large word array compactly."""
+    payload = manifest.to_dict()
+    transcript = payload.get("transcript")
+    if not isinstance(transcript, dict) or "words" not in transcript:
+        return json.dumps(payload, ensure_ascii=False, indent=2)
+
+    words = transcript["words"]
+    # ``json`` has no public raw-fragment hook. Substitute a deterministic,
+    # collision-checked marker after the normal pretty render so every word
+    # triplet stays on one physical line instead of expanding to five.
+    suffix = 0
+    while True:
+        marker = f"__talkthrough_compact_words_{suffix}__"
+        transcript["words"] = marker
+        encoded = json.dumps(payload, ensure_ascii=False, indent=2)
+        marker_json = json.dumps(marker, ensure_ascii=False)
+        if encoded.count(marker_json) == 1:
+            break
+        suffix += 1
+    compact_words = json.dumps(words, ensure_ascii=False, separators=(",", ":"))
+    return encoded.replace(marker_json, compact_words, 1)
 
 
 def load_manifest(job_dir: Path) -> Manifest:
@@ -155,7 +218,14 @@ def _srt_timestamp(t_ms: int) -> str:
     return f"{hours:02d}:{minutes:02d}:{seconds:02d},{millis:03d}"
 
 
-def format_srt(segments: list[SttSegment]) -> str:
+def _speaker_display(label: str, speaker_names: dict[str, str] | None) -> str:
+    name = speaker_names.get(label) if speaker_names else None
+    return f"{name} ({label})" if name else label
+
+
+def format_srt(
+    segments: list[SttSegment], speaker_names: dict[str, str] | None = None
+) -> str:
     """SubRip text: 1-based sequential index, HH:MM:SS,mmm ranges, blank-line separated.
 
     Diarized segments carry the conventional ``S1: `` speaker prefix in the
@@ -163,19 +233,25 @@ def format_srt(segments: list[SttSegment]) -> str:
     """
     blocks = [
         f"{index}\n{_srt_timestamp(seg.t0_ms)} --> {_srt_timestamp(seg.t1_ms)}\n"
-        + (f"{seg.speaker}: {seg.text}" if seg.speaker else seg.text)
+        + (
+            f"{_speaker_display(seg.speaker, speaker_names)}: {seg.text}"
+            if seg.speaker
+            else seg.text
+        )
         for index, seg in enumerate(segments, start=1)
     ]
     return "\n\n".join(blocks) + ("\n" if blocks else "")
 
 
-def format_text(segments: list[SttSegment]) -> str:
+def format_text(
+    segments: list[SttSegment], speaker_names: dict[str, str] | None = None
+) -> str:
     """Plain prose; diarized runs are prefixed with ``S1: `` at speaker changes."""
     parts: list[str] = []
     current: str | None = None
     for segment in segments:
         if segment.speaker and segment.speaker != current:
-            parts.append(f"{segment.speaker}: {segment.text}")
+            parts.append(f"{_speaker_display(segment.speaker, speaker_names)}: {segment.text}")
             current = segment.speaker
         else:
             parts.append(segment.text)
