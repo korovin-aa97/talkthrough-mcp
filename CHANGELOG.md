@@ -4,6 +4,81 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions follow
 [SemVer](https://semver.org/).
 
+## [0.3.0] — 2026-08-28
+
+One theme: **verified speaker identity can survive beyond one agent turn**.
+Talkthrough now attributes diarized speech at word boundaries, lets an agent
+persist evidence-backed names without replacing the canonical `S1`/`S2`
+labels, and serves those names consistently on every transcript surface.
+
+### Added
+
+- **`label_speakers` is the eighth MCP tool.** It atomically stores or removes
+  verified `S1 → name` mappings under the job lock, with optional bounded
+  evidence. Raw labels stay canonical; saved names are additive and are
+  returned separately by transcript segments, text/SRT output, search hits,
+  moments, rosters, summaries, and job listings.
+- **Word-level speaker attribution.** New diarized jobs retain bounded Whisper
+  word timings and split a transcript segment when the dominant voice changes
+  between words. The committed interrupt fixture covers a mid-sentence handoff;
+  old manifests continue to report `attribution_precision="segment"` without
+  a hidden re-transcription.
+- **Bounded OCR name candidates.** Diarization summaries expose possible
+  on-screen names near useful speaker anchors as hints only. Candidates are
+  never promoted to saved names without an explicit `label_speakers` call.
+- **Broader lexical retrieval.** `search` adds `match_mode="any_word"`, folds
+  Unicode punctuation and Russian `ё/е`, and matches phrases that straddle two
+  adjacent transcript segments while keeping bounded, token-safe results.
+- `list_jobs` now includes the stored local media path, and speaker rosters
+  expose honest long-turn start and duration fields.
+
+### Changed
+
+- **MCP Python SDK 2.x.** Runtime and E2E clients now use the public SDK 2.1.1
+  snake-case contract (`MCPServer`, structured output, image blocks,
+  annotations, progress, and errors). The dependency is `mcp>=2.1.1,<3`; the
+  emergency pre-2.0 workaround from 0.2.5 is no longer needed.
+- Released Claude Code plugin packs now pin their matching server exactly
+  (`talkthrough-mcp[diarization]==0.3.0`). Ordinary install snippets remain on
+  the latest public package.
+- Guidance, the cross-engine skill, prompts, examples, generated integrations,
+  MCP Registry manifest, and wire-contract tests now agree on **8 tools and 6
+  prompts**.
+
+### Fixed
+
+- The Claude Code plugin's `feedback-triage` agent now whitelists the
+  plugin-qualified MCP tool names, so it can actually call all eight tools
+  instead of describing calls it cannot make.
+- Frame dedup no longer collapses visually different solid-color screens that
+  share the same dHash gradient: duplicate decisions also compare mean
+  grayscale brightness.
+- The misleading `longest_turn_ms` field now has explicit
+  `longest_turn_at_ms` and `longest_turn_duration_ms` replacements; the old
+  start-time alias remains for one compatibility cycle.
+- No-op diarization amendments explain whether the unchanged labels came from
+  a requested speaker count, an embedding-model change, or both.
+- `gc` reports an old manifest-less directory once as swept instead of warning
+  about the same directory immediately before removing it.
+- Corporate TLS troubleshooting now covers the first `static-ffmpeg` download
+  as well as diarization model downloads.
+- If an optional non-Latin OCR pack cannot be downloaded, OCR now falls back
+  to the bundled default pack instead of dropping all on-screen text.
+- Early exhaustion of the frame-analysis cap is reported honestly instead of
+  implying the full recording was inspected.
+
+### Compatibility and validation
+
+- 0.1.x/0.2.x manifests remain readable in place; wire and data changes are
+  additive, including compatibility with the 0.2.6 Claude command pack.
+- The release battery ran 210 isolated agent cells across six Claude/Codex
+  configurations. All 102 judged full-grid cells were audited, all 30 v0.3
+  behavior cells passed mechanically, and old-server control resolved the only
+  parity flip: **release-caused regressions = 0**.
+- Production-like release-candidate acceptance passed 10 Claude Code plugin
+  scenarios (all six commands, skill, agent, saved-name continuity, and the
+  0.2.6 adapter) plus a Goose 1.41.0 client smoke.
+
 ## [0.2.6] — 2026-08-10
 
 One theme: **the payload tells the truth about the outcome, not the

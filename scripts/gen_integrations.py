@@ -65,6 +65,7 @@ PROJECT_VERSION: str = tomllib.loads((REPO / "pyproject.toml").read_text(encodin
 # User-facing install snippets intentionally remain unpinned latest via
 # UVX_ARGS; only the versioned plugin artifact gets this exact pin.
 CLAUDE_PLUGIN_UVX_ARGS = [f"{_PYPI_SPEC}=={PROJECT_VERSION}"]
+CLAUDE_PLUGIN_MCP_TOOL_PREFIX = "mcp__plugin_talkthrough_talkthrough__"
 
 ENV_DOC = (
     "Optional env vars: TALKTHROUGH_WHISPER_MODEL (default `small`; use "
@@ -409,7 +410,8 @@ def build_skill_mirrors() -> dict[str, str]:
 
 def build_agent_mirrors() -> dict[str, str]:
     canonical = (REPO / "examples" / "agents" / "feedback-triage.md").read_text(encoding="utf-8")
-    return {"integrations/claude-code/agents/feedback-triage.md": canonical}
+    plugin_agent = canonical.replace("mcp__talkthrough__", CLAUDE_PLUGIN_MCP_TOOL_PREFIX)
+    return {"integrations/claude-code/agents/feedback-triage.md": plugin_agent}
 
 
 def build_mcp_configs() -> dict[str, str]:

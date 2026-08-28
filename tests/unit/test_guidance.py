@@ -184,6 +184,22 @@ def test_claude_plugin_server_is_pinned_to_its_generated_pack_version() -> None:
     assert plugin_config["mcpServers"]["talkthrough"]["args"] == CLAUDE_PLUGIN_UVX_ARGS
 
 
+def test_claude_plugin_agent_uses_plugin_mcp_tool_namespace() -> None:
+    """Plugin agents must whitelist the runtime-qualified MCP tool names.
+
+    The canonical example uses standalone ``mcp__talkthrough__`` names, but
+    Claude qualifies a plugin MCP server as ``plugin:talkthrough:talkthrough``.
+    """
+    from scripts.gen_integrations import CLAUDE_PLUGIN_MCP_TOOL_PREFIX
+
+    agent = (REPO_ROOT / "integrations/claude-code/agents/feedback-triage.md").read_text(
+        encoding="utf-8"
+    )
+    assert "mcp__talkthrough__" not in agent
+    for tool_name in guidance.TOOL_NAMES:
+        assert f"{CLAUDE_PLUGIN_MCP_TOOL_PREFIX}{tool_name}" in agent
+
+
 def test_generator_covers_every_engine_folder() -> None:
     """No hand-made stragglers: every integrations/<engine>/ has generated docs."""
     artifacts = _generated_artifacts()

@@ -1,277 +1,54 @@
-# Model compatibility notes — talkthrough-mcp v0.2.0
+# Model compatibility notes — talkthrough-mcp v0.3.0
 
-*Snapshot: July 2026. A methodology and a data cut, not a leaderboard —
-models drift, sample sizes are small (n in every cell), and the corpus
-is one team's real recordings. Read it as "what tier of agent reliably
-drives this MCP for which job".*
-
-## v0.2.3 addendum (targeted battery, 2026-07-18)
-
-An 18-run battery (16 cells + 2 adjudication re-runs) on the v0.2.3
-server — the same four runner configs (haiku / sonnet / gpt-5.5 medium /
-gpt-5.4-mini low) on the same real recordings as the earlier grids, plus a
-39.7-min EN 3-speaker meeting and a stored 28-cluster threshold copy of
-the 73-min RU meeting. Every mechanical zero was adjudicated by reading
-the raw output (one was a checker artifact — a hedged «2–3 человека» range
-the hedge regex missed; no agent failures). Results:
-
-- **The MCP `instructions` channel REACHES codex — findings-key canon went
-  4/4** (v0.2.2: 2/4, Claude tiers only). One canon-keys sentence added to
-  the server's `initialize.instructions` («Triage findings JSON uses
-  EXACTLY the documented keys…») and both codex tiers emitted exactly
-  `quote`/`frame_refs` — including gpt-5.4-mini low, the runner that
-  neither description prose nor MCP prompt templates ever reach
-  (transcript-proven in v0.2.2). Two universal text channels now exist:
-  tool payloads and server instructions. The 0.3 canon-via-payload design
-  drops from "required" to "optional hardening".
-- **Escalation-note delivery via `get_transcript`: 4/4 without
-  re-processing.** Runners got ONLY a job id of a stored 28-cluster
-  threshold job («сколько людей говорило?») — every tier hedged or ranged
-  the headcount against cluster noise, zero confident wrong counts, zero
-  `process_media` calls. In 0.2.2 this note lived only in the
-  `process_media` summary, invisible on exactly this transcript-first
-  path.
-- **Speaker-mapping regression (meeting minutes on the 3-speaker EN
-  meeting): 6/6 runs mapped S1 = the presenter correctly; the 0.2.2-eval
-  failure shape (mapping the vocative target as the speaker) did not
-  recur.** Honest boundary: no headless runner pulled frames for the
-  screen check — the hardened MANDATORY step lives in prompt/skill text,
-  which `claude -p` does not auto-fetch and codex never fetches; it
-  reaches interactive clients (plugin command / server prompt users). The
-  payload half (`longest_turn_ms` in every roster entry) is served to all
-  clients; transcript evidence alone sufficed for the mapping here.
-- **T2 point-lookup regression: 4/4** (S2 + exact timestamp).
-- Harness lesson (recorded): a user-installed talkthrough plugin leaks its
-  STALE previous-release skill into headless `claude -p` runs — first-pass
-  cells consumed 0.2.2 skill text while testing the 0.2.3 server;
-  re-measured with the Skill tool disabled (same outcomes). Guidance-text
-  experiments must pin or disable installed plugins.
-
-## v0.2.2 addendum (targeted battery, 2026-07-18)
-
-A 20-run battery on the v0.2.2 server — four runner configs (haiku /
-sonnet / gpt-5.5 medium / gpt-5.4-mini low) × the surfaces this release
-touches, on the same real recordings as the earlier grids. Every
-mechanical zero was adjudicated by reading the raw output (three were
-checker-shape artifacts, none were agent failures). Results:
-
-- **Two-word stem search (#16): 8/8.** «карточк отправ»-class queries —
-  «карточк справ» on the 2-min RU screencast, «обратн связ» on the 73-min
-  RU meeting — returned the ground-truth moment at every tier (10–27 s
-  wall). On 0.2.1 these exact queries returned zero hits (exact-substring
-  semantics); agents needed lucky single-word fallbacks.
-- **Ask-the-user escalation: 4/4 refused to trust the cluster count**
-  on an UNDIARIZED copy of the 73-min meeting («сколько людей говорило и
-  кто что сказал?», no headcount given). Sonnet asked outright
-  («Подскажите, сколько человек реально участвовало? … пересчитаю с
-  num_speakers=N — это быстро»); gpt-5.4-mini — the runner that
-  description prose famously never reaches — ALSO asked («напишите число,
-  тогда доразмечу с num_speakers=N»), driven purely by the payload note;
-  haiku and gpt-5.5 hedged the number against cluster noise instead of
-  asserting it. Zero confident wrong headcounts (the v0.2.1 external
-  eval's failure mode).
-- **T6 findings JSON: 4/4 evidence-complete** (verbatim quotes
-  string-matched, cited frame files exist). Canonical key names: both
-  Claude tiers exact; both codex tiers still invent schemas
-  (`evidence_frames`/nested `evidence{}`) — and the transcript shows WHY:
-  `codex exec` never fetches MCP prompt templates, so the new canon
-  paragraph in `triage-recording` physically cannot reach codex runners.
-  The description-vs-payload lesson extends to prompts: contracts that
-  must reach every client belong in tool RESPONSES, not prompt text.
-- **T2 point-lookup regression: 4/4** (S2 + exact timestamp).
-- **Vocabulary-echo trim** (engine-level): on the 73-min meeting
-  re-transcription (small + six-name vocabulary) the opening
-  initial_prompt echo is now dropped — `vocabulary_echo_trimmed: 1` in
-  the summary, transcript opens with real speech, reference-point names
-  intact («влад дим дайте какую-то обратную…», «александр коровин»).
-  The echo's shape VARIES between decodes (repeat runs vs. a single
-  vocabulary-order pass — whisper's fallback sampling is nondeterministic
-  in quiet windows), which is why the detector matches vocabulary ORDER,
-  not a verbatim prefix. Boundary, honestly: trimming cannot resurrect
-  words whisper never emitted — on this recording the opening «Евгений
-  мне сообщил…» is decoded fine WITHOUT the vocabulary prompt but
-  swallowed WITH it; restoring such openings needs a prompt-free
-  re-decode of the trimmed window (a 0.3 candidate, evidence in the
-  v0.2.2 release notes).
-
-## v0.2.1 addendum (feature-grid battery, 2026-07-18)
-
-A 36-run feature grid re-ran on the v0.2.1 server — all six v0.2.0 runner
-configs (haiku / sonnet / opus / gpt-5.5 medium / gpt-5.5 high /
-gpt-5.4-mini) × the tasks the release touches: T5 slide-hunt on three real
-recordings (73-min RU meeting, 26-min EN call, 43-min EN workshop), T0s
-naive bug-screencast triage, T6 findings-JSON triage, T2 point lookup on
-the 35-min interview. Same verbatim prompts and mechanical evidence checks
-as v0.2.0; every mechanical zero was adjudicated by reading the raw output
-(the v0.2.0 judge-audit rule — it caught three checker artifacts, no agent
-failures). Results:
-
-- **T5: 18/18 runs returned an existing screenshot path** across every
-  tier and recording (v0.2.0 had sonnet at 1.0 and opus at 1.5 here). One
-  run (sonnet, RU meeting) cited the new validity span verbatim — picked
-  the summary slide *because* it "stays on screen for ~6.6 minutes
-  (3283500–3681375 ms) — the longest of any slide" — turning a
-  `duplicate_of`-chain inference into a payload lookup. gpt-5.5 used
-  `extract_frame` for an exact instant. Spontaneous span *citation* stayed
-  rare (1/18): the data is served to and consumed by all models, but only
-  the stronger tiers surface it as justification.
-- **T0s: 6/6 runs did no wasteful diarization** on the single-narrator
-  screencast (the inverse invariant), and the Claude runs on a
-  v0.2.1-processed job quoted the on-screen Russian text («Я готовлю вашу
-  заявку…») in their findings — strings absent from the OCR index before
-  the auto-selected `eslav` pack.
-- **T6: 6/6 runs produced evidence-backed findings JSON** — real frame
-  files cited, narrator quotes verbatim against the transcript.
-  gpt-5.4-mini deviated from the canonical key names (`quotes[]`/
-  `evidence[]` instead of `quote`/`frame_refs`) — content correct, schema
-  loose, consistent with its v0.2.0 profile.
-- **T2: 6/6** named the right speaker with an exact timestamp (one
-  checker false-negative: gpt-5.5-high answered in `hh:mm:ss.mmm`).
-- **Harness note for future batteries:** `codex exec` does NOT pass the
-  parent env to its MCP servers, so `TALKTHROUGH_HOME` isolation silently
-  fell back to the real store for the codex runs (read-only tasks, store
-  mtimes verified untouched). Declare env inside the codex MCP-server
-  config next time.
-- **Vocabulary honesty note** (engine-level, no agents): re-transcribing
-  the 73-min RU meeting on `small` with attendee names in `vocabulary`
-  kept every ground-truth name verbatim at its reference point («Влад,
-  Дим, дайте какую-то обратную связь», «Меня зовут Александр Коровин»)
-  with zero look-alike substitutions — but whisper echoed the name list
-  into the first ~60 s of quiet opening chatter (a known `initial_prompt`
-  trait, present since 0.1.0). If you pass `vocabulary`, treat the opening
-  seconds of the transcript with suspicion before quoting them.
-  The note is RU-derived; an external EN evaluation adds the boundary:
-  `vocabulary` does not rescue English homophone names — a name that IS a
-  common word ("Prophet" → "profit") stays wrong in every config, and its
-  count can even shift slightly — while the pipeline's multi-modal
-  redundancy compensates: OCR reads the correct spellings off slides/UI,
-  and Sonnet-tier agents reconcile the two streams in their output.
+*Snapshot: August 2026. This is a reproducible local corpus cut, not a
+leaderboard; provider models can drift after the snapshot.*
 
 ## Method
 
-132 agent runs: 6 runner configs (3 Claude models, Codex
-gpt-5.5 at two reasoning efforts + gpt-5.4-mini) × 10 task prompts
-(verbatim-identical across runners) × 5 recordings (real meetings and
-screencasts, 30 s – 73 min, RU/EN, 1–5 true speakers, counts confirmed
-by the recording owner). Scoring: an LLM judge with a strict rubric
-(fabricated names/quotes = 0) plus mechanical evidence checks — every
-quoted span string-matched into the transcript+OCR, every returned file
-path checked on disk, expected speaker labels precomputed from the
-manifests. Scores: 2 = correct and fully evidenced, 1 = partial, 0 =
-failed or fabricated. Judge verdicts were audited; instrument errors
-were fixed and adjudications are marked in the raw data.
+210 agent runs across 6 runner configurations and
+35 logical cells. The full grid was scored by an isolated
+Sonnet judge, then audited against saved raw outputs. Safety and v0.3 cells
+were checked mechanically; every zero and every baseline drop required
+explicit adjudication. Stores and media were isolated from user data.
 
-## Matrix 1 — task × model (mean score, n)
+## Task x model (mean score, n)
 
 | Task | haiku (default) | sonnet (default) | opus (default) | gpt-5.5 (medium) | gpt-5.5 (high) | gpt-5.4-mini (low) |
 |---|---|---|---|---|---|---|
-| T0 — Naive «analyze this meeting» (zero hints) | **1.0** (2)<br>389s · 568k tok | **0.5** (2)<br>146s · 429k tok | **1.5** (2)<br>216s · 287k tok | **1.0** (2)<br>82s · 48k tok | **2.0** (2)<br>93s · 129k tok | **1.5** (2)<br>42s · 34k tok |
-| T0s — Naive «triage this bug screencast» (inverse: must NOT diarize) | **1.0** (1)<br>69s · 255k tok | **2.0** (1)<br>205s · 532k tok | **2.0** (1)<br>307s · 908k tok | **2.0** (1)<br>80s · 60k tok | **2.0** (1)<br>69s · 80k tok | **1.0** (1)<br>108s · 56k tok |
-| T1 — Ingest with who-said-what intent (parameter choice) | **2.0** (3)<br>31s · 87k tok | **1.3** (3)<br>30s · 114k tok | **1.7** (3)<br>42s · 79k tok | **1.7** (3)<br>54s · 51k tok | **1.0** (3)<br>56s · 41k tok | **1.7** (3)<br>31s · 21k tok |
-| T2 — Point lookup: who said <known quote> + when | **2.0** (3)<br>19s · 110k tok | **2.0** (3)<br>15s · 111k tok | **2.0** (3)<br>33s · 108k tok | **2.0** (3)<br>22s · 34k tok | **2.0** (3)<br>33s · 35k tok | **2.0** (3)<br>23s · 29k tok |
-| T3 — Map speaker labels to real names (evidence required) | **1.3** (3)<br>187s · 1022k tok | **1.7** (3)<br>358s · 982k tok | **0.7** (3)<br>363s · 1549k tok | **1.7** (3)<br>159s · 181k tok | **2.0** (3)<br>240s · 247k tok | **1.0** (3)<br>56s · 78k tok |
-| T4 — Meeting minutes with owners (source language) | **0.0** (2)<br>75s · 393k tok | **0.5** (2)<br>303s · 262k tok | **2.0** (2)<br>510s · 1345k tok | **0.5** (2)<br>77s · 104k tok | **2.0** (2)<br>114s · 188k tok | **0.5** (2)<br>63s · 69k tok |
-| T5 — Find the key slide, return screenshot path | **2.0** (2)<br>64s · 593k tok | **1.0** (2)<br>55s · 318k tok | **1.5** (2)<br>136s · 257k tok | **2.0** (2)<br>54s · 102k tok | **2.0** (2)<br>62s · 72k tok | **2.0** (2)<br>35s · 67k tok |
-| T6 — Bug triage to findings JSON (verbatim quotes) | **1.0** (1)<br>64s · 203k tok | **2.0** (1)<br>195s · 319k tok | **2.0** (1)<br>192s · 151k tok | **2.0** (1)<br>66s · 52k tok | **2.0** (1)<br>83s · 59k tok | **2.0** (1)<br>63s · 52k tok |
+| T0 — Naive «analyze this meeting» (zero hints) | **0.5** (2)<br>323s | **1.0** (2)<br>841s | **1.5** (2)<br>432s | **2.0** (2)<br>372s | **1.0** (2)<br>392s | **1.5** (2)<br>294s |
+| T0s — Naive «triage this bug screencast» (inverse: must NOT diarize) | **0.0** (1)<br>41s | **2.0** (1)<br>93s | **2.0** (1)<br>93s | **2.0** (1)<br>41s | **2.0** (1)<br>62s | **0.0** (1)<br>33s |
+| T1 — Ingest with who-said-what intent (parameter choice) | **1.0** (3)<br>23s | **1.0** (3)<br>784s | **0.7** (3)<br>845s | **1.3** (3)<br>347s | **1.3** (3)<br>54s | **1.0** (3)<br>28s |
+| T2 — Point lookup: who said <known quote> + when | **0.7** (3)<br>18s | **0.3** (3)<br>21s | **1.3** (3)<br>36s | **0.7** (3)<br>17s | **0.7** (3)<br>23s | **1.7** (3)<br>26s |
+| T3 — Map speaker labels to real names (evidence required) | **0.7** (3)<br>101s | **1.3** (3)<br>280s | **1.3** (3)<br>572s | **1.0** (3)<br>74s | **1.0** (3)<br>221s | **1.0** (3)<br>68s |
+| T4 — Meeting minutes with owners (source language) | **0.0** (2)<br>54s | **1.0** (2)<br>246s | **1.0** (2)<br>253s | **0.5** (2)<br>65s | **0.5** (2)<br>91s | **1.0** (2)<br>46s |
+| T5 — Find the key slide, return screenshot path | **0.5** (2)<br>32s | **2.0** (2)<br>37s | **1.0** (2)<br>105s | **0.0** (2)<br>40s | **1.5** (2)<br>40s | **1.0** (2)<br>27s |
+| T6 — Bug triage to findings JSON (verbatim quotes) | **2.0** (1)<br>46s | **2.0** (1)<br>69s | **2.0** (1)<br>123s | **2.0** (1)<br>50s | **0.0** (1)<br>60s | **1.0** (1)<br>38s |
 
-*Cell: **mean score** (n judged)<br>median wall · median tokens.
-Token accounting differs per family (Anthropic API usage incl. cache
-vs Codex self-reported totals) — compare within a column family, not
-across.*
+## Recording x model (mean score, n)
 
-T7 failure literacy is checked mechanically, not judged: nonexistent
-job id → clean error surfaced, nothing fabricated: **18/18**;
-YouTube URL → refused per design: **12/12**.
-
-## Matrix 2 — recording × model (mean score, n)
-
-| Recording | len | lang | speakers | haiku | sonnet | opus | gpt-5.5 | gpt-5.5 | gpt-5.4-mini |
-|---|---|---|---|---|---|---|---|---|---|
-| 73-min RU team meeting (1 dominant presenter + Q&A) | 73m | ru | 5 | **1.3** (6)<br>52s · 370k tok | **1.3** (6)<br>55s · 209k tok | **1.5** (6)<br>149s · 195k tok | **1.2** (6)<br>62s · 63k tok | **1.8** (6)<br>89s · 111k tok | **1.7** (6)<br>30s · 32k tok |
-| 26-min EN knowledge-transfer call | 26m | en | 3 | **1.5** (2)<br>23s · 165k tok | **2.0** (2)<br>24s · 237k tok | **1.0** (2)<br>37s · 200k tok | **2.0** (2)<br>27s · 35k tok | **2.0** (2)<br>30s · 32k tok | **1.0** (2)<br>24s · 35k tok |
-| 43-min EN UX-research workshop (fast turn-taking) | 43m | en | 5 | **1.5** (6)<br>37s · 188k tok | **0.8** (6)<br>38s · 226k tok | **1.7** (6)<br>62s · 158k tok | **1.7** (6)<br>57s · 41k tok | **1.7** (6)<br>52s · 52k tok | **1.3** (6)<br>36s · 30k tok |
-| 2-min RU narrated bug screencast | 2m | ru | 1 | **1.0** (2)<br>66s · 229k tok | **2.0** (2)<br>200s · 426k tok | **2.0** (2)<br>250s · 530k tok | **2.0** (2)<br>73s · 56k tok | **2.0** (2)<br>76s · 70k tok | **1.5** (2)<br>86s · 54k tok |
-| 30-sec EN two-voice synthetic fixture | 0.5m | en | 2 | **2.0** (1)<br>31s · 86k tok | **2.0** (1)<br>29s · 114k tok | **2.0** (1)<br>40s · 78k tok | **2.0** (1)<br>45s · 10k tok | **2.0** (1)<br>34s · 21k tok | **2.0** (1)<br>31s · 18k tok |
-
-## Matrix 3 — corpus axes (all models pooled)
-
-*The axes are cuts of one corpus, not a controlled experiment — length,*
-*language and speaker count correlate across these five recordings.*
-
-- **Duration** — 0.5 min: 2.0 (n=6) · 2 min: 1.8 (n=12) · 26 min: 1.6 (n=12) · 43 min: 1.4 (n=36) · 73 min: 1.5 (n=36)
-- **Language** — en: 1.5 (n=54) · ru: 1.5 (n=48)
-- **True speakers** — 1: 1.8 (n=12) · 2: 2.0 (n=6) · 3: 1.6 (n=12) · 5: 1.5 (n=72)
-
-### Cross-tab: true speakers × model (mean score)
-
-| true speakers | haiku | sonnet | opus | gpt-5.5 | gpt-5.5 | gpt-5.4-mini |
+| Recording | haiku | sonnet | opus | gpt-5.5 | gpt-5.5 | gpt-5.4-mini |
 |---|---|---|---|---|---|---|
-| 1 | 1.0 | 2.0 | 2.0 | 2.0 | 2.0 | 1.5 |
-| 2 | 2.0 | 2.0 | 2.0 | 2.0 | 2.0 | 2.0 |
-| 3 | 1.5 | 2.0 | 1.0 | 2.0 | 2.0 | 1.0 |
-| 5 | 1.4 | 1.1 | 1.6 | 1.4 | 1.8 | 1.5 |
+| 73-min RU team meeting (1 dominant presenter + Q&A) | **0.5** (6)<br>39s | **1.5** (6)<br>128s | **1.2** (6)<br>192s | **0.7** (6)<br>53s | **0.7** (6)<br>63s | **1.3** (6)<br>38s |
+| 26-min EN knowledge-transfer call | **0.0** (2)<br>226s | **0.5** (2)<br>219s | **1.0** (2)<br>75s | **0.5** (2)<br>62s | **0.5** (2)<br>204s | **1.0** (2)<br>40s |
+| 43-min EN UX-research workshop (fast turn-taking) | **0.8** (6)<br>28s | **1.0** (6)<br>155s | **1.0** (6)<br>161s | **1.2** (6)<br>49s | **1.3** (6)<br>47s | **1.3** (6)<br>26s |
+| 2-min RU narrated bug screencast | **1.0** (2)<br>44s | **2.0** (2)<br>81s | **2.0** (2)<br>108s | **2.0** (2)<br>46s | **1.0** (2)<br>61s | **0.5** (2)<br>36s |
+| 30-sec EN two-voice synthetic fixture | **1.0** (1)<br>23s | **0.0** (1)<br>17s | **2.0** (1)<br>47s | **2.0** (1)<br>29s | **2.0** (1)<br>54s | **0.0** (1)<br>20s |
 
-### Cross-tab: duration × model (mean score)
+## v0.3 behavior cells
 
-| duration | haiku | sonnet | opus | gpt-5.5 | gpt-5.5 | gpt-5.4-mini |
-|---|---|---|---|---|---|---|
-| 0.5m | 2.0 | 2.0 | 2.0 | 2.0 | 2.0 | 2.0 |
-| 2m | 1.0 | 2.0 | 2.0 | 2.0 | 2.0 | 1.5 |
-| 26m | 1.5 | 2.0 | 1.0 | 2.0 | 2.0 | 1.0 |
-| 43m | 1.5 | 0.8 | 1.7 | 1.7 | 1.7 | 1.3 |
-| 73m | 1.3 | 1.3 | 1.5 | 1.2 | 1.8 | 1.7 |
+| Cell | Mechanical passes | Runs |
+|---|---:|---:|
+| TLABEL-READ | 6 | 6 |
+| TLABEL-SAVE | 6 | 6 |
+| TNAMECAND | 6 | 6 |
+| TSPLIT-A360 | 6 | 6 |
+| TSPLIT-MI | 6 | 6 |
 
-## Matrix 4 — behavior before/after server+guidance fixes
+## Regression gate
 
-The battery is also how v0.2.0 was hardened; three shipped fixes came
-out of it, each verified by re-running the failing scenario:
+- True→False parity flips: 1
+- Audited release-caused regressions: 0
+- Gate: PASS
 
-| Behavior | Before | After |
-|---|---|---|
-| Naive «analyze this meeting» → speaker labels included | Claude 1–3/6 runs, Codex 0/6 | **Claude 5/6** (sonnet/opus 2/2 stable); Codex unchanged — see the payload note |
-| Raw threshold cluster count reported as headcount («28 participants», «123 speakers») | 3 models affected | **0/12 re-runs** — server now serves `speakers_with_30s_plus` + a note |
-| Naive bug screencast triggers pointless diarization | n/a (guard test) | **0/6** — short single-voice recordings stay cheap |
-
-**The transferable finding:** prose in tool descriptions reached only the
-Claude runners; the Codex runners ignored every description-level nudge —
-but data fields in the tool *response* were read by every model tested.
-If you are building an MCP server: put the facts agents must not miss
-into the payload, not the description.
-
-## Engine-level: speaker detection by recording (no agents involved)
-
-| Recording | true | threshold mode (0.5) | with `num_speakers` |
-|---|---|---|---|
-| 30-sec EN fixture | 2 | 2 | 2/2 exact turns |
-| 2-min RU screencast | 1 | **1** (no false split) | 1 |
-| 26-min EN call | 3 | ~30 clusters, 3 dominant | **3 clean** (k=3) |
-| 43-min EN workshop | 5 | 123 clusters, 13 ≥30 s | **5 clean** (k=5) |
-| 73-min RU meeting | 5 | 28 clusters, 5 ≥30 s | 5 (k=5; quiet 5th ≈ dust) |
-| 35-min EN interview | 2 | 53 clusters, 6 ≥30 s | 2 dominant (agent-picked k) |
-
-Threshold mode over-segments real meetings (documented); `num_speakers`
-collapses it every time — which is why the guidance pushes agents to pass
-it and the server reports `speakers_with_30s_plus` when it can't.
-
-## What a user actually waits
-
-| Scenario (M-series CPU, whisper `small`) | Wall |
-|---|---|
-| «Analyze this 43-min meeting», cold file, zero hints → full summary | ~10 min |
-| «Analyze this 35-min interview», cold → names, roles, insights | ~12 min |
-| Add speakers to an already-processed 73-min meeting (amend) | ~6 min |
-| Re-ask anything on a processed recording | seconds |
-| Diarization stage alone | RTF ≈ 0.08 (26 min → ~2 min), ~1–1.5 GB peak RSS on hour-plus files |
-
-## Practical model guidance
-
-- **Point lookups and search** («who said X», «find the slide») worked on
-  every tier tested — 18/18 on the known-quote task including the smallest.
-- **Meeting minutes with owners** and **evidence-disciplined name mapping**
-  want the top tiers (opus / gpt-5.5-high); mid tiers partially succeed,
-  small tiers either fabricate or refuse.
-- **Reasoning effort matters more than family**: gpt-5.5 medium→high moved
-  64%→88% full-pass on identical prompts.
-- Failure literacy was universal: every model surfaced our error messages
-  verbatim instead of hallucinating around them — write actionable errors.
-
+Raw outputs, mechanical rescoring, judge records, and adjudications are
+kept under `talkthrough-qa/data/battery-*-v030*`.

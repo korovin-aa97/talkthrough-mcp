@@ -3,9 +3,10 @@
 from __future__ import annotations
 
 import pytest
+import rapidocr
 from rapidocr import LangRec, ModelType, OCRVersion
 
-from talkthrough_mcp.core.ocr import _coerce_params, engine_params
+from talkthrough_mcp.core.ocr import _coerce_params, create_engine, engine_params
 
 RU_PARAMS = {
     "Rec.lang_type": "eslav",
@@ -74,6 +75,27 @@ def test_coerce_drops_unknown_enum_values() -> None:
     coerced = _coerce_params({"Rec.lang_type": "martian", "Global.text_score": 0.5})
     assert "Rec.lang_type" not in coerced
     assert coerced["Global.text_score"] == 0.5
+
+
+def test_script_pack_failure_falls_back_to_bundled_default(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    calls: list[dict[str, object] | None] = []
+
+    class FakeRapidOCR:
+        def __init__(self, params: dict[str, object] | None = None) -> None:
+            calls.append(params)
+            if params:
+                raise RuntimeError("mirror unavailable")
+
+    monkeypatch.setenv("TALKTHROUGH_OCR_LANG", "ru")
+    monkeypatch.setattr(rapidocr, "RapidOCR", FakeRapidOCR)
+
+    assert isinstance(create_engine(), FakeRapidOCR)
+    assert calls[0] is not None
+    assert calls[0]["Rec.lang_type"] is LangRec("eslav")
+    assert calls[1] is None
+    assert "falling back to the bundled default pack" in caplog.text
 
 
 # --- auto-selection from the detected speech language (v0.2.1) ---------------
