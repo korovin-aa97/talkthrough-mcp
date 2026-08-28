@@ -23,6 +23,25 @@ def test_long_recording_summary_names_the_sampling_interval() -> None:
     assert "extract_frame" in frames["note"]
 
 
+def test_scene_dense_long_recording_does_not_claim_whole_recording_coverage() -> None:
+    manifest = make_manifest()
+    manifest.media = replace(manifest.media, duration_s=1576.363)
+    manifest.frames.cap_hit = True
+    manifest.frames.items[-1].ms = 1_430_240
+    manifest.frames.count = 600
+
+    frames = summarize(
+        ProcessResult(manifest=manifest, reused=False, elapsed_s=1.0)
+    )["frames"]
+
+    assert frames["sampling_interval_s"] == 3
+    assert "600-frame cap" in frames["note"]
+    assert "t_ms=1430240" in frames["note"]
+    assert "duration_ms=1576363" in frames["note"]
+    assert "later moments may lack" in frames["note"]
+    assert "across the whole recording" not in frames["note"]
+
+
 def test_short_recording_summary_stays_byte_stable() -> None:
     frames = _summary(duration_s=18.0)["frames"]
     assert frames == {"count": 4, "unique_count": 3, "cap_hit": False}

@@ -909,10 +909,20 @@ def _summarize_frames(manifest: Manifest) -> dict[str, Any]:
     if manifest.media.has_video and floor_s > 1.0:
         interval_s = round(floor_s)
         payload["sampling_interval_s"] = interval_s
-        payload["note"] = (
-            f"frames sampled every ~{interval_s}s across the whole recording — "
-            "exact instants via extract_frame"
-        )
+        if manifest.frames.cap_hit and manifest.frames.items:
+            last_sample_ms = max(item.ms for item in manifest.frames.items)
+            duration_ms = round(manifest.media.duration_s * 1000)
+            payload["note"] = (
+                f"adaptive ~{interval_s}s sampling plus scene changes filled the "
+                f"{manifest.frames.count}-frame cap at t_ms={last_sample_ms} of "
+                f"duration_ms={duration_ms}; later moments may lack a sampled frame — "
+                "exact instants via extract_frame"
+            )
+        else:
+            payload["note"] = (
+                f"frames sampled every ~{interval_s}s across the whole recording — "
+                "exact instants via extract_frame"
+            )
     return payload
 
 
