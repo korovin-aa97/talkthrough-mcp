@@ -3,7 +3,7 @@
     "talkthrough": {
       "command": "uvx",
       "args": [
-        "talkthrough-mcp[diarization]==0.2.6"
+        "talkthrough-mcp[diarization]==0.3.0"
       ]
     }
   }

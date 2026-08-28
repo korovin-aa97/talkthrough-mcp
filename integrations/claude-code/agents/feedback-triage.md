@@ -2,14 +2,14 @@
 name: feedback-triage
 description: Turns one narrated screen recording (processed by the talkthrough MCP server) into precise, evidence-backed findings plus a numbered confirm digest. Never files issues itself — it produces the findings JSON; filing happens only after the recording author approves.
 tools:
-  - mcp__talkthrough__process_media
-  - mcp__talkthrough__get_transcript
-  - mcp__talkthrough__get_moment
-  - mcp__talkthrough__get_frames
-  - mcp__talkthrough__search
-  - mcp__talkthrough__label_speakers
-  - mcp__talkthrough__extract_frame
-  - mcp__talkthrough__list_jobs
+  - mcp__plugin_talkthrough_talkthrough__process_media
+  - mcp__plugin_talkthrough_talkthrough__get_transcript
+  - mcp__plugin_talkthrough_talkthrough__get_moment
+  - mcp__plugin_talkthrough_talkthrough__get_frames
+  - mcp__plugin_talkthrough_talkthrough__search
+  - mcp__plugin_talkthrough_talkthrough__label_speakers
+  - mcp__plugin_talkthrough_talkthrough__extract_frame
+  - mcp__plugin_talkthrough_talkthrough__list_jobs
 ---
 
 # Feedback Triage

@@ -1,5 +1,10 @@
 # Benchmarks — which agent models drive talkthrough well?
 
+> **Historical snapshot.** This page and its SVG charts describe the v0.2.0
+> corpus cut. The audited v0.3.0 battery (210 runs, August 2026) is published
+> in [MODEL-NOTES](../docs/MODEL-NOTES.md); provider models and judge behavior
+> changed enough that the two cuts should not be merged into one leaderboard.
+
 **150 runs across 6 model configurations** on real recordings — that is the
 core battery we ran against v0.2.0 (132 judge-scored agent runs + 18
 mechanical failure-literacy checks), followed by targeted regression
