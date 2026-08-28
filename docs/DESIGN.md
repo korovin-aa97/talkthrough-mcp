@@ -38,7 +38,7 @@ exact instants.
 
 | Module | Responsibility |
 |---|---|
-| `server.py` | MCPServer app: 7 tools, 6 prompts, progress, MCP error mapping |
+| `server.py` | MCPServer app: 8 tools, 6 prompts, progress, MCP error mapping |
 | `guidance.py` | Tool descriptions (10-15 examples each) + prompt templates; unit-gated |
 | `cli.py` | `serve` (default) / `process` / `gc` |
 | `core/pipeline.py` | Orchestrates stages, caps, progress callbacks, summary |
@@ -46,12 +46,12 @@ exact instants.
 | `core/probe.py` | ffprobe → `MediaInfo` (streams, duration, container tags) |
 | `core/wallclock.py` | The resolver ladder + `t_wall` rendering |
 | `core/audio.py` / `core/stt.py` | WAV extraction; faster-whisper (CPU int8, VAD) |
-| `core/diarize.py` | Speaker diarization: sherpa-onnx engine behind the `[diarization]` extra (pinned-URL+sha256 model cache, zero-network warm loads) + pure attribution math (S1/S2 by first appearance, max-overlap segment assignment, roster). Vendors a second ONNX Runtime (~30 MB RSS) — accepted trade-off vs. sharing rapidocr's |
+| `core/diarize.py` | Speaker diarization: sherpa-onnx engine behind the `[diarization]` extra (pinned-URL+sha256 model cache, zero-network warm loads) + pure attribution math (S1/S2 by first appearance, maximum-overlap word assignment with segment fallback, roster). Vendors a second ONNX Runtime (~30 MB RSS) — accepted trade-off vs. sharing rapidocr's |
 | `core/frames.py` | One-pass keyframe extraction + showinfo parsing + exact re-extract |
 | `core/dedup.py` | Pillow-only dHash (9×8) + Hamming marking |
 | `core/ocr.py` | RapidOCR wrapper; `TALKTHROUGH_OCR=off` or import failure → graceful off |
 | `core/manifest.py` | Schema, save/load, SRT, slicing, frame queries, search |
-| `core/jobs.py` | Content-addressed store, per-job flock, listing, gc |
+| `core/jobs.py` | Content-addressed store, per-job thread lock + POSIX flock, listing, gc |
 | `core/errors.py` | `ValidationError` / `UnknownJobError` / `AudioOnlyJobError` / `ToolFailureError` |
 
 ## Job store
@@ -81,7 +81,9 @@ the second call on the same bytes returns the stored summary in milliseconds.
              "has_audio", "has_video" },
   "wall_clock": { "start_utc", "tz_offset_min", "source", "confidence" } | null,
   "transcript": { "available", "reason", "language", "model",
-                  "segments": [{ "seq", "t0_ms", "t1_ms", "text", "speaker"? }],
+                  "segments": [{ "seq", "t0_ms", "t1_ms", "text", "speaker"?,
+                                  "source_seq"? }],
+                  "words"?: [[t0_ms, t1_ms, " raw token"], …],
                   "diarization"?: { "available", "reason", "engine",
                                     "engine_version", "segmentation_model",
                                     "embedding_model", "requested_num_speakers",
@@ -89,6 +91,8 @@ the second call on the same bytes returns the stored summary in milliseconds.
                                     "speakers": [{ "label", "talk_time_ms",
                                                    "turn_count", "first_ms",
                                                    "last_ms" }],
+                                    "speaker_names"?: { "S1": "Alice" },
+                                    "speaker_name_evidence"?: { "S1": "frame proof" },
                                     "turns": [[t0_ms, t1_ms, "S1"], …] } },
   "frames": { "count", "unique_count", "cap_hit",
               "items": [{ "ms", "file", "duplicate_of"?, "ocr_text"? }] },
@@ -96,6 +100,11 @@ the second call on the same bytes returns the stored summary in milliseconds.
   "tool_versions": { "talkthrough-mcp", "ffmpeg", "faster-whisper", "rapidocr" }
 }
 ```
+
+`source_seq` is an internal, manifest-only origin marker on word-split
+segments. It lets a later diarization amend regroup the words from the same
+original Whisper segment; MCP responses do not expose it or the raw `words`
+array.
 
 ## Wall-clock ladder
 

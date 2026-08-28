@@ -253,7 +253,12 @@ def _run_diarization(
         turns = diarizer.diarize(
             samples, sample_rate, num_speakers=request.num_speakers, on_progress=on_progress
         )
-        transcript.segments = diarize.attribute_segments(transcript.segments, turns)
+        if transcript.words:
+            transcript.segments = diarize.attribute_segments_with_words(
+                transcript.segments, transcript.words, turns
+            )
+        else:
+            transcript.segments = diarize.attribute_segments(transcript.segments, turns)
         transcript.diarization = Diarization(
             available=True,
             reason="",
@@ -324,7 +329,9 @@ def _amend_reason(
     return None
 
 
-def _labels_snapshot(transcript: Transcript) -> tuple[Any, list[str | None]]:
+def _labels_snapshot(
+    transcript: Transcript,
+) -> tuple[Any, list[tuple[int, int, str, str | None]]]:
     """The comparable identity of a diarization outcome: the roster (label,
     talk time, turn count) plus the per-segment speaker labels.
 
@@ -339,7 +346,10 @@ def _labels_snapshot(transcript: Transcript) -> tuple[Any, list[str | None]]:
         roster = [
             (stat.label, stat.talk_time_ms, stat.turn_count) for stat in diarization.speakers
         ]
-    return roster, [segment.speaker for segment in transcript.segments]
+    return roster, [
+        (segment.t0_ms, segment.t1_ms, segment.text, segment.speaker)
+        for segment in transcript.segments
+    ]
 
 
 def _amend_diarization(
@@ -376,6 +386,11 @@ def _amend_diarization(
     tool_timeout = max(600, int(manifest.media.duration_s * 4) + 120)
     wav_path = directory / "audio.wav"
     before = _labels_snapshot(manifest.transcript)
+    previous_diarization = manifest.transcript.diarization
+    previous_names = dict(previous_diarization.speaker_names or {}) if previous_diarization else {}
+    previous_evidence = (
+        dict(previous_diarization.speaker_name_evidence or {}) if previous_diarization else {}
+    )
     report("extracting audio", 0.10)
     try:
         audio.extract_wav(media, wav_path, timeout=tool_timeout)
@@ -388,6 +403,9 @@ def _amend_diarization(
         # converged on the same labels must say so instead of reading as a fix
         diarization.labels_changed = _labels_snapshot(manifest.transcript) != before
         diarization.amend_reason = amend_reason
+        if diarization.labels_changed is False:
+            diarization.speaker_names = previous_names or None
+            diarization.speaker_name_evidence = previous_evidence or None
     report("writing manifest", 0.99)
     save_manifest(manifest, directory)
     report("done", 1.0)
@@ -517,6 +535,7 @@ def process_media(
                     model_name=model_name,
                     language=language,
                     vocabulary=vocabulary,
+                    word_timestamps=diarize_request.run,
                     on_segment=on_segment,
                 )
                 transcript = Transcript(
@@ -526,6 +545,7 @@ def process_media(
                     model=stt_result.model,
                     language_probability=stt_result.language_probability,
                     segments=list(stt_result.segments),
+                    words=(list(stt_result.words) or None) if diarize_request.run else None,
                 )
                 echo_trimmed = stt_result.vocabulary_echo_trimmed
                 if diarize_request.run:
@@ -614,6 +634,10 @@ def process_media(
 
 SUMMARY_ROSTER_CAP = 12
 SUBSTANTIAL_TALK_MS = 30_000
+NAME_CANDIDATE_WINDOW_MS = 30_000
+NAME_CANDIDATE_FRAME_LIMIT = 3
+NAME_CANDIDATE_LIMIT = 3
+NAME_CANDIDATE_MAX_CHARS = 120
 # Above this, an unconstrained cluster count stops being merely unreliable
 # and becomes implausible for one recording (tester report, 2026-07-27: a
 # large meeting "detected" 123 speakers) — the note escalates accordingly.
@@ -734,7 +758,43 @@ def _longest_turns(diarization: Diarization) -> dict[str, tuple[int, int]]:
     return {label: (t0_ms, duration) for label, (duration, t0_ms) in best.items()}
 
 
-def roster_payload(diarization: Diarization) -> tuple[list[dict[str, Any]], int]:
+def speaker_name(diarization: Diarization | None, label: str | None) -> str | None:
+    if diarization is None or label is None or diarization.speaker_names is None:
+        return None
+    return diarization.speaker_names.get(label)
+
+
+def _name_candidates(manifest: Manifest, at_ms: int) -> list[dict[str, Any]]:
+    """Bounded raw OCR hints near a speaker's longest turn; never identities."""
+    if not manifest.media.has_video or not manifest.caps.ocr:
+        return []
+    nearby = [
+        frame
+        for frame in manifest.unique_frames()
+        if frame.ocr_text and abs(frame.ms - at_ms) <= NAME_CANDIDATE_WINDOW_MS
+    ]
+    nearby.sort(key=lambda frame: (abs(frame.ms - at_ms), frame.ms))
+    candidates: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for frame in nearby[:NAME_CANDIDATE_FRAME_LIMIT]:
+        for raw_line in (frame.ocr_text or "").splitlines():
+            line = " ".join(raw_line.split()).strip()
+            if not line or not any(character.isalpha() for character in line):
+                continue
+            line = line[:NAME_CANDIDATE_MAX_CHARS].rstrip()
+            folded = line.casefold()
+            if folded in seen:
+                continue
+            seen.add(folded)
+            candidates.append({"text": line, "frame_ms": frame.ms})
+            if len(candidates) >= NAME_CANDIDATE_LIMIT:
+                return candidates
+    return candidates
+
+
+def roster_payload(
+    diarization: Diarization, manifest: Manifest | None = None
+) -> tuple[list[dict[str, Any]], int]:
     """Top speakers by talk time, capped for the token budget.
 
     Threshold-mode clustering on real meetings produces dozens of sub-30 s
@@ -745,8 +805,11 @@ def roster_payload(diarization: Diarization) -> tuple[list[dict[str, Any]], int]
     ranked = sorted(diarization.speakers, key=lambda s: -s.talk_time_ms)[:SUMMARY_ROSTER_CAP]
     kept = {stat.label for stat in ranked}
     longest = _longest_turns(diarization)
-    entries = [
-        {
+    entries: list[dict[str, Any]] = []
+    for stat in diarization.speakers:
+        if stat.label not in kept:
+            continue
+        entry: dict[str, Any] = {
             "label": stat.label,
             "talk_time_ms": stat.talk_time_ms,
             "turn_count": stat.turn_count,
@@ -762,22 +825,49 @@ def roster_payload(diarization: Diarization) -> tuple[list[dict[str, Any]], int]
                 else {}
             ),
         }
-        for stat in diarization.speakers
-        if stat.label in kept
-    ]
+        name = speaker_name(diarization, stat.label)
+        if name is not None:
+            entry["speaker_name"] = name
+        if (
+            diarization.speaker_name_evidence is not None
+            and stat.label in diarization.speaker_name_evidence
+        ):
+            entry["speaker_name_evidence"] = diarization.speaker_name_evidence[stat.label]
+        if manifest is not None and stat.label in longest:
+            candidates = _name_candidates(manifest, longest[stat.label][0])
+            if candidates:
+                entry["name_candidates"] = candidates
+        entries.append(entry)
     return entries, len(diarization.speakers) - len(entries)
 
 
-def _summarize_diarization(diarization: Diarization) -> dict[str, Any]:
+def attribution_precision(transcript: Transcript) -> str:
+    """The finest durable timing source available for speaker attribution."""
+    return "word" if transcript.words else "segment"
+
+
+def _summarize_diarization(
+    diarization: Diarization,
+    transcript: Transcript | None = None,
+    manifest: Manifest | None = None,
+) -> dict[str, Any]:
     """Compact summary block: roster without first/last timestamps."""
     if not diarization.available:
         return {"available": False, "reason": diarization.reason}
-    speakers, hidden = roster_payload(diarization)
+    speakers, hidden = roster_payload(diarization, manifest)
     payload: dict[str, Any] = {
         "available": True,
         "detected_num_speakers": diarization.detected_num_speakers,
         "speakers": speakers,
+        "attribution_precision": (
+            attribution_precision(transcript) if transcript is not None else "segment"
+        ),
     }
+    if transcript is not None and attribution_precision(transcript) == "segment":
+        payload["attribution_note"] = (
+            "speaker boundaries use segment-level timestamps; exact word splitting "
+            "requires process_media(..., force=true, diarize=true)"
+        )
     if hidden:
         payload["speakers_truncated"] = hidden
     if diarization.labels_changed is not None:
@@ -830,18 +920,23 @@ def summarize(result: ProcessResult) -> dict[str, Any]:
     """Compact, context-friendly summary — never the full payload."""
     manifest = result.manifest
     segments = manifest.transcript.segments
+    diarization = manifest.transcript.diarization
     preview = [
         {
             "seq": segment.seq,
             "t_ms": segment.t0_ms,
             "t_wall": manifest.t_wall_iso(segment.t0_ms),
             **({"speaker": segment.speaker} if segment.speaker else {}),
+            **(
+                {"speaker_name": name}
+                if (name := speaker_name(diarization, segment.speaker)) is not None
+                else {}
+            ),
             "text": segment.text,
         }
         for segment in segments[:TRANSCRIPT_PREVIEW_SEGMENTS]
     ]
     frames_with_text = sum(1 for frame in manifest.frames.items if frame.ocr_text)
-    diarization = manifest.transcript.diarization
     return {
         "job_id": manifest.job_id,
         "reused": result.reused,
@@ -872,7 +967,15 @@ def summarize(result: ProcessResult) -> dict[str, Any]:
             "preview_segments": preview,
             "preview_truncated": len(segments) > len(preview),
         },
-        **({"diarization": _summarize_diarization(diarization)} if diarization else {}),
+        **(
+            {
+                "diarization": _summarize_diarization(
+                    diarization, manifest.transcript, manifest
+                )
+            }
+            if diarization
+            else {}
+        ),
         "frames": _summarize_frames(manifest),
         "ocr": {"enabled": manifest.caps.ocr, "unique_frames_with_text": frames_with_text},
         "next_steps": (

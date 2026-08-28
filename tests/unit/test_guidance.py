@@ -2,7 +2,7 @@
 
 Enforced contract: every tool description carries >=10 one-line examples
 (each <=120 chars) plus a "when NOT to use" line; the server registers
-exactly the 7 described tools and exactly the 6 workflow prompts; prompt
+exactly the 8 described tools and exactly the 6 workflow prompts; prompt
 templates render non-empty, name the tools they orchestrate, and are
 byte-identical with the files in ``examples/prompts/`` (no drift).
 """
@@ -31,7 +31,7 @@ PROMPT_REQUIRED_TOOLS = {
     "triage-recording": {"get_transcript", "get_moment", "search", "extract_frame", "list_jobs"},
     "spec-from-workshop": {"get_transcript", "get_frames", "get_moment", "search"},
     "backlog-from-demo": {"get_transcript", "get_moment", "search"},
-    "meeting-actions": {"get_transcript", "search", "get_moment"},
+    "meeting-actions": {"get_transcript", "search", "get_moment", "label_speakers"},
     "correlate-with-logs": {"list_jobs", "search", "get_moment", "process_media"},
 }
 
@@ -51,6 +51,7 @@ def test_every_tool_description_has_enough_short_examples(tool_name: str) -> Non
 
 def test_registered_tools_match_guidance_exactly() -> None:
     tools = asyncio.run(mcp.list_tools())
+    assert len(tools) == 8
     assert sorted(tool.name for tool in tools) == sorted(guidance.TOOL_NAMES)
     for tool in tools:
         assert tool.description == guidance.TOOL_DESCRIPTIONS[tool.name], (
@@ -62,7 +63,7 @@ def test_registered_tools_match_guidance_exactly() -> None:
 def test_every_tool_carries_honest_annotations() -> None:
     """Non-interactive clients (codex exec) silently cancel un-annotated tool
     calls — every tool must ship hints, and they must stay truthful."""
-    writers = {"process_media", "extract_frame"}  # write only inside TALKTHROUGH_HOME
+    writers = {"process_media", "label_speakers", "extract_frame"}
     tools = asyncio.run(mcp.list_tools())
     for tool in tools:
         ann = tool.annotations

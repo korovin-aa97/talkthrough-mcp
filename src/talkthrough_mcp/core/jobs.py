@@ -12,6 +12,7 @@ import hashlib
 import logging
 import os
 import shutil
+import threading
 import time
 from collections.abc import Iterator
 from contextlib import contextmanager
@@ -30,6 +31,8 @@ _HASH_CHUNK_BYTES = 1 << 20
 # A manifest-less job dir this old cannot be a live run (processing is capped
 # at 2 h by default) — it is litter from a failure before cleanup existed.
 PARTIAL_SWEEP_MIN_AGE_S = 24 * 3600.0
+_PROCESS_LOCKS_GUARD = threading.Lock()
+_PROCESS_LOCKS: dict[str, threading.RLock] = {}
 
 
 def talkthrough_home() -> Path:
@@ -69,10 +72,31 @@ def load_job(job_id: str) -> Manifest:
 
 @contextmanager
 def job_lock(job_id: str, *, wait_seconds: int = 600) -> Iterator[None]:
-    """Exclusive per-job lock so two processes never preprocess the same file at once.
+    """Exclusive per-job lock for threads and, where supported, processes.
+
+    The process-local layer also gives Windows callers real thread safety;
+    POSIX then adds ``flock`` for separate server/CLI processes.
+    """
+    with _PROCESS_LOCKS_GUARD:
+        process_lock = _PROCESS_LOCKS.setdefault(job_id, threading.RLock())
+    if not process_lock.acquire(timeout=max(0, wait_seconds)):
+        raise ToolFailureError(
+            f"another thread has been holding the lock for job {job_id!r} "
+            f"for {wait_seconds}s — retry later"
+        )
+    try:
+        with _file_job_lock(job_id, wait_seconds=wait_seconds):
+            yield
+    finally:
+        process_lock.release()
+
+
+@contextmanager
+def _file_job_lock(job_id: str, *, wait_seconds: int) -> Iterator[None]:
+    """Cross-process half of :func:`job_lock`.
 
     POSIX flock; on platforms without fcntl (Windows) it degrades to a no-op —
-    Windows is best-effort by design. After acquiring, the lock file's identity
+    the outer process lock still serializes threads. After acquiring, the lock file's identity
     is re-checked: the holder we waited on may have failed and cleaned up the
     whole partial job directory (``cleanup_partial_job``) — then the flock we
     hold is on an orphaned inode, and it must be retaken on the fresh path so

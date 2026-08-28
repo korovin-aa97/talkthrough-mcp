@@ -28,11 +28,15 @@ them, and that is fine.
    OCR/frames over the transcript for names. State the mapping first (e.g.
    `S1 = Vera, S2 = Tom, S3 = unidentified`) — never guess beyond the
    evidence.
-5. Collect: action items (who committed to what), decisions (what was agreed),
+5. Persist every defensible mapping with label_speakers(job_id="<job_id>",
+   labels={"S1":"<name>"}, evidence={"S1":"<intro, frame, or attendee proof>"}).
+   Never save OCR name_candidates directly: they are raw hints that may be UI
+   text, a job title, or somebody else's name.
+6. Collect: action items (who committed to what), decisions (what was agreed),
    open questions (raised but unresolved). Keep exact quotes and t_ms for each.
-6. search(job_id="<job_id>", query="<name or topic>") to trace scattered
+7. search(job_id="<job_id>", query="<name or topic>") to trace scattered
    follow-ups on one topic before summarizing it.
-7. If the job has video (a screen-share was recorded), attach visual evidence to
+8. If the job has video (a screen-share was recorded), attach visual evidence to
    items that reference the screen via get_moment(job_id="<job_id>",
    start_ms=..., end_ms=...).
 

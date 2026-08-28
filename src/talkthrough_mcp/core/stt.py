@@ -9,6 +9,7 @@ local cache; there is no cloud STT path in this codebase.
 from __future__ import annotations
 
 import logging
+import math
 import re
 import time
 from collections.abc import Callable, Sequence
@@ -26,6 +27,19 @@ class SttSegment:
     t1_ms: int
     text: str
     speaker: str | None = None  # "S1"/"S2"/… once diarized; never serialized as null
+    # Durable origin for word-split segments. It stays manifest-only so a
+    # later diarization amend can regroup from the original Whisper segment
+    # instead of making the result depend on earlier speaker boundaries.
+    source_seq: int | None = None
+
+
+@dataclass(frozen=True)
+class SttWord:
+    """One raw Whisper word token with its local-media time range."""
+
+    t0_ms: int
+    t1_ms: int
+    text: str
 
 
 @dataclass(frozen=True)
@@ -36,6 +50,7 @@ class SttResult:
     latency_ms: int
     language_probability: float | None = None
     vocabulary_echo_trimmed: int = 0  # opening initial_prompt echoes dropped
+    words: tuple[SttWord, ...] = ()  # populated only for requested diarization
 
     def full_text(self) -> str:
         return " ".join(segment.text for segment in self.segments if segment.text).strip()
@@ -136,6 +151,7 @@ def transcribe(
     model_name: str,
     language: str | None = None,
     vocabulary: str | None = None,
+    word_timestamps: bool = False,
     on_segment: Callable[[int], None] | None = None,
 ) -> SttResult:
     """Transcribe a 16 kHz mono WAV into ordered, renumbered ms segments.
@@ -152,22 +168,63 @@ def transcribe(
         transcribe_kwargs["initial_prompt"] = vocabulary
     if language:
         transcribe_kwargs["language"] = language
+    if word_timestamps:
+        transcribe_kwargs["word_timestamps"] = True
 
     raw_segments, info = model.transcribe(str(wav_path), **transcribe_kwargs)
     segments: list[SttSegment] = []
+    words_by_segment: dict[int, list[SttWord]] = {}
+    invalid_word_segments = 0
     for index, segment in enumerate(raw_segments, start=1):
         text = segment.text.strip()
         if not text:
             continue
         t1_ms = max(0, int(segment.end * 1000))
-        segments.append(
-            SttSegment(
-                seq=index,
-                t0_ms=max(0, int(segment.start * 1000)),
-                t1_ms=t1_ms,
-                text=text,
-            )
+        stored_segment = SttSegment(
+            seq=index,
+            t0_ms=max(0, int(segment.start * 1000)),
+            t1_ms=t1_ms,
+            text=text,
         )
+        segments.append(stored_segment)
+        if word_timestamps:
+            raw_words = list(getattr(segment, "words", None) or [])
+            converted: list[SttWord] = []
+            invalid = False
+            for word in raw_words:
+                start = getattr(word, "start", None)
+                end = getattr(word, "end", None)
+                raw_text = getattr(word, "word", None)
+                if (
+                    start is None
+                    or end is None
+                    or not isinstance(raw_text, str)
+                    or not raw_text.strip()
+                ):
+                    invalid = True
+                    continue
+                try:
+                    start_s = float(start)
+                    end_s = float(end)
+                except (TypeError, ValueError):
+                    invalid = True
+                    continue
+                if not math.isfinite(start_s) or not math.isfinite(end_s):
+                    invalid = True
+                    continue
+                t0_ms = int(start_s * 1000)
+                word_t1_ms = int(end_s * 1000)
+                if t0_ms < 0 or word_t1_ms <= t0_ms:
+                    invalid = True
+                    continue
+                converted.append(SttWord(t0_ms=t0_ms, t1_ms=word_t1_ms, text=raw_text))
+            if invalid:
+                # Mixing a partial word list with the full segment text would
+                # silently drop tokens. Exclude the whole list so attribution
+                # falls back to the intact segment instead.
+                invalid_word_segments += 1
+            else:
+                words_by_segment[index] = converted
         if on_segment is not None:
             on_segment(t1_ms)
 
@@ -183,6 +240,21 @@ def transcribe(
                 segment.text,
             )
 
+    if invalid_word_segments:
+        logger.warning(
+            "word timestamps were invalid in %d segment(s); those segments use "
+            "segment-level speaker attribution",
+            invalid_word_segments,
+        )
+
+    kept_source_seqs = {segment.seq for segment in segments}
+    words = tuple(
+        word
+        for seq, segment_words in words_by_segment.items()
+        if seq in kept_source_seqs
+        for word in segment_words
+    )
+
     probability = getattr(info, "language_probability", None)
     return SttResult(
         language=getattr(info, "language", None),
@@ -191,4 +263,5 @@ def transcribe(
         latency_ms=int((time.monotonic() - started) * 1000),
         language_probability=round(float(probability), 3) if probability is not None else None,
         vocabulary_echo_trimmed=echo_trimmed,
+        words=words,
     )

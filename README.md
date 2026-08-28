@@ -60,7 +60,7 @@ only prerequisite is [uv](https://docs.astral.sh/uv/) (`brew install uv` or
 Two install paths — **pick one**, not both (the plugin already includes
 the server; installing both would register it twice):
 
-**Server only** — the 7 tools + 6 prompts, and nothing else on your
+**Server only** — the 8 tools + 6 prompts, and nothing else on your
 system. Choose this for a minimal setup, or when you manage MCP servers
 yourself across several clients:
 
@@ -361,7 +361,8 @@ Then, in your agent:
 | `get_transcript(job_id, start_ms?, end_ms?, format?)` | Paginated transcript as `segments`, `text`, or `srt` (speaker-prefixed when diarized, plus a roster header); truncation returns `next_start_ms`. |
 | `get_frames(job_id, at_ms? \| start_ms?+end_ms?, max_frames?, include_duplicates?)` | Keyframe images nearest a timestamp or evenly thinned across a range (unique frames by default, max 6/call); each frame names its absolute `path`. |
 | `get_moment(job_id, start_ms, end_ms)` | The "one remark" bundle: transcript slice + up to 3 frames + their OCR text + wall-clock range (+ `speakers_in_range` when diarized). |
-| `search(job_id, query)` | Substring search over the transcript AND on-screen OCR text; hits carry `t_ms`/`t_wall`, frame refs, and the speaker when diarized. |
+| `search(job_id, query, speaker?)` | Substring search over the transcript AND on-screen OCR text; hits carry `t_ms`/`t_wall`, frame refs, and the speaker when diarized. The optional filter accepts a raw label or saved name. |
+| `label_speakers(job_id, labels, evidence?)` | Atomically persist verified names for anonymous speaker labels. Raw `S1`/`S2` labels remain canonical; blank/null removes a name. |
 | `extract_frame(job_id, at_ms, crop?)` | Exact-timestamp full-resolution re-extract from the source video (optional crop) when keyframes miss the instant; returns the file's absolute `path`. |
 | `list_jobs()` | Recent processed recordings with durations, wall-clock starts, counts, and speaker counts when diarized. |
 
@@ -417,7 +418,9 @@ see [Quickstart](#who-said-what-speaker-diarization--included-in-the-configs-abo
 else here ([sherpa-onnx](https://github.com/k2-fsa/sherpa-onnx) runtime, no
 torch, no accounts, no GPU):
 
-- Speakers become `S1`, `S2`, … **in order of first appearance**; every
+- Speakers become `S1`, `S2`, … **in order of first appearance**; new
+  diarized jobs split speaker changes at word boundaries, while old jobs
+  continue to report honest segment-level precision. Every
   transcript segment gets a `speaker`, and the tools surface it everywhere —
   roster with talk time in `get_transcript`, `speakers_in_range` in
   `get_moment`, `speaker` on `search` hits, `S1:` prefixes in the text/SRT
@@ -432,9 +435,11 @@ torch, no accounts, no GPU):
   it re-runs *only* diarization — whisper is not re-run, and labels land in
   the existing job. Same for changing `num_speakers`. The diarization stage
   itself still re-scans the full audio: minutes on long recordings.
-- Labels are anonymous by design; mapping `S1` → "Alice" is the calling
-  agent's job (self-introductions, vocatives, the `attendees` argument of the
-  `meeting-actions` prompt). The server never guesses names.
+- Labels start anonymous. After checking self-introductions, vocatives, or
+  video evidence, call `label_speakers` to preserve a verified mapping such
+  as `S1` → "Alice" across sessions. The roster can expose bounded OCR
+  `name_candidates`, but those are raw hints and are never saved
+  automatically. The raw label remains present beside `speaker_name`.
 
 Models download once (~47 MB total) from pinned, checksum-verified URLs into
 `~/.talkthrough/models/`; warm runs are zero-network like the rest of the
@@ -551,9 +556,9 @@ as MCP progress notifications, and the CLI prints stage lines. More:
 CI runs lint, the unit suite, a full CLI smoke, and a diarize smoke on
 `windows-latest` (static-ffmpeg Windows build, whisper `tiny` transcription,
 OCR, the instant idempotent re-run, and a speaker-roster assert through the
-native sherpa-onnx stack). Notes: the per-job lock is POSIX `fcntl` and
-degrades to a no-op on Windows — fine for a single-user machine; quote paths
-with spaces (`uv run talkthrough-mcp process "C:\Videos\Screen Recording.mp4"`).
+native sherpa-onnx stack). Notes: the per-job lock always serializes threads;
+POSIX also uses `fcntl` for cross-process locking. Quote paths with spaces
+(`uv run talkthrough-mcp process "C:\Videos\Screen Recording.mp4"`).
 If something breaks, please open an issue.
 
 ## Supported inputs
@@ -566,11 +571,14 @@ Local files only.
 
 Honest edges, so you can decide fast:
 
-- **Speaker labels are segment-level and opt-in.** Diarization assigns each
-  whisper segment ONE speaker by dominant overlap — a segment spanning a fast
-  exchange gets the majority voice, sub-second interjections ("yeah", "mhm")
-  can be absorbed, and heavy crosstalk degrades clustering (the segmentation
-  model tracks at most 2 simultaneous voices). Quality is
+- **Speaker labels are word-level and opt-in on new jobs.** Each Whisper word
+  is assigned by maximum overlap with the diarization turns, so fast exchanges
+  split without losing the raw label. Old jobs remain readable and honestly
+  report `attribution_precision="segment"`; reprocess with `force=true` to add
+  word timings. Sub-second interjections ("yeah", "mhm") can still be absorbed
+  when the diarization engine does not detect a separate turn, and heavy
+  crosstalk degrades clustering (the segmentation model tracks at most 2
+  simultaneous voices). Quality is
   pyannote-3.x-generation. The comfort zone without hints is roughly 2–8
   speakers; **pass `num_speakers` whenever the headcount is known** — it
   removes the worst failure mode at any size, and it is the way to go for
@@ -658,8 +666,7 @@ without a human reading docs:
 
 ## Roadmap
 
-URL/YouTube ingestion · persistent speaker-name labels (`label_speakers`) ·
-word-level speaker splitting · cloud STT · embeddings/semantic search ·
+URL/YouTube ingestion · cloud STT · embeddings/semantic search ·
 hosted/remote mode · `.mcpb` bundle · whisper.cpp backend
 
 ## License
