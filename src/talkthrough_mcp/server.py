@@ -37,7 +37,7 @@ from .core.manifest import (
     save_manifest,
     search_manifest,
     slice_segments,
-    straddle_hint_t_ms,
+    straddle_hint,
 )
 from .core.speaker_labels import apply_speaker_label_patch
 
@@ -433,10 +433,17 @@ def get_moment(job_id: str, start_ms: int, end_ms: int) -> list[str | Image]:
 
 
 @mcp.tool(description=guidance.TOOL_DESCRIPTIONS["search"], annotations=READONLY_TOOL)
-def search(job_id: str, query: str, speaker: str | None = None) -> dict[str, Any]:
+def search(
+    job_id: str,
+    query: str,
+    speaker: str | None = None,
+    match_mode: Literal["all_words", "any_word"] = "all_words",
+) -> dict[str, Any]:
     manifest = _load(job_id)
     if not query.strip():
         raise ToolError("query is empty — pass a distinctive word or phrase")
+    if match_mode not in {"all_words", "any_word"}:
+        raise ToolError("match_mode must be 'all_words' or 'any_word'")
     diarization = manifest.transcript.diarization
     speaker_query = speaker.strip() if speaker and speaker.strip() else None
     speaker_labels: list[str] = []
@@ -447,6 +454,7 @@ def search(job_id: str, query: str, speaker: str | None = None) -> dict[str, Any
             return {
                 "job_id": job_id,
                 "query": query,
+                **({"match_mode": match_mode} if match_mode != "all_words" else {}),
                 "speaker": speaker_query.upper(),
                 "hit_count": 0,
                 "truncated": False,
@@ -496,6 +504,7 @@ def search(job_id: str, query: str, speaker: str | None = None) -> dict[str, Any
             return {
                 "job_id": job_id,
                 "query": query,
+                **({"match_mode": match_mode} if match_mode != "all_words" else {}),
                 "speaker": canonical_label if canonical_label.startswith("S") else speaker_query,
                 "hit_count": 0,
                 "truncated": False,
@@ -506,11 +515,11 @@ def search(job_id: str, query: str, speaker: str | None = None) -> dict[str, Any
         hits = [
             hit
             for label in speaker_labels
-            for hit in search_manifest(manifest, query, speaker=label)
+            for hit in search_manifest(manifest, query, speaker=label, match_mode=match_mode)
         ]
         hits.sort(key=lambda hit: (hit.t_ms, hit.source, hit.seq or 0))
     else:
-        hits = search_manifest(manifest, query)
+        hits = search_manifest(manifest, query, match_mode=match_mode)
     truncated = len(hits) > SEARCH_MAX_HITS
     notes: list[str] = []
     if speaker_labels:
@@ -522,20 +531,25 @@ def search(job_id: str, query: str, speaker: str | None = None) -> dict[str, Any
                 f"saved name {speaker_value!r} maps to multiple labels: "
                 + ", ".join(speaker_labels)
             )
-    if not hits and len(query.split()) >= 2:
+    if not hits and len(query.split()) >= 2 and match_mode == "all_words":
         # v0.2.3: a zero-hit multi-word query stops being mute. Word-AND is
         # per-segment; the cheap adjacent-pair scan tells apart "phrase
         # straddles a segment boundary" from "words never co-occur".
-        straddle_candidates = [
-            straddle_hint_t_ms(manifest, query, speaker=label) for label in speaker_labels
-        ] if speaker_labels else [straddle_hint_t_ms(manifest, query)]
-        straddle_ms = min(
-            (value for value in straddle_candidates if value is not None), default=None
+        straddle_candidates = (
+            [straddle_hint(manifest, query, speaker=label) for label in speaker_labels]
+            if speaker_labels
+            else [straddle_hint(manifest, query)]
         )
-        if straddle_ms is not None:
+        straddle_match = min(
+            (value for value in straddle_candidates if value is not None),
+            key=lambda value: value.t_ms,
+            default=None,
+        )
+        if straddle_match is not None:
             notes.append(
-                f"the words appear together around t_ms={straddle_ms}, split across "
-                "adjacent segments (matching is per-segment) — read get_transcript there"
+                f"the words appear together around t_ms={straddle_match.t_ms}, split "
+                "across adjacent segments (matching is per-segment); bounded quote: "
+                f"{straddle_match.quote!r} — read get_transcript there"
             )
         else:
             notes.append(
@@ -545,6 +559,7 @@ def search(job_id: str, query: str, speaker: str | None = None) -> dict[str, Any
     return {
         "job_id": job_id,
         "query": query,
+        **({"match_mode": match_mode} if match_mode != "all_words" else {}),
         **({"speaker": speaker_value} if speaker_value else {}),
         **({"speaker_labels": speaker_labels} if len(speaker_labels) > 1 else {}),
         "hit_count": len(hits),
@@ -662,6 +677,7 @@ def list_jobs() -> dict[str, Any]:
         "jobs": [
             {
                 "job_id": manifest.job_id,
+                "media": {"path": manifest.media.path},
                 "filename": manifest.media.filename,
                 "kind": manifest.media.kind,
                 "duration_s": manifest.media.duration_s,

@@ -213,6 +213,7 @@ def test_search_zero_hit_multiword_notes_explain_the_miss(isolated_home: Path) -
     straddle = search(job_id, "dashboard settings")
     assert straddle["hit_count"] == 0
     assert "t_ms=2500" in straddle["note"]
+    assert "The dashboard shows an error message. Settings look fine." in straddle["note"]
     assert "get_transcript" in straddle["note"]
     # "login settings" never meets even across adjacent segments → generic note
     generic = search(job_id, "login settings")
@@ -224,6 +225,25 @@ def test_search_zero_hit_multiword_notes_explain_the_miss(isolated_home: Path) -
     # non-zero-hit payloads stay note-free
     hit = search(job_id, "dashboard error")
     assert hit["hit_count"] >= 1 and "note" not in hit
+
+
+def test_search_any_word_mode_and_validation(isolated_home: Path) -> None:
+    from mcp.server.mcpserver.exceptions import ToolError
+
+    from talkthrough_mcp.server import search
+
+    job_id = _store(make_manifest())
+    default = search(job_id, "login settings")
+    assert "match_mode" not in default  # default payload shape remains byte-compatible
+    assert default["hit_count"] == 0
+
+    broadened = search(job_id, "login settings", match_mode="any_word")
+    assert broadened["match_mode"] == "any_word"
+    assert broadened["hit_count"] == 4
+    assert "note" not in broadened
+
+    with pytest.raises(ToolError, match="match_mode must be"):
+        search(job_id, "login", match_mode="unsupported")  # type: ignore[arg-type]
 
 
 # --- v0.2.6 F7: a silent recording serves an honest empty payload --------------
@@ -288,6 +308,7 @@ def test_list_jobs_flags_silent_jobs(isolated_home: Path) -> None:
     entries = {entry["job_id"]: entry for entry in list_jobs()["jobs"]}
     assert entries[voiced]["has_transcript"] is True
     assert entries[silent]["has_transcript"] is False
+    assert entries[voiced]["media"]["path"] == f"/recordings/{voiced}.mp4"
     # segment_count 0 alone cannot make the distinction — that is the point
     assert entries[silent]["segment_count"] == 0
 

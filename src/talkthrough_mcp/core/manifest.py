@@ -14,7 +14,7 @@ import tempfile
 import unicodedata
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 from .diarize import Diarization, known_fields
 from .frames import Frame, frame_floor_s
@@ -376,6 +376,17 @@ class SearchHit:
     speaker: str | None = None  # transcript hits on diarized jobs
 
 
+@dataclass(frozen=True)
+class StraddleHint:
+    """Bounded evidence for a query split across adjacent segments."""
+
+    t_ms: int
+    quote: str
+
+
+STRADDLE_QUOTE_MAX_CHARS = 240
+
+
 def _fold_for_search(text: str) -> str:
     """Match-time normalization applied to BOTH query and indexed text (#16).
 
@@ -388,13 +399,19 @@ def _fold_for_search(text: str) -> str:
 
 
 def search_manifest(
-    manifest: Manifest, query: str, *, speaker: str | None = None
+    manifest: Manifest,
+    query: str,
+    *,
+    speaker: str | None = None,
+    match_mode: Literal["all_words", "any_word"] = "all_words",
 ) -> list[SearchHit]:
     """Word-level match over transcript segments AND frame OCR text.
 
-    The query is tokenized on whitespace; a text hits when EVERY token
-    matches as a substring — any order, any distance (#16). A single-word
-    query therefore behaves exactly like the old exact-substring match.
+    The query is tokenized on whitespace. ``all_words`` preserves the
+    existing contract: every token must match as a substring, in any order
+    and at any distance. ``any_word`` matches when at least one token does.
+    A single-word query therefore behaves exactly like the old
+    exact-substring match in either mode.
     ``speaker`` filters transcript hits to one diarized label; OCR hits are
     excluded then (on-screen text has no voice).
     """
@@ -402,10 +419,13 @@ def search_manifest(
     hits: list[SearchHit] = []
     if not tokens:
         return hits
+    if match_mode not in {"all_words", "any_word"}:
+        raise ValueError(f"unknown match_mode: {match_mode}")
 
     def matches(text: str) -> bool:
         folded = _fold_for_search(text)
-        return all(token in folded for token in tokens)
+        matched = (token in folded for token in tokens)
+        return any(matched) if match_mode == "any_word" else all(matched)
 
     for segment in manifest.transcript.segments:
         if speaker is not None and segment.speaker != speaker:
@@ -443,21 +463,19 @@ def search_manifest(
     return hits
 
 
-def straddle_hint_t_ms(
+def straddle_hint(
     manifest: Manifest, query: str, *, speaker: str | None = None
-) -> int | None:
-    """``t0_ms`` of the first ADJACENT segment pair whose combined text
-    matches every query token — the cheap cross-boundary check behind the
-    zero-hit search note.
+) -> StraddleHint | None:
+    """First adjacent segment pair whose combined text matches every token.
 
     Word-AND is per-segment BY CONTRACT (#16); a phrase split over a segment
     boundary ("recurring | invites") legitimately misses, and the note should
-    say where the words do meet instead of leaving the miss indistinguishable
-    from "never said". Same normalization as the search itself. OCR text
-    stays out — frames are not contiguous prose. With ``speaker`` both
-    segments of the pair must be that speaker's, mirroring the filter the
-    zero-hit search ran under. Not a search mode: the hit contract is
-    untouched, this feeds one prose note.
+    say where the words do meet and show a bounded quote instead of leaving
+    the miss indistinguishable from "never said". Same normalization as the
+    search itself. OCR text stays out — frames are not contiguous prose. With
+    ``speaker`` both segments of the pair must be that speaker's, mirroring
+    the filter the zero-hit search ran under. Not a search mode: this feeds
+    one prose note.
     """
     tokens = _fold_for_search(query).split()
     if len(tokens) < 2:
@@ -467,5 +485,16 @@ def straddle_hint_t_ms(
             continue
         combined = _fold_for_search(first.text + " " + second.text)
         if all(token in combined for token in tokens):
-            return first.t0_ms
+            quote = " ".join((first.text + " " + second.text).split())
+            if len(quote) > STRADDLE_QUOTE_MAX_CHARS:
+                quote = quote[: STRADDLE_QUOTE_MAX_CHARS - 3].rstrip() + "..."
+            return StraddleHint(t_ms=first.t0_ms, quote=quote)
     return None
+
+
+def straddle_hint_t_ms(
+    manifest: Manifest, query: str, *, speaker: str | None = None
+) -> int | None:
+    """Compatibility helper returning only the adjacent-pair timestamp."""
+    hint = straddle_hint(manifest, query, speaker=speaker)
+    return hint.t_ms if hint is not None else None

@@ -361,10 +361,10 @@ Then, in your agent:
 | `get_transcript(job_id, start_ms?, end_ms?, format?)` | Paginated transcript as `segments`, `text`, or `srt` (speaker-prefixed when diarized, plus a roster header); truncation returns `next_start_ms`. |
 | `get_frames(job_id, at_ms? \| start_ms?+end_ms?, max_frames?, include_duplicates?)` | Keyframe images nearest a timestamp or evenly thinned across a range (unique frames by default, max 6/call); each frame names its absolute `path`. |
 | `get_moment(job_id, start_ms, end_ms)` | The "one remark" bundle: transcript slice + up to 3 frames + their OCR text + wall-clock range (+ `speakers_in_range` when diarized). |
-| `search(job_id, query, speaker?)` | Substring search over the transcript AND on-screen OCR text; hits carry `t_ms`/`t_wall`, frame refs, and the speaker when diarized. The optional filter accepts a raw label or saved name. |
+| `search(job_id, query, speaker?, match_mode?)` | Substring search over the transcript AND on-screen OCR text. `all_words` remains the default; `any_word` broadens lexical recall. Hits carry `t_ms`/`t_wall`, frame refs, and the speaker when diarized. The optional filter accepts a raw label or saved name. |
 | `label_speakers(job_id, labels, evidence?)` | Atomically persist verified names for anonymous speaker labels. Raw `S1`/`S2` labels remain canonical; blank/null removes a name. |
 | `extract_frame(job_id, at_ms, crop?)` | Exact-timestamp full-resolution re-extract from the source video (optional crop) when keyframes miss the instant; returns the file's absolute `path`. |
-| `list_jobs()` | Recent processed recordings with durations, wall-clock starts, counts, and speaker counts when diarized. |
+| `list_jobs()` | Recent processed recordings with source paths, durations, wall-clock starts, counts, and speaker counts when diarized. |
 
 Every tool description ships 10+ usage examples, so agents pick the right tool
 without extra prompting.
