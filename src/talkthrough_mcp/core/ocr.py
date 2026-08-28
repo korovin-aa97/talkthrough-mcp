@@ -156,8 +156,22 @@ def create_engine(language_hint: str | None = None) -> OcrEngine | None:
             logger.info("OCR params: %s", {k: str(v) for k, v in params.items()})
         # First use may download ONNX models; keep any stray stdout out of
         # the MCP stdio channel.
-        with contextlib.redirect_stdout(sys.stderr):
-            engine: OcrEngine = RapidOCR(params=params) if params else RapidOCR()
+        try:
+            with contextlib.redirect_stdout(sys.stderr):
+                engine: OcrEngine = RapidOCR(params=params) if params else RapidOCR()
+        except Exception as exc:
+            if not params:
+                raise
+            # Optional script packs are downloaded on first use, while the
+            # stock Latin/Chinese models ship in the wheel. A mirror outage
+            # must not turn all OCR off for a mixed-script UI: keep the
+            # available baseline and make the reduced script coverage clear.
+            logger.warning(
+                "OCR language pack unavailable (%s); falling back to the bundled default pack",
+                exc,
+            )
+            with contextlib.redirect_stdout(sys.stderr):
+                engine = RapidOCR()
         return engine
     except Exception as exc:
         logger.warning("OCR unavailable, continuing without it: %s", exc)

@@ -62,6 +62,8 @@ labels, and serves those names consistently on every transcript surface.
   about the same directory immediately before removing it.
 - Corporate TLS troubleshooting now covers the first `static-ffmpeg` download
   as well as diarization model downloads.
+- If an optional non-Latin OCR pack cannot be downloaded, OCR now falls back
+  to the bundled default pack instead of dropping all on-screen text.
 - Early exhaustion of the frame-analysis cap is reported honestly instead of
   implying the full recording was inspected.
 
