@@ -184,6 +184,18 @@ async def _run_session(home: Path) -> None:
             )
         )
         assert multiword["hit_count"] >= 1, "order-free multi-word query must hit"
+        any_word = _payload(
+            await session.call_tool(
+                "search",
+                {
+                    "job_id": job_id,
+                    "query": "login zzznonexistent",
+                    "match_mode": "any_word",
+                },
+            )
+        )
+        assert any_word["match_mode"] == "any_word"
+        assert any_word["hit_count"] >= 1
         undiarized_filter = _payload(
             await session.call_tool(
                 "search", {"job_id": job_id, "query": "login", "speaker": "S1"}
@@ -215,7 +227,8 @@ async def _run_session(home: Path) -> None:
         # 7. list_jobs sees the processed job.
         jobs_result = await session.call_tool("list_jobs", {})
         jobs_payload = _payload(jobs_result)
-        assert any(job["job_id"] == job_id for job in jobs_payload["jobs"])
+        stored_job = next(job for job in jobs_payload["jobs"] if job["job_id"] == job_id)
+        assert stored_job["media"]["path"] == str(DEMO_MP4)
 
         # 8. Issues #13 + #14 on the wire: every served frame carries an
         # absolute existing path AND its validity span.

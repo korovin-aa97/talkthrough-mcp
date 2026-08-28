@@ -60,6 +60,12 @@ def test_registered_tools_match_guidance_exactly() -> None:
         assert len(guidance.example_lines(tool.description or "")) >= MIN_EXAMPLES
 
 
+def test_search_guidance_documents_both_match_modes() -> None:
+    description = guidance.TOOL_DESCRIPTIONS["search"]
+    assert 'match_mode="all_words"' in description
+    assert 'match_mode="any_word"' in description
+
+
 def test_every_tool_carries_honest_annotations() -> None:
     """Non-interactive clients (codex exec) silently cancel un-annotated tool
     calls — every tool must ship hints, and they must stay truthful."""

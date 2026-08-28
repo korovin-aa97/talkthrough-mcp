@@ -119,9 +119,9 @@ Examples:
 - keep ranges under ~30 s; a 5-min "moment" dilutes the bundle and wastes tokens
 """,
     "search": """\
-Case-insensitive word search across BOTH transcript segments and frame OCR text: a text \
-hits when EVERY word of the query matches it as a substring — any order, any distance \
-(ё and е are interchangeable). Hits carry source (transcript|ocr), t_ms, t_wall when \
+Case-insensitive word search across BOTH transcript segments and frame OCR text. The default \
+match_mode="all_words" requires EVERY query word as a substring; match_mode="any_word" \
+requires at least one (ё and е are interchangeable). Hits carry source (transcript|ocr), t_ms, t_wall when \
 known, the matched text, and the nearest frame position — everything needed to jump \
 straight to evidence. Optional speaker accepts a raw label ("S2") or saved name and narrows \
 to that voice's transcript hits. Duplicate saved names search all matching labels honestly. No \
@@ -134,7 +134,7 @@ Examples:
 - search(job_id, "TypeError") — on-screen stack traces and error text are OCR-indexed; great for bug repros
 - search(job_id, "€49") — prices, IDs, and literals on screen are findable via OCR
 - take hit.t_wall and grep your server logs ±30 s around it to pair remark ↔ log line
-- no hits? shorten the stem: "notif" matches notification / notifications / notify
+- broad lexical recall: search(job_id, "timeout latency", match_mode="any_word")
 - multi-word = ALL words as substrings, any order: "first phase" hits "the first real phase"
 - stems beat inflected phrases: "кнопк отправк" finds «Кнопка отправки» and «кнопку отправки»
 - every hit has nearest_frame_ms → get_frames(job_id, at_ms=<that>) shows the moment

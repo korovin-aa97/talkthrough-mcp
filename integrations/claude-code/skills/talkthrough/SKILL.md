@@ -36,7 +36,9 @@ install it: `claude mcp add -s user talkthrough -- uvx talkthrough-mcp`
    re-transcription) — still minutes on long recordings.
 2. **Orient**: `get_transcript(job_id)` (paginate via `next_start_ms` when
    `truncated`) or `search(job_id, "<distinctive word>")` to jump straight
-   to the relevant moments (searches speech AND on-screen OCR text).
+   to the relevant moments (searches speech AND on-screen OCR text). Multi-word
+   search defaults to `match_mode="all_words"`; use `"any_word"` for broader
+   lexical recall.
 3. **Evidence per remark**: `get_moment(job_id, t0-2000, t1+2000)` — one
    call returns the transcript slice + up to 3 unique frames + their OCR
    text + the wall-clock range. This is the workhorse; describe `observed`

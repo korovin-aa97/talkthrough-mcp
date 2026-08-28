@@ -31,6 +31,7 @@ from talkthrough_mcp.core.manifest import (
     save_manifest,
     search_manifest,
     slice_segments,
+    straddle_hint,
     straddle_hint_t_ms,
 )
 from talkthrough_mcp.core.stt import SttWord
@@ -170,6 +171,17 @@ def test_whitespace_only_tokens_return_nothing() -> None:
     assert search_manifest(manifest, " \t\n ") == []
 
 
+def test_any_word_mode_broadens_multiword_recall_without_changing_default() -> None:
+    manifest = make_manifest()
+    assert search_manifest(manifest, "login settings") == []
+    hits = search_manifest(manifest, "login settings", match_mode="any_word")
+    assert {hit.t_ms for hit in hits} == {0, 6000, 12_012}
+    assert {hit.source for hit in hits} == {"transcript", "ocr"}
+
+    with pytest.raises(ValueError, match="unknown match_mode"):
+        search_manifest(manifest, "login", match_mode="unsupported")  # type: ignore[arg-type]
+
+
 # --- search(speaker=) --------------------------------------------------------
 
 
@@ -199,12 +211,28 @@ def test_straddle_hint_names_the_first_boundary_pair() -> None:
     # "dashboard settings" never lands in ONE segment but meets across 2|3
     assert search_manifest(manifest, "dashboard settings") == []
     assert straddle_hint_t_ms(manifest, "dashboard settings") == 2500
+    hint = straddle_hint(manifest, "dashboard settings")
+    assert hint is not None
+    assert hint.quote == "The dashboard shows an error message. Settings look fine."
     # same normalization as the search: case + ё/е fold
     assert straddle_hint_t_ms(manifest, "DASHBOARD Settings") == 2500
     # words that never meet even across adjacent segments
     assert straddle_hint_t_ms(manifest, "login settings") is None
     # single-word queries never produce the hint (behavior unchanged there)
     assert straddle_hint_t_ms(manifest, "dashboard") is None
+
+
+def test_straddle_hint_quote_is_bounded() -> None:
+    manifest = make_manifest()
+    segment_type = type(manifest.transcript.segments[0])
+    manifest.transcript.segments = [
+        segment_type(seq=1, t0_ms=0, t1_ms=1000, text="start " + "a" * 300),
+        segment_type(seq=2, t0_ms=1000, t1_ms=2000, text="finish"),
+    ]
+    hint = straddle_hint(manifest, "start finish")
+    assert hint is not None
+    assert len(hint.quote) == 240
+    assert hint.quote.endswith("...")
 
 
 def test_straddle_hint_ignores_ocr_text() -> None:
