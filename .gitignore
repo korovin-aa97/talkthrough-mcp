@@ -13,9 +13,6 @@ dist/
 # talkthrough job store (never commit processed recordings)
 .talkthrough/
 
-# private promotion campaign metrics and publisher evidence
-.campaign/
-
 # fixture build intermediates (the two committed fixture files stay tracked)
 tests/fixtures/_build/
 
