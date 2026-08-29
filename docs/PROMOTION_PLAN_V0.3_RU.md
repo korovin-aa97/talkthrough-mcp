@@ -748,8 +748,9 @@ SEO-эксперимент, который не должен съедать бю
 
 > **Don't write a bug report. Record it.** Talkthrough turns a local screen recording into
 > transcript, exact frames, OCR and timestamped evidence that Claude Code or Codex can use
-> to draft an issue or investigate a fix. Open source, one-command install, no recording
-> upload and no runtime telemetry. Watch the unedited 78-second demo.
+> to draft an issue or investigate a fix. Open source, installs via uvx, no manual ffmpeg
+> or OCR setup, no recording upload and no runtime telemetry. Watch the real 78-second
+> end-to-end demo; processing is shown at approximately 5x speed.
 
 После v0.3 заменить `78-second` на реальную продолжительность нового демо.
 
@@ -769,7 +770,7 @@ SEO-эксперимент, который не должен съедать бю
 > IMPROVEMENT].
 >
 > Repository: https://github.com/korovin-aa97/talkthrough-mcp  
-> Unedited demo: [NEW V0.3 DEMO URL]
+> Real end-to-end demo (processing shown at approximately 5x speed): [DEMO URL]
 >
 > I think it fits Console's developer-tool and debugging criteria. Happy to provide a
 > sample recording or answer technical questions.
@@ -788,7 +789,7 @@ SEO-эксперимент, который не должен съедать бю
 
 Основной CTA:
 
-> Watch the unedited v0.3 demo
+> Watch the real end-to-end demo
 
 Второй CTA:
 
