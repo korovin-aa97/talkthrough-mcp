@@ -93,6 +93,10 @@ the second call on the same bytes returns the stored summary in milliseconds.
                                                    "last_ms" }],
                                     "speaker_names"?: { "S1": "Alice" },
                                     "speaker_name_evidence"?: { "S1": "frame proof" },
+                                    "speaker_names_pending_review"?: { "S1": "Alice" },
+                                    "speaker_name_evidence_pending_review"?: {
+                                      "S1": "frame proof"
+                                    },
                                     "turns": [[t0_ms, t1_ms, "S1"], …] } },
   "frames": { "count", "unique_count", "cap_hit",
               "items": [{ "ms", "file", "duplicate_of"?, "ocr_text"? }] },

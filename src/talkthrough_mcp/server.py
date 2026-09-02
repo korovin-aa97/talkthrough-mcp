@@ -293,6 +293,7 @@ def get_transcript(
             payload["labels_changed"] = diarization.labels_changed
         if diarization.amend_reason is not None:
             payload["amend_reason"] = diarization.amend_reason
+        payload.update(pipeline.pending_review_payload(diarization))
         escalation = pipeline.threshold_escalation_note(diarization)
         if escalation is not None:
             # additive (v0.2.3): the same byte-identical text the process
@@ -496,11 +497,23 @@ def search(
                 )
             else:
                 known_names = sorted(set((diarization.speaker_names or {}).values()))[:12]
-                note = (
-                    f"speaker name {speaker_query!r} is not saved for this job; roster "
-                    f"labels: {span}; known names: {', '.join(known_names) or 'none'} — "
-                    "0 hits means the filter is unknown, not that the words were never said"
+                pending_names = diarization.speaker_names_pending_review or {}
+                pending_match = any(
+                    name.casefold() == folded for name in pending_names.values()
                 )
+                if pending_match:
+                    note = (
+                        f"speaker name {speaker_query!r} is saved in pending review because "
+                        "diarization changed the labels; it is not an active identity and is "
+                        "not used for search. Re-check the current roster and confirm or "
+                        "remove it with label_speakers"
+                    )
+                else:
+                    note = (
+                        f"speaker name {speaker_query!r} is not saved for this job; roster "
+                        f"labels: {span}; known names: {', '.join(known_names) or 'none'} — "
+                        "0 hits means the filter is unknown, not that the words were never said"
+                    )
             return {
                 "job_id": job_id,
                 "query": query,
@@ -612,6 +625,7 @@ def label_speakers(
         "mapping_count": len(diarization.speaker_names or {}),
         "speakers": speakers,
         **({"speakers_truncated": hidden} if hidden else {}),
+        **pipeline.pending_review_payload(diarization),
         "note": (
             "names are user/agent-verified labels; raw S<n> identifiers remain canonical "
             "and OCR name_candidates are only unverified screen hints"
@@ -664,6 +678,9 @@ def _job_speakers(diarization: Diarization) -> dict[str, Any]:
     such jobs reads as a headcount, the exact claim the escalation note
     exists to prevent (the count stays for compatibility)."""
     payload: dict[str, Any] = {"speakers": diarization.detected_num_speakers}
+    pending_count = len(diarization.speaker_names_pending_review or {})
+    if pending_count:
+        payload["speaker_names_pending_review_count"] = pending_count
     if pipeline.threshold_escalation_note(diarization) is not None:
         payload["speakers_with_30s_plus"] = pipeline.substantial_speaker_count(diarization)
     return payload

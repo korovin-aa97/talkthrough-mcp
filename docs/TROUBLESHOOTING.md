@@ -231,13 +231,12 @@ Paths are used verbatim, no network is touched.
 
 ## A failed re-diarize keeps the stored labels
 
-Since 0.2.3, an explicit `diarize=true` on a job that already has working
-labels fails FAST when the engine cannot even be constructed (a mistyped
-`TALKTHROUGH_DIARIZATION_*_MODEL`, a dead model download): the call returns
-an error and the stored job — labels included — stays byte-identical. The
-boundary: a failure *inside* diarization after the engine constructed still
-degrades to `available: false` with the reason (the transcript always
-survives), and one clean amend restores labels.
+An explicit `diarize=true` amend that fails returns an error and leaves the
+stored job byte-identical: transcript, active speaker names, and pending-review
+evidence all survive. Since 0.2.3 this applied to failures while constructing
+the engine (a mistyped `TALKTHROUGH_DIARIZATION_*_MODEL`, a dead model
+download); 0.3.1 extends the same fail-safe contract to failures inside the
+diarization run. Correct the environment and retry the amend.
 
 ## `t_wall` is null or looks wrong
 

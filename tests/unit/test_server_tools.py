@@ -345,6 +345,39 @@ def test_get_transcript_serves_amend_outcome_and_noop_note(isolated_home: Path) 
     assert "labels_changed" not in fresh  # fresh runs never set it
 
 
+def test_pending_review_payload_and_note_match_summary_and_transcript(
+    isolated_home: Path,
+) -> None:
+    from talkthrough_mcp.core import pipeline
+    from talkthrough_mcp.server import get_transcript, list_jobs
+
+    manifest = _diarize(make_manifest())
+    diarization = manifest.transcript.diarization
+    assert diarization is not None
+    diarization.labels_changed = True
+    diarization.speaker_names_pending_review = {"S1": "Vera", "S2": "Tom"}
+    diarization.speaker_name_evidence_pending_review = {
+        "S1": "old intro",
+        "S2": "old name plate",
+    }
+    job_id = _store(manifest)
+    transcript = get_transcript(job_id)
+    summary = pipeline._summarize_diarization(diarization)
+    assert transcript["speaker_names_pending_review_note"] == summary[
+        "speaker_names_pending_review_note"
+    ]
+    assert transcript["speaker_names_pending_review"] == {"S1": "Vera", "S2": "Tom"}
+    assert transcript["speaker_name_evidence_pending_review"] == {
+        "S1": "old intro",
+        "S2": "old name plate",
+    }
+    assert transcript["speaker_names_pending_review_total"] == 2
+    assert all("speaker_name" not in segment for segment in transcript["segments"])
+    assert "Vera" not in get_transcript(job_id, format="text")["text"]
+    entry = next(item for item in list_jobs()["jobs"] if item["job_id"] == job_id)
+    assert entry["speaker_names_pending_review_count"] == 2
+
+
 def test_escalation_note_survives_a_noop_amend_on_the_wire(isolated_home: Path) -> None:
     """The F2 trap: a useless amend used to SILENCE the over-detection
     warning — the roster it warned about is still being served, so the
@@ -489,6 +522,34 @@ def test_unknown_saved_name_returns_bounded_honesty_note(isolated_home: Path) ->
     assert "is not saved" in payload["note"]
     assert "known names: Vera" in payload["note"]
     assert "roster labels: S1-S2" in payload["note"]
+
+
+def test_pending_review_name_is_not_an_active_search_identity(isolated_home: Path) -> None:
+    from talkthrough_mcp.server import search
+
+    manifest = _diarize(make_manifest())
+    diarization = manifest.transcript.diarization
+    assert diarization is not None
+    diarization.speaker_names_pending_review = {"S1": "Vera"}
+    payload = search(_store(manifest), "dashboard", speaker="vera")
+    assert payload["hits"] == []
+    assert "saved in pending review" in payload["note"]
+    assert "not an active identity" in payload["note"]
+
+
+def test_pending_review_payload_is_roster_capped(isolated_home: Path) -> None:
+    from talkthrough_mcp.core import pipeline
+
+    manifest = _dusty_threshold(make_manifest())
+    diarization = manifest.transcript.diarization
+    assert diarization is not None
+    diarization.speaker_names_pending_review = {
+        f"S{index}": f"Name {index}" for index in range(1, pipeline.SUMMARY_ROSTER_CAP + 4)
+    }
+    payload = pipeline.pending_review_payload(diarization)
+    assert len(payload["speaker_names_pending_review"]) == pipeline.SUMMARY_ROSTER_CAP
+    assert payload["speaker_names_pending_review_total"] == pipeline.SUMMARY_ROSTER_CAP + 3
+    assert payload["speaker_names_pending_review_truncated"] == 3
 
 
 def test_name_candidates_are_bounded_deduplicated_raw_ocr_hints(

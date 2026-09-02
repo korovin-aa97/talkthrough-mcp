@@ -19,11 +19,14 @@ from typing import Any
 import pytest
 from mcp import ClientSession, StdioServerParameters, types
 from mcp.client.stdio import stdio_client
+from tests.conftest import make_manifest
 from tests.integration.fixture_facts import DEMO_MP4, TWO_VOICE_M4A, TWO_VOICE_NUM_SPEAKERS
 
 from talkthrough_mcp import __version__ as package_version
 from talkthrough_mcp import guidance
 from talkthrough_mcp.core import diarize
+from talkthrough_mcp.core.diarize import Diarization, Turn, attribute_segments, speaker_roster
+from talkthrough_mcp.core.manifest import save_manifest
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 PROCESS_TIMEOUT = 600.0
@@ -399,3 +402,56 @@ async def _run_session(home: Path) -> None:
 @pytest.mark.timeout(900)
 def test_mcp_stdio_end_to_end(tmp_path: Path) -> None:
     asyncio.run(_run_session(tmp_path / "talkthrough-home"))
+
+
+async def _run_pending_review_session(home: Path) -> None:
+    manifest = make_manifest()
+    turns = [Turn(0, 5000, "S1"), Turn(5000, 8000, "S2")]
+    manifest.transcript.segments = attribute_segments(manifest.transcript.segments, turns)
+    manifest.transcript.diarization = Diarization(
+        available=True,
+        reason="",
+        detected_num_speakers=2,
+        speakers=speaker_roster(turns),
+        turns=turns,
+        speaker_names_pending_review={"S1": "Samantha", "S2": "Daniel"},
+        speaker_name_evidence_pending_review={
+            "S1": "old fixture order",
+            "S2": "old fixture order",
+        },
+        labels_changed=True,
+    )
+    save_manifest(manifest, home / "jobs" / manifest.job_id)
+
+    async with (
+        stdio_client(_server_params(home)) as (read, write),
+        ClientSession(read, write) as session,
+    ):
+        await session.initialize()
+        transcript = _payload(
+            await session.call_tool("get_transcript", {"job_id": manifest.job_id})
+        )
+        assert transcript["speaker_names_pending_review"] == {
+            "S1": "Samantha",
+            "S2": "Daniel",
+        }
+        assert "not active identities" in transcript["speaker_names_pending_review_note"]
+        assert all("speaker_name" not in segment for segment in transcript["segments"])
+        pending_search = _payload(
+            await session.call_tool(
+                "search",
+                {"job_id": manifest.job_id, "query": "the", "speaker": "samantha"},
+            )
+        )
+        assert pending_search["hits"] == []
+        assert "saved in pending review" in pending_search["note"]
+        jobs_payload = _payload(await session.call_tool("list_jobs", {}))
+        entry = next(job for job in jobs_payload["jobs"] if job["job_id"] == manifest.job_id)
+        assert entry["speaker_names_pending_review_count"] == 2
+
+
+@pytest.mark.timeout(900)
+def test_fresh_mcp_session_serves_pending_review_without_activating_names(
+    tmp_path: Path,
+) -> None:
+    asyncio.run(_run_pending_review_session(tmp_path / "pending-review-home"))

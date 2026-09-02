@@ -14,6 +14,7 @@ No LLM anywhere — the calling agent brings the intelligence. Stages:
 from __future__ import annotations
 
 import contextlib
+import copy
 import logging
 import os
 import shutil
@@ -27,7 +28,7 @@ from typing import Any
 from .. import __version__
 from . import audio, dedup, diarize, frames, jobs, ocr, stt
 from .diarize import AmendReason, Diarization
-from .errors import ValidationError
+from .errors import ToolFailureError, ValidationError
 from .ffmpeg import ffmpeg_version
 from .manifest import (
     FRAMES_DIR_NAME,
@@ -386,10 +387,21 @@ def _amend_diarization(
     tool_timeout = max(600, int(manifest.media.duration_s * 4) + 120)
     wav_path = directory / "audio.wav"
     before = _labels_snapshot(manifest.transcript)
+    previous_transcript = copy.deepcopy(manifest.transcript)
     previous_diarization = manifest.transcript.diarization
     previous_names = dict(previous_diarization.speaker_names or {}) if previous_diarization else {}
     previous_evidence = (
         dict(previous_diarization.speaker_name_evidence or {}) if previous_diarization else {}
+    )
+    previous_pending_names = (
+        dict(previous_diarization.speaker_names_pending_review or {})
+        if previous_diarization
+        else {}
+    )
+    previous_pending_evidence = (
+        dict(previous_diarization.speaker_name_evidence_pending_review or {})
+        if previous_diarization
+        else {}
     )
     report("extracting audio", 0.10)
     try:
@@ -398,6 +410,17 @@ def _amend_diarization(
     finally:
         wav_path.unlink(missing_ok=True)
     diarization = manifest.transcript.diarization
+    if diarization is None or not diarization.available:
+        # An amend is a mutation of durable, user-reviewed data. If its
+        # engine fails after construction, retain the exact stored transcript
+        # and skip the manifest write just like the construction fail-fast
+        # path; neither active nor pending identities may be partially lost.
+        manifest.transcript = previous_transcript
+        reason = diarization.reason if diarization is not None else "no diarization result"
+        raise ToolFailureError(
+            "diarization amend failed; the stored transcript, labels, and speaker names "
+            f"were kept unchanged: {reason}"
+        )
     if diarization is not None and diarization.available:
         # outcome, not attempt (the ProcessResult.amended rule): a re-run that
         # converged on the same labels must say so instead of reading as a fix
@@ -406,6 +429,22 @@ def _amend_diarization(
         if diarization.labels_changed is False:
             diarization.speaker_names = previous_names or None
             diarization.speaker_name_evidence = previous_evidence or None
+            diarization.speaker_names_pending_review = previous_pending_names or None
+            diarization.speaker_name_evidence_pending_review = (
+                previous_pending_evidence or None
+            )
+        elif previous_names:
+            # Keep only the most recent unreviewed mapping. Active identities
+            # are deliberately not carried onto changed labels.
+            diarization.speaker_names_pending_review = previous_names
+            diarization.speaker_name_evidence_pending_review = previous_evidence or None
+        else:
+            # A second amend before review must not erase the saved mapping
+            # merely because there are no active names left to move.
+            diarization.speaker_names_pending_review = previous_pending_names or None
+            diarization.speaker_name_evidence_pending_review = (
+                previous_pending_evidence or None
+            )
     report("writing manifest", 0.99)
     save_manifest(manifest, directory)
     report("done", 1.0)
@@ -654,6 +693,48 @@ _AMEND_HONESTY = (
 )
 
 
+def pending_review_note(diarization: Diarization) -> str | None:
+    """One byte-identical warning for every surface serving pending names."""
+    count = len(diarization.speaker_names_pending_review or {})
+    if not count:
+        return None
+    return (
+        f"{count} saved speaker name(s) moved to pending review because diarization "
+        "changed the labels; they are not active identities. Re-check the current "
+        "roster and confirm or remove them with label_speakers."
+    )
+
+
+def pending_review_payload(diarization: Diarization) -> dict[str, Any]:
+    """Bounded pending-review evidence, never mixed into the active roster."""
+    names = diarization.speaker_names_pending_review or {}
+    if not names:
+        return {}
+    roster_order = [speaker.label for speaker in diarization.speakers]
+    ordered_labels = [label for label in roster_order if label in names]
+    ordered_labels.extend(sorted(label for label in names if label not in ordered_labels))
+    served_labels = ordered_labels[:SUMMARY_ROSTER_CAP]
+    hidden = len(ordered_labels) - len(served_labels)
+    evidence = diarization.speaker_name_evidence_pending_review or {}
+    note = pending_review_note(diarization)
+    assert note is not None
+    return {
+        "speaker_names_pending_review": {label: names[label] for label in served_labels},
+        **(
+            {
+                "speaker_name_evidence_pending_review": {
+                    label: evidence[label] for label in served_labels if label in evidence
+                }
+            }
+            if any(label in evidence for label in served_labels)
+            else {}
+        ),
+        "speaker_names_pending_review_total": len(ordered_labels),
+        **({"speaker_names_pending_review_truncated": hidden} if hidden else {}),
+        "speaker_names_pending_review_note": note,
+    }
+
+
 def substantial_speaker_count(diarization: Diarization) -> int:
     """Speakers with >= 30 s of attributed talk time — one signal among
     several, never a headcount claim (an external eval falsified the
@@ -876,6 +957,7 @@ def _summarize_diarization(
         payload["amend_reason"] = diarization.amend_reason
     if diarization.requested_num_speakers is not None:
         payload["requested_num_speakers"] = diarization.requested_num_speakers
+    payload.update(pending_review_payload(diarization))
     noop = amend_noop_note(diarization)
     if noop is not None:
         payload["amend_note"] = noop

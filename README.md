@@ -439,7 +439,11 @@ torch, no accounts, no GPU):
   video evidence, call `label_speakers` to preserve a verified mapping such
   as `S1` → "Alice" across sessions. The roster can expose bounded OCR
   `name_candidates`, but those are raw hints and are never saved
-  automatically. The raw label remains present beside `speaker_name`.
+  automatically. The raw label remains present beside `speaker_name`. If a
+  later diarization amend changes the labels, verified names stop being
+  active and move to bounded `speaker_names_pending_review` evidence instead
+  of being silently lost. Re-check the current roster and explicitly confirm
+  or remove each affected label with `label_speakers`.
 
 Models download once (~47 MB total) from pinned, checksum-verified URLs into
 `~/.talkthrough/models/`; warm runs are zero-network like the rest of the

@@ -152,6 +152,12 @@ class Diarization:
     turns: list[Turn] = field(default_factory=list)
     speaker_names: dict[str, str] | None = None
     speaker_name_evidence: dict[str, str] | None = None
+    # A label-changing amend must deactivate human-verified identities (the
+    # new S<n> roster may describe different voices), but it must never erase
+    # the user's work. Keep exactly the latest unreviewed mapping as bounded
+    # evidence until label_speakers explicitly confirms/removes each label.
+    speaker_names_pending_review: dict[str, str] | None = None
+    speaker_name_evidence_pending_review: dict[str, str] | None = None
     # Amend outcome metadata; each field stays absent on legacy manifests.
     # ``labels_changed``: set only by the amend path — did the re-run actually
     # relabel anything? ``amend_reason``: which explicit input invalidated the
@@ -189,6 +195,17 @@ class Diarization:
             payload["speaker_names"] = dict(self.speaker_names)
         if self.speaker_name_evidence is not None:
             payload["speaker_name_evidence"] = dict(self.speaker_name_evidence)
+        if self.speaker_names_pending_review:
+            payload["speaker_names_pending_review"] = dict(
+                self.speaker_names_pending_review
+            )
+            pending_evidence = {
+                label: value
+                for label, value in (self.speaker_name_evidence_pending_review or {}).items()
+                if label in self.speaker_names_pending_review
+            }
+            if pending_evidence:
+                payload["speaker_name_evidence_pending_review"] = pending_evidence
         if self.labels_changed is not None:
             payload["labels_changed"] = self.labels_changed
         if self.amend_reason is not None:
@@ -219,6 +236,25 @@ class Diarization:
             if isinstance(evidence, dict)
             else None
         )
+        pending_names = payload.get("speaker_names_pending_review")
+        known["speaker_names_pending_review"] = (
+            {str(k): str(v) for k, v in pending_names.items()}
+            if isinstance(pending_names, dict) and pending_names
+            else None
+        )
+        pending_evidence = payload.get("speaker_name_evidence_pending_review")
+        pending_evidence_clean = (
+            {
+                str(k): str(v)
+                for k, v in pending_evidence.items()
+                if str(k) in (known["speaker_names_pending_review"] or {})
+            }
+            if isinstance(pending_evidence, dict)
+            and pending_evidence
+            and known["speaker_names_pending_review"]
+            else {}
+        )
+        known["speaker_name_evidence_pending_review"] = pending_evidence_clean or None
         amend_reason = payload.get("amend_reason")
         known["amend_reason"] = amend_reason if amend_reason in AMEND_REASONS else None
         return Diarization(**known)
