@@ -1,6 +1,6 @@
 # OpenClaw
 
-Server command (stdio): `uvx "talkthrough-mcp[diarization]"`
+Server command (stdio): `uvx --python '>=3.11,<3.14' 'talkthrough-mcp[diarization]'`
 
 Config: `~/.openclaw/openclaw.json`
 
@@ -11,6 +11,8 @@ Config: `~/.openclaw/openclaw.json`
       "talkthrough": {
         "command": "uvx",
         "args": [
+          "--python",
+          ">=3.11,<3.14",
           "talkthrough-mcp[diarization]"
         ]
       }
@@ -22,7 +24,7 @@ Config: `~/.openclaw/openclaw.json`
 Or via CLI:
 
 ```bash
-openclaw mcp add talkthrough --command uvx --arg talkthrough-mcp[diarization]
+openclaw mcp add talkthrough --command uvx --arg --python --arg '>=3.11,<3.14' --arg 'talkthrough-mcp[diarization]'
 ```
 
 ClawHub: a publish-ready skill wrapper lives in [`clawhub/`](clawhub/) (submit after the repo is public).

@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import base64
 import json
+import shlex
 import sys
 import tomllib
 import urllib.parse
@@ -36,6 +37,13 @@ from talkthrough_mcp import guidance  # noqa: E402
 
 INSTALL_PHASE = "pypi"  # "git" (private/pre-PyPI) | "pypi"
 
+PROJECT: dict[str, object] = tomllib.loads(
+    (REPO / "pyproject.toml").read_text(encoding="utf-8")
+)["project"]
+PROJECT_VERSION = str(PROJECT["version"])
+PROJECT_REQUIRES_PYTHON = str(PROJECT["requires-python"])
+UVX_PYTHON_ARGS = ["--python", PROJECT_REQUIRES_PYTHON]
+
 # Generated configs are batteries-included: they carry the [diarization]
 # extra so a user who installed via any one-click button / plugin / snippet
 # can ask "who said what" without reinstalling (v0.2.0 decision). The
@@ -44,27 +52,26 @@ INSTALL_PHASE = "pypi"  # "git" (private/pre-PyPI) | "pypi"
 _PYPI_SPEC = "talkthrough-mcp[diarization]"
 _GIT_SPEC = "talkthrough-mcp[diarization] @ git+https://github.com/korovin-aa97/talkthrough-mcp"
 _UVX_ARGS = {
-    "git": ["--from", _GIT_SPEC, "talkthrough-mcp"],
-    "pypi": [_PYPI_SPEC],
+    "git": [*UVX_PYTHON_ARGS, "--from", _GIT_SPEC, "talkthrough-mcp"],
+    "pypi": [*UVX_PYTHON_ARGS, _PYPI_SPEC],
 }
 UVX_ARGS: list[str] = _UVX_ARGS[INSTALL_PHASE]
 
 
 def _shell_quoted(arg: str) -> str:
-    """Quote args for shell one-liners (zsh globs bare [] patterns)."""
-    return f'"{arg}"' if any(ch in arg for ch in "[] @") else arg
+    """Quote a single argv item for POSIX shell snippets and one-liners."""
+    return shlex.quote(arg)
 
 
 UVX_CMDLINE = "uvx " + " ".join(_shell_quoted(arg) for arg in UVX_ARGS)
 
-PROJECT_VERSION: str = tomllib.loads((REPO / "pyproject.toml").read_text(encoding="utf-8"))[
-    "project"
-]["version"]
-
 # A released Claude Code plugin pack must always start its matching server.
 # User-facing install snippets intentionally remain unpinned latest via
 # UVX_ARGS; only the versioned plugin artifact gets this exact pin.
-CLAUDE_PLUGIN_UVX_ARGS = [f"{_PYPI_SPEC}=={PROJECT_VERSION}"]
+CLAUDE_PLUGIN_UVX_ARGS = [
+    *UVX_PYTHON_ARGS,
+    f"{_PYPI_SPEC}=={PROJECT_VERSION}",
+]
 CLAUDE_PLUGIN_MCP_TOOL_PREFIX = "mcp__plugin_talkthrough_talkthrough__"
 
 ENV_DOC = (
@@ -155,7 +162,7 @@ ENGINE_SPECS: list[dict[str, str]] = [
         ),
         "extra": (
             "Or via CLI:\n\n```bash\nopenclaw mcp add talkthrough --command uvx "
-            + " ".join(f"--arg {arg}" for arg in UVX_ARGS)
+            + " ".join(f"--arg {_shell_quoted(arg)}" for arg in UVX_ARGS)
             + "\n```\n\nClawHub: a publish-ready skill wrapper lives in "
             "[`clawhub/`](clawhub/) (submit after the repo is public)."
         ),
@@ -622,7 +629,7 @@ workflow. Everything runs locally: recordings never leave the machine.
 Add the MCP server:
 
 ```bash
-openclaw mcp add talkthrough --command uvx {" ".join(f"--arg {arg}" for arg in UVX_ARGS)}
+openclaw mcp add talkthrough --command uvx {" ".join(f"--arg {_shell_quoted(arg)}" for arg in UVX_ARGS)}
 ```
 
 Requires `uv` (https://astral.sh/uv). First processing downloads a whisper

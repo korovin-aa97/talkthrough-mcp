@@ -5,16 +5,30 @@ Short answers to the failure modes people actually hit. If yours isn't here,
 
 ## First run is slow / downloads a lot
 
-One-time setup costs, all cached afterwards:
+There are two separate cold-start stages. First, `uvx` resolves a compatible
+Python and creates an environment for the requested package version. Then the
+first `process_media` downloads media/model assets that are still missing:
 
 - no system ffmpeg → `static-ffmpeg` fetches a bundled build (~80 MB);
 - first transcription → whisper model download into `~/.cache/huggingface`
   (`small` ≈ 464 MB, `large-v3-turbo` ≈ 1.5 GB);
-- first OCR → RapidOCR models (tens of MB).
+- first OCR → RapidOCR models (tens of MB);
+- first diarization → the pinned segmentation and embedding models.
 
-After that, expect roughly 3× faster than real time on an Apple-Silicon CPU
-with the default `small` model, OCR included (a 2-minute clip ≈ 40 s).
-Re-processing the same file returns instantly from the job store.
+A pinned plugin version and its selected interpreter form a distinct `uvx`
+environment. After a plugin update, a machine without system ffmpeg may
+therefore fetch the ~80 MB static build again; one external cold run took
+about 50 seconds, but that is an observation, not a timing promise. The
+Whisper, OCR, and diarization model caches are shared across those tool
+environments. Set `SSL_CERT_FILE` in the MCP server environment before the
+first media processing on a TLS-inspecting corporate network, because the
+static-ffmpeg download needs the same trusted CA as model downloads.
+
+A second run in the same warm environment does not redownload dependencies.
+Warm processing is network-free and reuses model caches; re-processing the
+same file returns instantly from the content-addressed job store. On an
+Apple-Silicon CPU, processing with the default `small` model and OCR is
+typically around 3× faster than real time (a 2-minute clip ≈ 40 s).
 
 ## Corporate networks: model downloads stall or fail TLS
 
@@ -60,6 +74,26 @@ Your Python is older than 3.11 (macOS ships 3.9 as `/usr/bin/python3`), so
 pip filters out every release and prints the confusing "from versions: none".
 Fixes: use `uvx talkthrough-mcp` (uv picks a compatible Python by itself), or
 create the venv from a modern interpreter, e.g. `python3.12 -m venv`.
+
+## `uvx` selects managed Python 3.10 and cannot resolve Talkthrough
+
+An older launcher can fail with a resolver message such as:
+
+```text
+No solution found ... current Python version (3.10.x) does not satisfy Python>=3.11,<3.14
+```
+
+Inspect the selected interpreter with `uv python find`. If no compatible
+managed Python is available, install one with `uv python install 3.12`; a
+manual launch can select it explicitly:
+
+```bash
+uvx --python 3.12 "talkthrough-mcp[diarization]"
+```
+
+Generated Talkthrough v0.3.1 client configs and the Claude plugin already
+pass the canonical `>=3.11,<3.14` range from `pyproject.toml`, so uv selects
+or downloads a compatible interpreter instead of inheriting Python 3.10.
 
 ## The server doesn't show up in my client
 

@@ -165,7 +165,8 @@ async def process_media(
     num_speakers: int | None = None,
     force: bool = False,
 ) -> dict[str, Any]:
-    state = _ProgressState()
+    initial_message = f"processing {path} (local pipeline: ffprobe → whisper → frames → OCR)"
+    state = _ProgressState(stage=initial_message)
     done = asyncio.Event()
 
     def on_progress(stage: str, fraction: float) -> None:
@@ -173,7 +174,7 @@ async def process_media(
         state.fraction = fraction
 
     async def ticker() -> None:
-        last: tuple[str, float] | None = None
+        last: tuple[str, float] | None = (initial_message, 0.0)
         while True:
             current = (state.stage, round(state.fraction, 3))
             if current != last:
@@ -184,7 +185,7 @@ async def process_media(
             with contextlib.suppress(TimeoutError):
                 await asyncio.wait_for(done.wait(), timeout=1.0)
 
-    await ctx.info(f"processing {path} (local pipeline: ffprobe → whisper → frames → OCR)")
+    await ctx.report_progress(progress=0.0, total=1.0, message=initial_message)
     ticker_task = asyncio.create_task(ticker())
     try:
         with _tool_errors():

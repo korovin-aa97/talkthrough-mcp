@@ -66,6 +66,8 @@ def _server_params(home: Path) -> StdioServerParameters:
         **os.environ,
         "TALKTHROUGH_HOME": str(home),
         "TALKTHROUGH_WHISPER_MODEL": "tiny",
+        # The SDK 2.x process call must stay clean when warnings are fatal.
+        "PYTHONWARNINGS": "error",
     }
     env.pop("TALKTHROUGH_DIARIZE", None)  # keep the spawned server's defaults canonical
     if diarize.engine_available():
@@ -92,8 +94,10 @@ def _payload(result: types.CallToolResult) -> dict[str, Any]:
 
 async def _run_session(home: Path) -> None:
     diarized_job_id: str | None = None
+    errlog = (home.parent / "talkthrough-server.stderr").open("w+", encoding="utf-8")
     async with (
-        stdio_client(_server_params(home)) as (read, write),
+        stdio_client(_server_params(home), errlog=errlog) as (read, write),
+        # No logging_callback: this is the client-without-logging-capability path.
         ClientSession(read, write) as session,
     ):
         initialized = await session.initialize()
@@ -135,6 +139,7 @@ async def _run_session(home: Path) -> None:
             progress_callback=record_progress,
         )
         assert isinstance(process_result, types.CallToolResult)
+        assert process_result.structured_content, "process_media must keep structured output"
         summary = _payload(process_result)
         job_id = summary["job_id"]
         assert summary["transcript"]["segment_count"] >= 1
@@ -142,6 +147,9 @@ async def _run_session(home: Path) -> None:
         assert summary["wall_clock"]["source"] == "metadata"
         assert summary["transcript"]["preview_segments"], "summary must carry a preview"
         assert progress_updates, "process_media must report progress over MCP"
+        assert progress_updates[0][2] == (
+            f"processing {DEMO_MP4} (local pipeline: ffprobe → whisper → frames → OCR)"
+        )
         assert progress_updates[-1][:2] == (1.0, 1.0)
 
         # 3b. Prompt renders non-empty for the real job and names its tools.
@@ -397,6 +405,13 @@ async def _run_session(home: Path) -> None:
                 )
             )
             assert removed["mapping_count"] == 1
+
+    errlog.flush()
+    errlog.seek(0)
+    stderr = errlog.read()
+    errlog.close()
+    assert "MCPDeprecationWarning" not in stderr
+    assert "logging capability is deprecated" not in stderr
 
 
 @pytest.mark.timeout(900)
