@@ -364,6 +364,73 @@ def test_amend_again_on_explicit_num_speakers_mismatch(
     assert settled.amended is False
 
 
+def test_label_changing_amend_persists_names_for_review_across_reload(
+    diarization_home: Path,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """External v0.3.0 repro: k=2 → verified names → k=3 → fresh session."""
+    from talkthrough_mcp.server import get_transcript, label_speakers
+
+    monkeypatch.setenv("TALKTHROUGH_HOME", str(tmp_path / "pending-review-home"))
+    first = pipeline.process_media(
+        str(INTERRUPT_M4A),
+        diarize_speakers=True,
+        num_speakers=2,
+    )
+    label_speakers(
+        first.manifest.job_id,
+        {"S1": "Samantha", "S2": "Daniel"},
+        {"S1": "fixture first voice", "S2": "fixture second voice"},
+    )
+
+    amended = pipeline.process_media(
+        str(INTERRUPT_M4A),
+        diarize_speakers=True,
+        num_speakers=3,
+    )
+    current = amended.manifest.transcript.diarization
+    assert current is not None and current.labels_changed is True
+    assert current.speaker_names is None
+    assert current.speaker_name_evidence is None
+    assert current.speaker_names_pending_review == {
+        "S1": "Samantha",
+        "S2": "Daniel",
+    }
+    assert current.speaker_name_evidence_pending_review == {
+        "S1": "fixture first voice",
+        "S2": "fixture second voice",
+    }
+
+    reloaded = jobs.load_job(first.manifest.job_id).transcript.diarization
+    assert reloaded is not None
+    assert reloaded.speaker_names_pending_review == current.speaker_names_pending_review
+    transcript = get_transcript(first.manifest.job_id)
+    summary = pipeline.summarize(amended)["diarization"]
+    assert transcript["speaker_names_pending_review_note"] == summary[
+        "speaker_names_pending_review_note"
+    ]
+
+    # Returning to k=2 must not erase the unreviewed snapshot. Re-verifying
+    # one current label activates only that identity and leaves the other one
+    # pending for a later decision.
+    pipeline.process_media(
+        str(INTERRUPT_M4A),
+        diarize_speakers=True,
+        num_speakers=2,
+    )
+    reviewed = label_speakers(
+        first.manifest.job_id,
+        {"S1": "Samantha"},
+        {"S1": "re-verified on current k=2 roster"},
+    )
+    assert reviewed["mapping_count"] == 1
+    final = jobs.load_job(first.manifest.job_id).transcript.diarization
+    assert final is not None
+    assert final.speaker_names == {"S1": "Samantha"}
+    assert final.speaker_names_pending_review == {"S2": "Daniel"}
+
+
 def test_explicit_diarize_amends_on_embedding_model_change(
     two_voice: ProcessResult, monkeypatch: pytest.MonkeyPatch
 ) -> None:

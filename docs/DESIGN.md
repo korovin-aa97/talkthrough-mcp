@@ -25,7 +25,7 @@ exact instants.
    │     budget covers the WHOLE recording, head never wins    │
    │     + scale ≤1568px + showinfo pts → t<ms>.jpg            │
    │ 6 dHash dedup (consecutive, Hamming ≤4 → duplicate_of)    │
-   │ 7 RapidOCR over unique frames → ocr_text                  │
+   │ 7 RapidOCR over unique frames → newline-separated box text│
    │ 8 manifest.json                                           │
    └────────────────┬─────────────────────────────────────────┘
                     ▼
@@ -93,6 +93,10 @@ the second call on the same bytes returns the stored summary in milliseconds.
                                                    "last_ms" }],
                                     "speaker_names"?: { "S1": "Alice" },
                                     "speaker_name_evidence"?: { "S1": "frame proof" },
+                                    "speaker_names_pending_review"?: { "S1": "Alice" },
+                                    "speaker_name_evidence_pending_review"?: {
+                                      "S1": "frame proof"
+                                    },
                                     "turns": [[t0_ms, t1_ms, "S1"], …] } },
   "frames": { "count", "unique_count", "cap_hit",
               "items": [{ "ms", "file", "duplicate_of"?, "ocr_text"? }] },
@@ -133,7 +137,13 @@ The whole tool surface is built to keep responses small:
   extraction time — normal serving never re-reads the video.
 - `get_moment` bundles ≤3 frames + the transcript slice for one remark.
 - `search` returns pointers (`t_ms`/`t_wall`/nearest frame), not payloads,
-  capped at 50 hits.
+  capped at 50 hits. A zero-hit word-AND may add one ≤240-character,
+  query-aware adjacent-segment quote; it samples both sides of the boundary
+  and explicitly says when not every matched token fits.
+- Diarized rosters expose at most three OCR `name_candidates` per speaker,
+  each ≤80 characters. The deterministic filter rejects obvious UI chrome,
+  digits, URLs/paths, and long copy; candidates remain unverified hints and
+  never become active names without `label_speakers`.
 - Tool descriptions themselves are budgeted: one-line examples, ≤120 chars
   each (gated by `tests/unit/test_guidance.py`).
 

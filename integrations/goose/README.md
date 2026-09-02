@@ -1,6 +1,6 @@
 # Goose
 
-Server command (stdio): `uvx "talkthrough-mcp[diarization]"`
+Server command (stdio): `uvx --python '>=3.11,<3.14' 'talkthrough-mcp[diarization]'`
 
 Config: `~/.config/goose/config.yaml`
 
@@ -10,7 +10,7 @@ extensions:
     enabled: true
     type: stdio
     cmd: uvx
-    args: ["talkthrough-mcp[diarization]"]
+    args: ["--python", ">=3.11,<3.14", "talkthrough-mcp[diarization]"]
 ```
 
 Optional env vars: TALKTHROUGH_WHISPER_MODEL (default `small`; use `large-v3-turbo` for non-English narration — agents can also pass `model=` per call), TALKTHROUGH_OCR (`off` to disable), TALKTHROUGH_OCR_LANG (on-screen-text script, e.g. `ru`, `ja`, `ko`), TALKTHROUGH_HOME (job store root, default `~/.talkthrough`). Speaker diarization is included but off per call — agents pass `diarize=true` (plus `num_speakers` when known); the minimal server without the diarization engine is `uvx talkthrough-mcp`.

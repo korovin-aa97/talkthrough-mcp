@@ -1,6 +1,6 @@
 # Cline / Roo Code
 
-Server command (stdio): `uvx "talkthrough-mcp[diarization]"`
+Server command (stdio): `uvx --python '>=3.11,<3.14' 'talkthrough-mcp[diarization]'`
 
 Config: `cline_mcp_settings.json (via MCP Servers UI)`
 
@@ -10,6 +10,8 @@ Config: `cline_mcp_settings.json (via MCP Servers UI)`
     "talkthrough": {
       "command": "uvx",
       "args": [
+        "--python",
+        ">=3.11,<3.14",
         "talkthrough-mcp[diarization]"
       ]
     }

@@ -382,6 +382,7 @@ class StraddleHint:
 
     t_ms: int
     quote: str
+    all_tokens_shown: bool = True
 
 
 STRADDLE_QUOTE_MAX_CHARS = 240
@@ -396,6 +397,88 @@ def _fold_for_search(text: str) -> str:
     used.
     """
     return unicodedata.normalize("NFC", text).casefold().replace("ё", "е")
+
+
+def _word_token_positions(words: list[str], tokens: list[str]) -> dict[str, list[int]]:
+    """Map folded query tokens to the display words containing them."""
+    folded_words = [_fold_for_search(word) for word in words]
+    return {
+        token: [index for index, word in enumerate(folded_words) if token in word]
+        for token in tokens
+    }
+
+
+def _word_window(words: list[str], anchors: list[int]) -> str:
+    """Smallest whole-word excerpt covering anchors, with explicit crop marks."""
+    start = min(anchors)
+    end = max(anchors)
+    core = " ".join(words[start : end + 1])
+    return ("… " if start else "") + core + (" …" if end < len(words) - 1 else "")
+
+
+def _anchor_sample(word: str, token: str, budget: int) -> str:
+    """Deterministic fallback for an objectively over-budget anchor word."""
+    if len(word) <= budget:
+        return word
+    content_budget = max(1, budget - 2)
+    folded = _fold_for_search(word)
+    token_at = max(0, folded.find(token))
+    start = max(0, min(len(word) - content_budget, token_at - content_budget // 2))
+    sample = word[start : start + content_budget]
+    return ("…" if start else "") + sample + ("…" if start + content_budget < len(word) else "")
+
+
+def _straddle_quote(first_text: str, second_text: str, tokens: list[str]) -> tuple[str, bool]:
+    """Build the smallest query-aware quote that proves both sides of a boundary."""
+    first_words = first_text.split()
+    second_words = second_text.split()
+    full = " ".join([*first_words, *second_words])
+    if len(full) <= STRADDLE_QUOTE_MAX_CHARS:
+        return full, True
+
+    first_positions = _word_token_positions(first_words, tokens)
+    second_positions = _word_token_positions(second_words, tokens)
+    first_anchors: list[int] = []
+    second_anchors: list[int] = []
+    for token in tokens:
+        in_first = first_positions[token]
+        in_second = second_positions[token]
+        # Shared tokens resolve to the first segment deterministically. Tokens
+        # unique to either side always anchor that side, which is the proof a
+        # prefix-only truncation used to erase.
+        if in_first:
+            first_anchors.append(in_first[0])
+        elif in_second:
+            second_anchors.append(in_second[0])
+
+    # A true cross-boundary match necessarily contributes at least one token
+    # from each side. Keep defensive fallbacks for unusual Unicode splitting.
+    first_anchors = first_anchors or [len(first_words) - 1]
+    second_anchors = second_anchors or [0]
+    first_window = _word_window(first_words, first_anchors)
+    second_window = _word_window(second_words, second_anchors)
+    quote = f"{first_window} {second_window}"
+    if len(quote) <= STRADDLE_QUOTE_MAX_CHARS:
+        folded_quote = _fold_for_search(quote)
+        return quote, all(token in folded_quote for token in tokens)
+
+    # When all token anchors are farther apart than the total budget, show one
+    # deterministic exclusive anchor from each segment and let the caller say
+    # explicitly that this is a sample rather than proof of every token.
+    first_only = next(
+        token for token in tokens if first_positions[token] and not second_positions[token]
+    )
+    second_only = next(
+        token for token in tokens if second_positions[token] and not first_positions[token]
+    )
+    side_budget = (STRADDLE_QUOTE_MAX_CHARS - 1) // 2
+    first_sample = _anchor_sample(
+        first_words[first_positions[first_only][0]], first_only, side_budget
+    )
+    second_sample = _anchor_sample(
+        second_words[second_positions[second_only][0]], second_only, side_budget
+    )
+    return f"{first_sample} {second_sample}"[:STRADDLE_QUOTE_MAX_CHARS], False
 
 
 def search_manifest(
@@ -483,12 +566,20 @@ def straddle_hint(
     for first, second in itertools.pairwise(manifest.transcript.segments):
         if speaker is not None and (first.speaker != speaker or second.speaker != speaker):
             continue
-        combined = _fold_for_search(first.text + " " + second.text)
-        if all(token in combined for token in tokens):
-            quote = " ".join((first.text + " " + second.text).split())
-            if len(quote) > STRADDLE_QUOTE_MAX_CHARS:
-                quote = quote[: STRADDLE_QUOTE_MAX_CHARS - 3].rstrip() + "..."
-            return StraddleHint(t_ms=first.t0_ms, quote=quote)
+        first_folded = _fold_for_search(first.text)
+        second_folded = _fold_for_search(second.text)
+        combined = f"{first_folded} {second_folded}"
+        if (
+            all(token in combined for token in tokens)
+            and not all(token in first_folded for token in tokens)
+            and not all(token in second_folded for token in tokens)
+        ):
+            quote, all_tokens_shown = _straddle_quote(first.text, second.text, tokens)
+            return StraddleHint(
+                t_ms=first.t0_ms,
+                quote=quote,
+                all_tokens_shown=all_tokens_shown,
+            )
     return None
 
 

@@ -95,6 +95,9 @@ def test_ocr_reads_scene_titles(demo: ProcessResult) -> None:
     assert any(OCR_SCENE_WORD.lower() in text.lower() for text in texts), (
         f"no unique frame OCR contains {OCR_SCENE_WORD!r}: {texts}"
     )
+    assert any("\n" in text for text in texts), (
+        "real RapidOCR box boundaries must survive as production-shaped lines"
+    )
 
 
 def test_search_hits_transcript_and_ocr(demo: ProcessResult) -> None:

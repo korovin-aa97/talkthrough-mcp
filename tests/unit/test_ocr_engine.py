@@ -40,5 +40,5 @@ def test_ocr_image_calls_an_img_content_engine_positionally(tmp_path: Path) -> N
     frame.touch()
     engine = _RapidOcrLike("  Build failed  ", "", "exit code 1")
 
-    assert ocr_image(engine, frame) == "Build failed exit code 1"
+    assert ocr_image(engine, frame) == "Build failed\nexit code 1"
     assert engine.seen == [str(frame)]

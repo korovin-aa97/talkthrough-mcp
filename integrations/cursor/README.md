@@ -1,6 +1,6 @@
 # Cursor
 
-Server command (stdio): `uvx "talkthrough-mcp[diarization]"`
+Server command (stdio): `uvx --python '>=3.11,<3.14' 'talkthrough-mcp[diarization]'`
 
 Config: `~/.cursor/mcp.json (or project .cursor/mcp.json)`
 
@@ -10,6 +10,8 @@ Config: `~/.cursor/mcp.json (or project .cursor/mcp.json)`
     "talkthrough": {
       "command": "uvx",
       "args": [
+        "--python",
+        ">=3.11,<3.14",
         "talkthrough-mcp[diarization]"
       ]
     }

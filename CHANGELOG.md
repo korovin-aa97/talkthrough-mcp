@@ -4,6 +4,52 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions follow
 [SemVer](https://semver.org/).
 
+## [0.3.1] — 2026-09-02
+
+A compatibility-and-honesty patch from six externally reproduced findings.
+No tools, prompts, dependencies, or manifest schema versions were added.
+
+### Fixed
+
+- **Verified speaker names survive a label-changing diarization amend for
+  review.** Active names and their evidence move atomically into bounded
+  `speaker_names_pending_review` fields instead of disappearing or being
+  attached to unproven new labels. They remain inactive in search, text, SRT,
+  segments, and the roster until an explicit `label_speakers` review; failed
+  amendments leave the stored manifest byte-identical.
+- **Generated `uvx` launchers select a supported Python.** Every distribution
+  config now prepends `--python ">=3.11,<3.14"`, sourced directly from
+  `pyproject.toml`; released Claude plugin packs still pin their exact matching
+  server (`talkthrough-mcp[diarization]==0.3.1`). Shell snippets quote the
+  range and extras safely, while JSON/TOML/deeplinks keep raw argv values.
+- **Long cross-segment search hints keep evidence from both sides.** The
+  bounded quote is assembled around matched tokens in both adjacent segments
+  with Unicode/`ё→е` search normalization and word-boundary ellipses. If an
+  exceptional anchor set cannot fit, the payload calls it a sample instead of
+  claiming every matched token is visible.
+- **OCR name candidates are production-shaped and more selective.** RapidOCR
+  box boundaries are retained as newline-separated text; search keeps its
+  whitespace semantics. Candidate hints are capped at three strings of at
+  most 80 characters and reject digits, URLs/paths, menu chrome, excessive
+  punctuation, and long UI copy while retaining name-like cased and uncased
+  scripts. They are still never promoted to speaker identities automatically.
+- **MCP SDK 2.x no longer requests the deprecated logging capability.** The
+  former `ctx.info` message is now the first progress notification; structured
+  output, annotations, CLI behavior, eight tools, and six prompts are
+  unchanged.
+- **Cold-start documentation distinguishes environment resolution from media
+  processing.** A new pinned plugin/interpreter environment can fetch the
+  bundled ~80 MB ffmpeg again when no system ffmpeg exists, while shared
+  Whisper/OCR/diarization caches and warm network-free processing remain
+  reusable. Corporate TLS setup now explicitly precedes first processing.
+
+### Compatibility
+
+- Existing 0.1.x–0.3.0 manifests load without migration; the new pending-name
+  fields are additive and omitted when empty.
+- The root checkout `.mcp.json` remains a local `uv run --directory` config;
+  only generated distribution launchers carry the Python selector.
+
 ## [0.3.0] — 2026-08-28
 
 One theme: **verified speaker identity can survive beyond one agent turn**.

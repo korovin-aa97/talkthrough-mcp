@@ -19,11 +19,14 @@ from typing import Any
 import pytest
 from mcp import ClientSession, StdioServerParameters, types
 from mcp.client.stdio import stdio_client
+from tests.conftest import make_manifest
 from tests.integration.fixture_facts import DEMO_MP4, TWO_VOICE_M4A, TWO_VOICE_NUM_SPEAKERS
 
 from talkthrough_mcp import __version__ as package_version
 from talkthrough_mcp import guidance
 from talkthrough_mcp.core import diarize
+from talkthrough_mcp.core.diarize import Diarization, Turn, attribute_segments, speaker_roster
+from talkthrough_mcp.core.manifest import save_manifest
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 PROCESS_TIMEOUT = 600.0
@@ -63,6 +66,8 @@ def _server_params(home: Path) -> StdioServerParameters:
         **os.environ,
         "TALKTHROUGH_HOME": str(home),
         "TALKTHROUGH_WHISPER_MODEL": "tiny",
+        # The SDK 2.x process call must stay clean when warnings are fatal.
+        "PYTHONWARNINGS": "error",
     }
     env.pop("TALKTHROUGH_DIARIZE", None)  # keep the spawned server's defaults canonical
     if diarize.engine_available():
@@ -89,8 +94,10 @@ def _payload(result: types.CallToolResult) -> dict[str, Any]:
 
 async def _run_session(home: Path) -> None:
     diarized_job_id: str | None = None
+    errlog = (home.parent / "talkthrough-server.stderr").open("w+", encoding="utf-8")
     async with (
-        stdio_client(_server_params(home)) as (read, write),
+        stdio_client(_server_params(home), errlog=errlog) as (read, write),
+        # No logging_callback: this is the client-without-logging-capability path.
         ClientSession(read, write) as session,
     ):
         initialized = await session.initialize()
@@ -132,6 +139,7 @@ async def _run_session(home: Path) -> None:
             progress_callback=record_progress,
         )
         assert isinstance(process_result, types.CallToolResult)
+        assert process_result.structured_content, "process_media must keep structured output"
         summary = _payload(process_result)
         job_id = summary["job_id"]
         assert summary["transcript"]["segment_count"] >= 1
@@ -139,6 +147,9 @@ async def _run_session(home: Path) -> None:
         assert summary["wall_clock"]["source"] == "metadata"
         assert summary["transcript"]["preview_segments"], "summary must carry a preview"
         assert progress_updates, "process_media must report progress over MCP"
+        assert progress_updates[0][2] == (
+            f"processing {DEMO_MP4} (local pipeline: ffprobe → whisper → frames → OCR)"
+        )
         assert progress_updates[-1][:2] == (1.0, 1.0)
 
         # 3b. Prompt renders non-empty for the real job and names its tools.
@@ -395,7 +406,67 @@ async def _run_session(home: Path) -> None:
             )
             assert removed["mapping_count"] == 1
 
+    errlog.flush()
+    errlog.seek(0)
+    stderr = errlog.read()
+    errlog.close()
+    assert "MCPDeprecationWarning" not in stderr
+    assert "logging capability is deprecated" not in stderr
+
 
 @pytest.mark.timeout(900)
 def test_mcp_stdio_end_to_end(tmp_path: Path) -> None:
     asyncio.run(_run_session(tmp_path / "talkthrough-home"))
+
+
+async def _run_pending_review_session(home: Path) -> None:
+    manifest = make_manifest()
+    turns = [Turn(0, 5000, "S1"), Turn(5000, 8000, "S2")]
+    manifest.transcript.segments = attribute_segments(manifest.transcript.segments, turns)
+    manifest.transcript.diarization = Diarization(
+        available=True,
+        reason="",
+        detected_num_speakers=2,
+        speakers=speaker_roster(turns),
+        turns=turns,
+        speaker_names_pending_review={"S1": "Samantha", "S2": "Daniel"},
+        speaker_name_evidence_pending_review={
+            "S1": "old fixture order",
+            "S2": "old fixture order",
+        },
+        labels_changed=True,
+    )
+    save_manifest(manifest, home / "jobs" / manifest.job_id)
+
+    async with (
+        stdio_client(_server_params(home)) as (read, write),
+        ClientSession(read, write) as session,
+    ):
+        await session.initialize()
+        transcript = _payload(
+            await session.call_tool("get_transcript", {"job_id": manifest.job_id})
+        )
+        assert transcript["speaker_names_pending_review"] == {
+            "S1": "Samantha",
+            "S2": "Daniel",
+        }
+        assert "not active identities" in transcript["speaker_names_pending_review_note"]
+        assert all("speaker_name" not in segment for segment in transcript["segments"])
+        pending_search = _payload(
+            await session.call_tool(
+                "search",
+                {"job_id": manifest.job_id, "query": "the", "speaker": "samantha"},
+            )
+        )
+        assert pending_search["hits"] == []
+        assert "saved in pending review" in pending_search["note"]
+        jobs_payload = _payload(await session.call_tool("list_jobs", {}))
+        entry = next(job for job in jobs_payload["jobs"] if job["job_id"] == manifest.job_id)
+        assert entry["speaker_names_pending_review_count"] == 2
+
+
+@pytest.mark.timeout(900)
+def test_fresh_mcp_session_serves_pending_review_without_activating_names(
+    tmp_path: Path,
+) -> None:
+    asyncio.run(_run_pending_review_session(tmp_path / "pending-review-home"))

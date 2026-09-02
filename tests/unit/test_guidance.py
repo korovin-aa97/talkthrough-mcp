@@ -10,6 +10,11 @@ byte-identical with the files in ``examples/prompts/`` (no drift).
 from __future__ import annotations
 
 import asyncio
+import base64
+import json
+import re
+import tomllib
+import urllib.parse
 from pathlib import Path
 
 import pytest
@@ -144,22 +149,38 @@ def test_install_buttons_encode_the_batteries_included_command() -> None:
     """Deeplink buttons round-trip to the generated uvx args — which carry the
     [diarization] extra (v0.2.0 decision: one-click installs are batteries-
     included; `uvx talkthrough-mcp` stays the documented minimal path)."""
-    import base64
-    import json
-    import re
-    import urllib.parse
+    from scripts.gen_integrations import (
+        PROJECT_REQUIRES_PYTHON,
+        UVX_ARGS,
+        UVX_PYTHON_ARGS,
+        _install_buttons,
+    )
 
-    from scripts.gen_integrations import UVX_ARGS, _install_buttons
-
-    assert UVX_ARGS == ["talkthrough-mcp[diarization]"]
+    assert UVX_PYTHON_ARGS == ["--python", PROJECT_REQUIRES_PYTHON]
+    assert [*UVX_PYTHON_ARGS, "talkthrough-mcp[diarization]"] == UVX_ARGS
     block = _install_buttons(UVX_ARGS)
     cursor = re.search(r"cursor\.com/en/install-mcp\?name=talkthrough&config=([^)]+)\)", block)
     assert cursor is not None
     decoded = json.loads(base64.b64decode(urllib.parse.unquote(cursor.group(1))))
     assert decoded == {"command": "uvx", "args": UVX_ARGS}
-    vscode = re.search(r"vscode\.dev/redirect/mcp/install\?name=talkthrough&config=([^)&]+)", block)
-    assert vscode is not None
-    assert json.loads(urllib.parse.unquote(vscode.group(1)))["args"] == UVX_ARGS
+    lm_studio = re.search(r"lmstudio\.ai/install-mcp\?name=talkthrough&config=([^)]+)\)", block)
+    assert lm_studio is not None
+    decoded_lm = json.loads(base64.b64decode(urllib.parse.unquote(lm_studio.group(1))))
+    assert decoded_lm == {"command": "uvx", "args": UVX_ARGS}
+    for host in ("vscode.dev", "insiders.vscode.dev"):
+        vscode = re.search(
+            rf"{re.escape(host)}/redirect/mcp/install\?name=talkthrough&config=([^)&]+)",
+            block,
+        )
+        assert vscode is not None
+        payload = json.loads(urllib.parse.unquote(vscode.group(1)))
+        assert payload == {"command": "uvx", "args": UVX_ARGS, "type": "stdio"}
+    kiro = re.search(r"kiro\.dev/launch/mcp/add\?name=talkthrough&config=([^)]+)\)", block)
+    assert kiro is not None
+    assert json.loads(urllib.parse.unquote(kiro.group(1))) == {
+        "command": "uvx",
+        "args": UVX_ARGS,
+    }
     assert "quality=insiders" in block
 
 
@@ -170,18 +191,84 @@ def test_claude_plugin_server_is_pinned_to_its_generated_pack_version() -> None:
 
     from scripts.gen_integrations import (
         CLAUDE_PLUGIN_UVX_ARGS,
+        PROJECT_REQUIRES_PYTHON,
         PROJECT_VERSION,
         UVX_ARGS,
+        UVX_PYTHON_ARGS,
     )
 
-    assert UVX_ARGS == ["talkthrough-mcp[diarization]"]
-    assert [f"talkthrough-mcp[diarization]=={PROJECT_VERSION}"] == CLAUDE_PLUGIN_UVX_ARGS
+    assert [*UVX_PYTHON_ARGS, "talkthrough-mcp[diarization]"] == UVX_ARGS
+    assert [
+        "--python",
+        PROJECT_REQUIRES_PYTHON,
+        f"talkthrough-mcp[diarization]=={PROJECT_VERSION}",
+    ] == CLAUDE_PLUGIN_UVX_ARGS
     plugin_config = json.loads(
         (REPO_ROOT / "integrations" / "claude-code" / ".mcp.json").read_text(
             encoding="utf-8"
         )
     )
     assert plugin_config["mcpServers"]["talkthrough"]["args"] == CLAUDE_PLUGIN_UVX_ARGS
+
+
+def test_generated_uvx_python_range_has_one_canonical_source() -> None:
+    from scripts.gen_integrations import PROJECT_REQUIRES_PYTHON, UVX_PYTHON_ARGS
+
+    project = tomllib.loads((REPO_ROOT / "pyproject.toml").read_text(encoding="utf-8"))[
+        "project"
+    ]
+    assert project["requires-python"] == PROJECT_REQUIRES_PYTHON
+    assert ["--python", project["requires-python"]] == UVX_PYTHON_ARGS
+    generator = (REPO_ROOT / "scripts/gen_integrations.py").read_text(encoding="utf-8")
+    assert project["requires-python"] not in generator
+
+
+def test_distribution_arg_order_and_shell_quoting_are_safe() -> None:
+    from scripts.gen_integrations import (
+        _GIT_SPEC,
+        _PYPI_SPEC,
+        _UVX_ARGS,
+        PROJECT_REQUIRES_PYTHON,
+        UVX_CMDLINE,
+        _shell_quoted,
+    )
+
+    assert _UVX_ARGS["git"] == [
+        "--python",
+        PROJECT_REQUIRES_PYTHON,
+        "--from",
+        _GIT_SPEC,
+        "talkthrough-mcp",
+    ]
+    assert _UVX_ARGS["pypi"] == ["--python", PROJECT_REQUIRES_PYTHON, _PYPI_SPEC]
+    assert _shell_quoted(PROJECT_REQUIRES_PYTHON) == f"'{PROJECT_REQUIRES_PYTHON}'"
+    assert _shell_quoted(_PYPI_SPEC) == f"'{_PYPI_SPEC}'"
+    assert (
+        f"uvx --python '{PROJECT_REQUIRES_PYTHON}' '{_PYPI_SPEC}'"
+    ) == UVX_CMDLINE
+
+
+def test_cold_start_documentation_contract() -> None:
+    readme = (REPO_ROOT / "README.md").read_text(encoding="utf-8")
+    troubleshooting = (REPO_ROOT / "docs/TROUBLESHOOTING.md").read_text(encoding="utf-8")
+    normalized = " ".join(troubleshooting.split())
+
+    assert "two separate stages" in readme
+    assert "~80 MB bundled ffmpeg again" in readme
+    assert "warm, network-free jobs" in readme
+    for fact in (
+        "distinct `uvx` environment",
+        "~80 MB static build again",
+        "observation, not a timing promise",
+        "model caches are shared",
+        "Set `SSL_CERT_FILE`",
+        "Warm processing is network-free",
+        "uv python find",
+        "uv python install 3.12",
+        "uvx --python 3.12",
+        "`>=3.11,<3.14` range from `pyproject.toml`",
+    ):
+        assert fact in normalized
 
 
 def test_claude_plugin_agent_uses_plugin_mcp_tool_namespace() -> None:

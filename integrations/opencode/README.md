@@ -1,6 +1,6 @@
 # OpenCode
 
-Server command (stdio): `uvx "talkthrough-mcp[diarization]"`
+Server command (stdio): `uvx --python '>=3.11,<3.14' 'talkthrough-mcp[diarization]'`
 
 Config: `opencode.json (project) or ~/.config/opencode/opencode.json`
 
@@ -11,6 +11,8 @@ Config: `opencode.json (project) or ~/.config/opencode/opencode.json`
       "type": "local",
       "command": [
         "uvx",
+        "--python",
+        ">=3.11,<3.14",
         "talkthrough-mcp[diarization]"
       ],
       "enabled": true

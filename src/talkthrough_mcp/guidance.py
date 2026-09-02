@@ -29,7 +29,7 @@ speech locally (whisper), extracts scene-change keyframes, OCRs on-screen text, 
 the wall-clock start time, and (opt-in) labels who said what via local speaker diarization. \
 Returns a compact summary (job_id, media info, wall_clock, transcript preview, speaker \
 roster when diarized) — full data stays on disk and is served lazily by the other tools. \
-Idempotent by content hash: re-calling on an already-processed file returns instantly. For MULTI-PERSON recordings (meetings, interviews, calls) diarize=true is part of a proper analysis — pass it even when the user only asks for a summary. num_speakers is a target the clusterer may not reach, not a constraint — the payload says when a re-run changed nothing (labels_changed).
+Idempotent by content hash: re-calling on an already-processed file returns instantly. For MULTI-PERSON recordings (meetings, interviews, calls) diarize=true is part of a proper analysis — pass it even when the user only asks for a summary. num_speakers is a target the clusterer may not reach, not a constraint — the payload says when a re-run changed nothing (labels_changed). If an amend changes the labels, verified names become bounded pending-review evidence rather than active identities; re-check the new roster and confirm or remove them with label_speakers.
 When NOT to use: to re-fetch data you already processed (use the retrieval tools), or for \
 URLs — local file paths only.
 Examples:
@@ -37,7 +37,7 @@ Examples:
 - meetings: model="large-v3-turbo" + vocabulary=<attendees, terms> + num_speakers=N — turbo's extra cost is trivial
 - process_media(path="/tmp/standup.m4a") — audio-only: transcript tools work, frame tools will error
 - process_media(path="/rec/panel.mov", diarize=true, num_speakers=4) — headcount known? ALWAYS pass it: best accuracy
-- job already processed + diarize=true → amend re-runs ONLY diarization (whisper reused; long files: minutes)
+- relabel amend → saved names move to pending review; re-check the roster before confirming them
 - error mentions [diarization] → the extra is missing: install via uvx "talkthrough-mcp[diarization]"
 - know the attendees? process_media(path=..., vocabulary="Anastasia, Evgenii, OKR") — names+jargon survive STT
 - user: "analyze/summarize this meeting" → include diarize=true — speaker structure is not optional extra credit
@@ -54,7 +54,8 @@ Retrieve the transcript of a processed job, lazily and paginated. Formats: "segm
 (default — seq, t_ms, t_wall when known, speaker when diarized, text), "text" (plain \
 prose; "S1:" prefixes at speaker changes), "srt" (subtitles, speaker-prefixed cues). \
 Diarized jobs also return the roster, attribution_precision, saved speaker_name values, \
-and raw OCR name_candidates. Raw S<n> labels remain canonical. Responses \
+raw OCR name_candidates, and bounded pending-review names after a relabel. Pending names \
+are evidence to re-check, never active identities. Raw S<n> labels remain canonical. Responses \
 are capped (~8k tokens): when truncated=true, continue from the returned next_start_ms.
 When NOT to use: to find one keyword (use search) or to inspect one moment with visuals \
 (use get_moment).
@@ -71,7 +72,7 @@ Examples:
 - correlate speech with logs: each segment's t_wall lines up with your log timestamps
 - no speaker fields on a meeting job → re-run process_media with diarize=true (adds them without re-transcribing)
 - attribution_precision="segment" → force=true+diarize=true is required for exact word boundaries
-- speaker_name is verified; name_candidates are unverified OCR hints, never identities
+- pending-review names are inactive after relabel; verify the current roster before confirming them
 - anti-example: "where did they mention checkout?" → search(job_id, "checkout"), not full paging
 - anti-example: screenshots around a remark → get_moment(job_id, start_ms, end_ms)
 """,
@@ -151,7 +152,8 @@ Persist VERIFIED human-readable names for anonymous S1/S2/… labels on one diar
 `evidence` (max 500 characters per label) records why the mapping is trusted. Raw labels \
 remain canonical in JSON; names appear separately and in text/SRT display. The write is \
 atomic, locked, local, and idempotent. OCR name_candidates are raw hints only and are never \
-saved automatically.
+saved automatically. A relabelled job can carry pending-review names; an explicit labels patch \
+confirms, replaces, or removes only the touched pending entries.
 When NOT to use: before diarization, or when a name is only a guess without human/screen evidence.
 Examples:
 - label_speakers(job_id="...", labels={"S1":"Vera"}) — save one verified mapping
@@ -166,6 +168,7 @@ Examples:
 - name_candidates may be UI text or another person's name → inspect frames before deciding
 - unknown label or a name over 100 characters → error lists the valid roster labels
 - fresh session: get_transcript returns saved names; do not infer the mapping again
+- pending-review S1 after relabel → inspect the current S1, then confirm or remove it explicitly
 - anti-example: uncertain identity → keep S<n> anonymous until evidence verifies the name
 """,
     "extract_frame": """\
@@ -456,7 +459,9 @@ them, and that is fine.
    homophones lie (spoken "profit" vs on-screen "Prophet") — trust
    OCR/frames over the transcript for names. State the mapping first (e.g.
    `S1 = Vera, S2 = Tom, S3 = unidentified`) — never guess beyond the
-   evidence.
+   evidence. If the header carries speaker_names_pending_review, those names
+   came from an older roster and are NOT active identities: re-check each one
+   against the current roster before confirming or removing it.
 5. Persist every defensible mapping with label_speakers(job_id="{job_id}",
    labels={{"S1":"<name>"}}, evidence={{"S1":"<intro, frame, or attendee proof>"}}).
    Never save OCR name_candidates directly: they are raw hints that may be UI

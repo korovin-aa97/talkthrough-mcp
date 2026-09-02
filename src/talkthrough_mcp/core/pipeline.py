@@ -14,10 +14,13 @@ No LLM anywhere — the calling agent brings the intelligence. Stages:
 from __future__ import annotations
 
 import contextlib
+import copy
 import logging
 import os
+import re
 import shutil
 import time
+import unicodedata
 from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -27,7 +30,7 @@ from typing import Any
 from .. import __version__
 from . import audio, dedup, diarize, frames, jobs, ocr, stt
 from .diarize import AmendReason, Diarization
-from .errors import ValidationError
+from .errors import ToolFailureError, ValidationError
 from .ffmpeg import ffmpeg_version
 from .manifest import (
     FRAMES_DIR_NAME,
@@ -386,10 +389,21 @@ def _amend_diarization(
     tool_timeout = max(600, int(manifest.media.duration_s * 4) + 120)
     wav_path = directory / "audio.wav"
     before = _labels_snapshot(manifest.transcript)
+    previous_transcript = copy.deepcopy(manifest.transcript)
     previous_diarization = manifest.transcript.diarization
     previous_names = dict(previous_diarization.speaker_names or {}) if previous_diarization else {}
     previous_evidence = (
         dict(previous_diarization.speaker_name_evidence or {}) if previous_diarization else {}
+    )
+    previous_pending_names = (
+        dict(previous_diarization.speaker_names_pending_review or {})
+        if previous_diarization
+        else {}
+    )
+    previous_pending_evidence = (
+        dict(previous_diarization.speaker_name_evidence_pending_review or {})
+        if previous_diarization
+        else {}
     )
     report("extracting audio", 0.10)
     try:
@@ -398,6 +412,17 @@ def _amend_diarization(
     finally:
         wav_path.unlink(missing_ok=True)
     diarization = manifest.transcript.diarization
+    if diarization is None or not diarization.available:
+        # An amend is a mutation of durable, user-reviewed data. If its
+        # engine fails after construction, retain the exact stored transcript
+        # and skip the manifest write just like the construction fail-fast
+        # path; neither active nor pending identities may be partially lost.
+        manifest.transcript = previous_transcript
+        reason = diarization.reason if diarization is not None else "no diarization result"
+        raise ToolFailureError(
+            "diarization amend failed; the stored transcript, labels, and speaker names "
+            f"were kept unchanged: {reason}"
+        )
     if diarization is not None and diarization.available:
         # outcome, not attempt (the ProcessResult.amended rule): a re-run that
         # converged on the same labels must say so instead of reading as a fix
@@ -406,6 +431,22 @@ def _amend_diarization(
         if diarization.labels_changed is False:
             diarization.speaker_names = previous_names or None
             diarization.speaker_name_evidence = previous_evidence or None
+            diarization.speaker_names_pending_review = previous_pending_names or None
+            diarization.speaker_name_evidence_pending_review = (
+                previous_pending_evidence or None
+            )
+        elif previous_names:
+            # Keep only the most recent unreviewed mapping. Active identities
+            # are deliberately not carried onto changed labels.
+            diarization.speaker_names_pending_review = previous_names
+            diarization.speaker_name_evidence_pending_review = previous_evidence or None
+        else:
+            # A second amend before review must not erase the saved mapping
+            # merely because there are no active names left to move.
+            diarization.speaker_names_pending_review = previous_pending_names or None
+            diarization.speaker_name_evidence_pending_review = (
+                previous_pending_evidence or None
+            )
     report("writing manifest", 0.99)
     save_manifest(manifest, directory)
     report("done", 1.0)
@@ -637,7 +678,43 @@ SUBSTANTIAL_TALK_MS = 30_000
 NAME_CANDIDATE_WINDOW_MS = 30_000
 NAME_CANDIDATE_FRAME_LIMIT = 3
 NAME_CANDIDATE_LIMIT = 3
-NAME_CANDIDATE_MAX_CHARS = 120
+NAME_CANDIDATE_MAX_CHARS = 80
+_NAME_PARTICLES = frozenset({"al", "bin", "da", "de", "del", "la", "van", "von"})
+_UI_CHROME_WORDS = frozenset(
+    {
+        "build",
+        "chat",
+        "code",
+        "dashboard",
+        "edit",
+        "error",
+        "failed",
+        "file",
+        "help",
+        "leave",
+        "login",
+        "mute",
+        "navigate",
+        "page",
+        "participants",
+        "people",
+        "recording",
+        "refactor",
+        "run",
+        "scene",
+        "settings",
+        "share",
+        "tools",
+        "unmute",
+        "vcs",
+        "view",
+        "window",
+    }
+)
+_URL_OR_PATH = re.compile(
+    r"(?:https?://|www\.|[A-Za-z]:\\|[/\\]|\b[^\s]+\.(?:com|org|net|io|dev|py|js|ts|java)\b)",
+    re.IGNORECASE,
+)
 # Above this, an unconstrained cluster count stops being merely unreliable
 # and becomes implausible for one recording (tester report, 2026-07-27: a
 # large meeting "detected" 123 speakers) — the note escalates accordingly.
@@ -652,6 +729,48 @@ _AMEND_HONESTY = (
     "diarization stage is re-run (transcription is reused); on long "
     "recordings this still takes minutes"
 )
+
+
+def pending_review_note(diarization: Diarization) -> str | None:
+    """One byte-identical warning for every surface serving pending names."""
+    count = len(diarization.speaker_names_pending_review or {})
+    if not count:
+        return None
+    return (
+        f"{count} saved speaker name(s) moved to pending review because diarization "
+        "changed the labels; they are not active identities. Re-check the current "
+        "roster and confirm or remove them with label_speakers."
+    )
+
+
+def pending_review_payload(diarization: Diarization) -> dict[str, Any]:
+    """Bounded pending-review evidence, never mixed into the active roster."""
+    names = diarization.speaker_names_pending_review or {}
+    if not names:
+        return {}
+    roster_order = [speaker.label for speaker in diarization.speakers]
+    ordered_labels = [label for label in roster_order if label in names]
+    ordered_labels.extend(sorted(label for label in names if label not in ordered_labels))
+    served_labels = ordered_labels[:SUMMARY_ROSTER_CAP]
+    hidden = len(ordered_labels) - len(served_labels)
+    evidence = diarization.speaker_name_evidence_pending_review or {}
+    note = pending_review_note(diarization)
+    assert note is not None
+    return {
+        "speaker_names_pending_review": {label: names[label] for label in served_labels},
+        **(
+            {
+                "speaker_name_evidence_pending_review": {
+                    label: evidence[label] for label in served_labels if label in evidence
+                }
+            }
+            if any(label in evidence for label in served_labels)
+            else {}
+        ),
+        "speaker_names_pending_review_total": len(ordered_labels),
+        **({"speaker_names_pending_review_truncated": hidden} if hidden else {}),
+        "speaker_names_pending_review_note": note,
+    }
 
 
 def substantial_speaker_count(diarization: Diarization) -> int:
@@ -765,7 +884,7 @@ def speaker_name(diarization: Diarization | None, label: str | None) -> str | No
 
 
 def _name_candidates(manifest: Manifest, at_ms: int) -> list[dict[str, Any]]:
-    """Bounded raw OCR hints near a speaker's longest turn; never identities."""
+    """Bounded name-like OCR hints near a longest turn; never identities."""
     if not manifest.media.has_video or not manifest.caps.ocr:
         return []
     nearby = [
@@ -776,13 +895,60 @@ def _name_candidates(manifest: Manifest, at_ms: int) -> list[dict[str, Any]]:
     nearby.sort(key=lambda frame: (abs(frame.ms - at_ms), frame.ms))
     candidates: list[dict[str, Any]] = []
     seen: set[str] = set()
+
+    def candidate_key(line: str) -> str:
+        folded = unicodedata.normalize("NFKC", line).casefold()
+        return " ".join(
+            "".join(character if character.isalnum() else " " for character in folded).split()
+        )
+
+    def name_like(line: str) -> bool:
+        if len(line) > NAME_CANDIDATE_MAX_CHARS or any(char.isdigit() for char in line):
+            return False
+        if _URL_OR_PATH.search(line):
+            return False
+        words = line.split()
+        if not 1 <= len(words) <= 5:
+            return False
+        alpha_count = sum(char.isalpha() for char in line)
+        punctuation_count = sum(unicodedata.category(char).startswith("P") for char in line)
+        if not alpha_count or punctuation_count > max(2, alpha_count // 3):
+            return False
+        key_words = candidate_key(line).split()
+        chrome_count = sum(word in _UI_CHROME_WORDS for word in key_words)
+        if chrome_count == len(key_words) or chrome_count >= 2:
+            return False
+
+        cased_words = [
+            word
+            for word in words
+            if any(char.isalpha() and char.lower() != char.upper() for char in word)
+        ]
+        if not cased_words:
+            return True  # Arabic/CJK and other scripts without letter case.
+        cased_letters = [
+            char
+            for char in line
+            if char.isalpha() and char.lower() != char.upper()
+        ]
+        if all(char.isupper() for char in cased_letters):
+            return True
+        for word in cased_words:
+            letters = [char for char in word if char.isalpha()]
+            if not letters:
+                continue
+            if candidate_key(word) in _NAME_PARTICLES:
+                continue
+            if not letters[0].isupper():
+                return False
+        return True
+
     for frame in nearby[:NAME_CANDIDATE_FRAME_LIMIT]:
         for raw_line in (frame.ocr_text or "").splitlines():
             line = " ".join(raw_line.split()).strip()
-            if not line or not any(character.isalpha() for character in line):
+            if not line or not name_like(line):
                 continue
-            line = line[:NAME_CANDIDATE_MAX_CHARS].rstrip()
-            folded = line.casefold()
+            folded = candidate_key(line)
             if folded in seen:
                 continue
             seen.add(folded)
@@ -876,6 +1042,7 @@ def _summarize_diarization(
         payload["amend_reason"] = diarization.amend_reason
     if diarization.requested_num_speakers is not None:
         payload["requested_num_speakers"] = diarization.requested_num_speakers
+    payload.update(pending_review_payload(diarization))
     noop = amend_noop_note(diarization)
     if noop is not None:
         payload["amend_note"] = noop

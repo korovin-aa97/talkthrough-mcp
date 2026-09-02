@@ -50,6 +50,8 @@ def apply_speaker_label_patch(
 
     names = dict(diarization.speaker_names or {})
     saved_evidence = dict(diarization.speaker_name_evidence or {})
+    pending_names = dict(diarization.speaker_names_pending_review or {})
+    pending_evidence = dict(diarization.speaker_name_evidence_pending_review or {})
     validated_names: dict[str, str | None] = {}
     for label, raw_value in label_patch.items():
         if raw_value is not None and not isinstance(raw_value, str):
@@ -103,5 +105,16 @@ def apply_speaker_label_patch(
             saved_evidence[label] = evidence_value
 
     saved_evidence = {label: value for label, value in saved_evidence.items() if label in names}
+    # A label present in the explicit name patch has been reviewed, whether
+    # the outcome is confirmation, replacement, or removal. Evidence-only
+    # edits do not implicitly review a pending identity.
+    for label in label_patch:
+        pending_names.pop(label, None)
+        pending_evidence.pop(label, None)
+    pending_evidence = {
+        label: value for label, value in pending_evidence.items() if label in pending_names
+    }
     diarization.speaker_names = names or None
     diarization.speaker_name_evidence = saved_evidence or None
+    diarization.speaker_names_pending_review = pending_names or None
+    diarization.speaker_name_evidence_pending_review = pending_evidence or None

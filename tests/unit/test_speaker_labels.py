@@ -96,3 +96,35 @@ def test_empty_final_mapping_serializes_as_absent_fields() -> None:
     payload = diarization.to_dict()
     assert "speaker_names" not in payload
     assert "speaker_name_evidence" not in payload
+
+
+def test_explicit_label_patch_reviews_only_the_touched_pending_entries() -> None:
+    diarization = _diarization()
+    diarization.speaker_names_pending_review = {"S1": "Vera", "S2": "Tom"}
+    diarization.speaker_name_evidence_pending_review = {
+        "S1": "old intro",
+        "S2": "old name plate",
+    }
+    apply_speaker_label_patch(
+        diarization,
+        {"S1": "Vera"},
+        {"S1": "re-verified against the current roster"},
+    )
+    assert diarization.speaker_names == {"S1": "Vera"}
+    assert diarization.speaker_name_evidence == {
+        "S1": "re-verified against the current roster"
+    }
+    assert diarization.speaker_names_pending_review == {"S2": "Tom"}
+    assert diarization.speaker_name_evidence_pending_review == {"S2": "old name plate"}
+
+    apply_speaker_label_patch(diarization, {"S2": None})
+    assert diarization.speaker_names_pending_review is None
+    assert diarization.speaker_name_evidence_pending_review is None
+
+
+def test_evidence_only_patch_does_not_claim_pending_identity_was_reviewed() -> None:
+    diarization = _diarization()
+    diarization.speaker_names = {"S1": "Vera"}
+    diarization.speaker_names_pending_review = {"S2": "Tom"}
+    apply_speaker_label_patch(diarization, {}, {"S1": "new proof"})
+    assert diarization.speaker_names_pending_review == {"S2": "Tom"}

@@ -1,6 +1,6 @@
 # Gemini CLI
 
-Server command (stdio): `uvx "talkthrough-mcp[diarization]"`
+Server command (stdio): `uvx --python '>=3.11,<3.14' 'talkthrough-mcp[diarization]'`
 
 Config: `~/.gemini/settings.json`
 
@@ -10,6 +10,8 @@ Config: `~/.gemini/settings.json`
     "talkthrough": {
       "command": "uvx",
       "args": [
+        "--python",
+        ">=3.11,<3.14",
         "talkthrough-mcp[diarization]"
       ]
     }

@@ -27,7 +27,9 @@ them, and that is fine.
    homophones lie (spoken "profit" vs on-screen "Prophet") — trust
    OCR/frames over the transcript for names. State the mapping first (e.g.
    `S1 = Vera, S2 = Tom, S3 = unidentified`) — never guess beyond the
-   evidence.
+   evidence. If the header carries speaker_names_pending_review, those names
+   came from an older roster and are NOT active identities: re-check each one
+   against the current roster before confirming or removing it.
 5. Persist every defensible mapping with label_speakers(job_id="<job_id>",
    labels={"S1":"<name>"}, evidence={"S1":"<intro, frame, or attendee proof>"}).
    Never save OCR name_candidates directly: they are raw hints that may be UI

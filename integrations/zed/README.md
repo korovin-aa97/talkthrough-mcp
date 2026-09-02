@@ -1,6 +1,6 @@
 # Zed
 
-Server command (stdio): `uvx "talkthrough-mcp[diarization]"`
+Server command (stdio): `uvx --python '>=3.11,<3.14' 'talkthrough-mcp[diarization]'`
 
 Config: `settings.json (Zed)`
 
@@ -12,6 +12,8 @@ Config: `settings.json (Zed)`
       "command": {
         "path": "uvx",
         "args": [
+          "--python",
+          ">=3.11,<3.14",
           "talkthrough-mcp[diarization]"
         ]
       }

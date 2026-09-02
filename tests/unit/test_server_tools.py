@@ -345,6 +345,39 @@ def test_get_transcript_serves_amend_outcome_and_noop_note(isolated_home: Path) 
     assert "labels_changed" not in fresh  # fresh runs never set it
 
 
+def test_pending_review_payload_and_note_match_summary_and_transcript(
+    isolated_home: Path,
+) -> None:
+    from talkthrough_mcp.core import pipeline
+    from talkthrough_mcp.server import get_transcript, list_jobs
+
+    manifest = _diarize(make_manifest())
+    diarization = manifest.transcript.diarization
+    assert diarization is not None
+    diarization.labels_changed = True
+    diarization.speaker_names_pending_review = {"S1": "Vera", "S2": "Tom"}
+    diarization.speaker_name_evidence_pending_review = {
+        "S1": "old intro",
+        "S2": "old name plate",
+    }
+    job_id = _store(manifest)
+    transcript = get_transcript(job_id)
+    summary = pipeline._summarize_diarization(diarization)
+    assert transcript["speaker_names_pending_review_note"] == summary[
+        "speaker_names_pending_review_note"
+    ]
+    assert transcript["speaker_names_pending_review"] == {"S1": "Vera", "S2": "Tom"}
+    assert transcript["speaker_name_evidence_pending_review"] == {
+        "S1": "old intro",
+        "S2": "old name plate",
+    }
+    assert transcript["speaker_names_pending_review_total"] == 2
+    assert all("speaker_name" not in segment for segment in transcript["segments"])
+    assert "Vera" not in get_transcript(job_id, format="text")["text"]
+    entry = next(item for item in list_jobs()["jobs"] if item["job_id"] == job_id)
+    assert entry["speaker_names_pending_review_count"] == 2
+
+
 def test_escalation_note_survives_a_noop_amend_on_the_wire(isolated_home: Path) -> None:
     """The F2 trap: a useless amend used to SILENCE the over-detection
     warning — the roster it warned about is still being served, so the
@@ -374,6 +407,29 @@ def test_search_zero_hit_multiword_respects_the_speaker_filter(
     assert "ocr hits are excluded" in payload["note"]  # 0.2.2 note survives, joined
     assert "no single segment contains ALL the words" in payload["note"]
     assert "t_ms=" not in payload["note"]  # segments 2|3 are S1|S2 — not S1's pair
+
+
+def test_search_labels_an_over_budget_straddle_quote_as_a_sample(
+    isolated_home: Path,
+) -> None:
+    from talkthrough_mcp.server import search
+
+    manifest = make_manifest()
+    segment_type = type(manifest.transcript.segments[0])
+    manifest.transcript.segments = [
+        segment_type(
+            seq=1,
+            t0_ms=0,
+            t1_ms=1000,
+            text="alpha " + "middle " * 100 + "common",
+        ),
+        segment_type(seq=2, t0_ms=1000, t1_ms=2000, text="common omega"),
+    ]
+    payload = search(_store(manifest), "alpha common omega")
+    assert payload["hits"] == []
+    assert "not all matched tokens fit" in payload["note"]
+    assert "'alpha omega'" in payload["note"]
+    assert len(payload["note"]) < 500
 
 
 # --- v0.3.0 durable speaker names --------------------------------------------
@@ -491,23 +547,58 @@ def test_unknown_saved_name_returns_bounded_honesty_note(isolated_home: Path) ->
     assert "roster labels: S1-S2" in payload["note"]
 
 
-def test_name_candidates_are_bounded_deduplicated_raw_ocr_hints(
+def test_pending_review_name_is_not_an_active_search_identity(isolated_home: Path) -> None:
+    from talkthrough_mcp.server import search
+
+    manifest = _diarize(make_manifest())
+    diarization = manifest.transcript.diarization
+    assert diarization is not None
+    diarization.speaker_names_pending_review = {"S1": "Vera"}
+    payload = search(_store(manifest), "dashboard", speaker="vera")
+    assert payload["hits"] == []
+    assert "saved in pending review" in payload["note"]
+    assert "not an active identity" in payload["note"]
+
+
+def test_pending_review_payload_is_roster_capped(isolated_home: Path) -> None:
+    from talkthrough_mcp.core import pipeline
+
+    manifest = _dusty_threshold(make_manifest())
+    diarization = manifest.transcript.diarization
+    assert diarization is not None
+    diarization.speaker_names_pending_review = {
+        f"S{index}": f"Name {index}" for index in range(1, pipeline.SUMMARY_ROSTER_CAP + 4)
+    }
+    payload = pipeline.pending_review_payload(diarization)
+    assert len(payload["speaker_names_pending_review"]) == pipeline.SUMMARY_ROSTER_CAP
+    assert payload["speaker_names_pending_review_total"] == pipeline.SUMMARY_ROSTER_CAP + 3
+    assert payload["speaker_names_pending_review_truncated"] == 3
+
+
+def test_name_candidates_are_bounded_deduplicated_name_like_ocr_hints(
     isolated_home: Path,
 ) -> None:
+    from talkthrough_mcp.core import pipeline
     from talkthrough_mcp.server import get_transcript
 
     manifest = _diarize(make_manifest())
-    manifest.frames.items[0].ocr_text = "Vera Smith\nVERA SMITH\n12345"
-    manifest.frames.items[2].ocr_text = "Product Lead\n" + "A" * 140
+    manifest.frames.items[0].ocr_text = (
+        "Vera Smith\nVERA-SMITH\nИрина Петрова\n张伟\n12345\n"  # noqa: RUF001
+        "File Edit View Navigate Code Refactor Run Tools VCS Window Help"
+    )
+    manifest.frames.items[2].ocr_text = "Élodie Martin\nProduct Lead\n" + "A" * 81
     payload = get_transcript(_store(manifest))
     candidates = payload["speakers"][0]["name_candidates"]
     assert candidates[0] == {"text": "Vera Smith", "frame_ms": 0}
-    assert len(candidates) == 3
-    assert len({item["text"].casefold() for item in candidates}) == len(candidates)
-    assert all(item["text"] != "12345" for item in candidates)
+    assert candidates == [
+        {"text": "Vera Smith", "frame_ms": 0},
+        {"text": "Ирина Петрова", "frame_ms": 0},
+        {"text": "张伟", "frame_ms": 0},
+    ]
+    assert len(candidates) == pipeline.NAME_CANDIDATE_LIMIT
     second = payload["speakers"][1]["name_candidates"]
     assert len(second) <= 3
-    assert all(len(item["text"]) <= 120 for item in second)
+    assert all(len(item["text"]) <= pipeline.NAME_CANDIDATE_MAX_CHARS for item in second)
     assert all(any(character.isalpha() for character in item["text"]) for item in second)
 
     audio = _diarize(make_manifest(job_id="fedcba9876543210", kind="audio"))
@@ -518,6 +609,63 @@ def test_name_candidates_are_bounded_deduplicated_raw_ocr_hints(
     no_ocr.caps = replace(no_ocr.caps, ocr=False)
     no_ocr_speakers = get_transcript(_store(no_ocr))["speakers"]
     assert all("name_candidates" not in entry for entry in no_ocr_speakers)
+
+
+@pytest.mark.parametrize(
+    "line",
+    ["Vera Smith", "MARTIN DUBOIS", "Ирина Петрова", "Élodie Martin", "张伟", "محمد علي"],
+)
+def test_name_candidate_filter_accepts_names_across_scripts(line: str) -> None:
+    from talkthrough_mcp.core.pipeline import _name_candidates
+
+    manifest = make_manifest()
+    manifest.frames.items[0].ocr_text = line
+    manifest.frames.items[2].ocr_text = None
+    manifest.frames.items[3].ocr_text = None
+    assert _name_candidates(manifest, 0) == [{"text": line, "frame_ms": 0}]
+
+
+@pytest.mark.parametrize(
+    "line",
+    [
+        "File Edit View Navigate Code Refactor Run Tools VCS Window Help",
+        "Participants Chat Share Leave",
+        "10:42",
+        "https://example.com/alex",
+        r"C:\\Users\\alex\\project.py",
+        "this is a long slide sentence explaining the quarterly product roadmap",
+        "A" * 81,
+    ],
+)
+def test_name_candidate_filter_rejects_ui_chrome_paths_and_long_text(line: str) -> None:
+    from talkthrough_mcp.core.pipeline import _name_candidates
+
+    manifest = make_manifest()
+    manifest.frames.items[0].ocr_text = line
+    manifest.frames.items[2].ocr_text = None
+    manifest.frames.items[3].ocr_text = None
+    assert _name_candidates(manifest, 0) == []
+
+
+def test_old_flat_ocr_payload_does_not_become_a_long_name_candidate() -> None:
+    from talkthrough_mcp.core.pipeline import _name_candidates
+
+    manifest = make_manifest()
+    manifest.frames.items[0].ocr_text = (
+        "Vera Smith File Edit View Navigate Code Refactor Run Tools Window Help"
+    )
+    manifest.frames.items[2].ocr_text = None
+    manifest.frames.items[3].ocr_text = None
+    assert _name_candidates(manifest, 0) == []
+
+
+def test_search_whitespace_semantics_survive_ocr_line_boundaries() -> None:
+    from talkthrough_mcp.core.manifest import search_manifest
+
+    manifest = make_manifest()
+    manifest.frames.items[0].ocr_text = "Build failed\nExit code"
+    hits = search_manifest(manifest, "build code")
+    assert [hit.source for hit in hits] == ["ocr"]
 
 
 def test_concurrent_label_patches_compose_under_the_job_lock(isolated_home: Path) -> None:

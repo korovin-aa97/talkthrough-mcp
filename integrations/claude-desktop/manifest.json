@@ -2,7 +2,7 @@
   "manifest_version": "0.2",
   "name": "talkthrough",
   "display_name": "Talkthrough — narrated recordings for your agent",
-  "version": "0.3.0",
+  "version": "0.3.1",
   "description": "Turn narrated screen recordings into structured evidence: local Whisper transcript, scene keyframes, OCR, wall-clock anchoring. Record, talk — Claude writes the bug report.",
   "author": {
     "name": "korovin-aa97",
@@ -16,6 +16,8 @@
     "mcp_config": {
       "command": "uvx",
       "args": [
+        "--python",
+        ">=3.11,<3.14",
         "talkthrough-mcp[diarization]"
       ],
       "env": {

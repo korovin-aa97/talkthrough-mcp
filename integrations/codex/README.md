@@ -1,13 +1,13 @@
 # OpenAI Codex CLI
 
-Server command (stdio): `uvx "talkthrough-mcp[diarization]"`
+Server command (stdio): `uvx --python '>=3.11,<3.14' 'talkthrough-mcp[diarization]'`
 
 Config: `~/.codex/config.toml (or project-scoped .codex/config.toml in trusted projects)`
 
 ```toml
 [mcp_servers.talkthrough]
 command = "uvx"
-args = ["talkthrough-mcp[diarization]"]
+args = ["--python", ">=3.11,<3.14", "talkthrough-mcp[diarization]"]
 ```
 
 Skills: this repo ships the talkthrough skill at `.agents/skills/talkthrough/` — Codex discovers it automatically inside a checkout; for global use copy it to `~/.agents/skills/` and invoke with `$talkthrough`.

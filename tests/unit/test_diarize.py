@@ -186,6 +186,29 @@ def test_diarization_serializes_speaker_names_when_present() -> None:
     assert rebuilt.speaker_name_evidence == {"S1": "introduced herself at 1200 ms"}
 
 
+def test_diarization_round_trips_pending_review_names_and_omits_empty_maps() -> None:
+    diarization = make_diarization()
+    diarization.speaker_names_pending_review = {"S1": "Alice", "S2": "Боб"}
+    diarization.speaker_name_evidence_pending_review = {"S1": "intro at 1200 ms"}
+    payload = diarization.to_dict()
+    assert payload["speaker_names_pending_review"] == {"S1": "Alice", "S2": "Боб"}
+    assert payload["speaker_name_evidence_pending_review"] == {
+        "S1": "intro at 1200 ms"
+    }
+    rebuilt = Diarization.from_dict(payload)
+    assert rebuilt.speaker_names_pending_review == {"S1": "Alice", "S2": "Боб"}
+    assert rebuilt.speaker_name_evidence_pending_review == {"S1": "intro at 1200 ms"}
+
+    payload["speaker_names_pending_review"] = {}
+    payload["speaker_name_evidence_pending_review"] = {}
+    empty = Diarization.from_dict(payload)
+    assert empty.speaker_names_pending_review is None
+    assert empty.speaker_name_evidence_pending_review is None
+    serialized = empty.to_dict()
+    assert "speaker_names_pending_review" not in serialized
+    assert "speaker_name_evidence_pending_review" not in serialized
+
+
 def test_diarization_round_trips_amend_outcome_fields() -> None:
     """Outcome fields serialize only when set, preserving legacy manifests."""
     diarization = make_diarization()
