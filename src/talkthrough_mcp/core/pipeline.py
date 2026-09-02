@@ -17,8 +17,10 @@ import contextlib
 import copy
 import logging
 import os
+import re
 import shutil
 import time
+import unicodedata
 from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -676,7 +678,43 @@ SUBSTANTIAL_TALK_MS = 30_000
 NAME_CANDIDATE_WINDOW_MS = 30_000
 NAME_CANDIDATE_FRAME_LIMIT = 3
 NAME_CANDIDATE_LIMIT = 3
-NAME_CANDIDATE_MAX_CHARS = 120
+NAME_CANDIDATE_MAX_CHARS = 80
+_NAME_PARTICLES = frozenset({"al", "bin", "da", "de", "del", "la", "van", "von"})
+_UI_CHROME_WORDS = frozenset(
+    {
+        "build",
+        "chat",
+        "code",
+        "dashboard",
+        "edit",
+        "error",
+        "failed",
+        "file",
+        "help",
+        "leave",
+        "login",
+        "mute",
+        "navigate",
+        "page",
+        "participants",
+        "people",
+        "recording",
+        "refactor",
+        "run",
+        "scene",
+        "settings",
+        "share",
+        "tools",
+        "unmute",
+        "vcs",
+        "view",
+        "window",
+    }
+)
+_URL_OR_PATH = re.compile(
+    r"(?:https?://|www\.|[A-Za-z]:\\|[/\\]|\b[^\s]+\.(?:com|org|net|io|dev|py|js|ts|java)\b)",
+    re.IGNORECASE,
+)
 # Above this, an unconstrained cluster count stops being merely unreliable
 # and becomes implausible for one recording (tester report, 2026-07-27: a
 # large meeting "detected" 123 speakers) — the note escalates accordingly.
@@ -846,7 +884,7 @@ def speaker_name(diarization: Diarization | None, label: str | None) -> str | No
 
 
 def _name_candidates(manifest: Manifest, at_ms: int) -> list[dict[str, Any]]:
-    """Bounded raw OCR hints near a speaker's longest turn; never identities."""
+    """Bounded name-like OCR hints near a longest turn; never identities."""
     if not manifest.media.has_video or not manifest.caps.ocr:
         return []
     nearby = [
@@ -857,13 +895,60 @@ def _name_candidates(manifest: Manifest, at_ms: int) -> list[dict[str, Any]]:
     nearby.sort(key=lambda frame: (abs(frame.ms - at_ms), frame.ms))
     candidates: list[dict[str, Any]] = []
     seen: set[str] = set()
+
+    def candidate_key(line: str) -> str:
+        folded = unicodedata.normalize("NFKC", line).casefold()
+        return " ".join(
+            "".join(character if character.isalnum() else " " for character in folded).split()
+        )
+
+    def name_like(line: str) -> bool:
+        if len(line) > NAME_CANDIDATE_MAX_CHARS or any(char.isdigit() for char in line):
+            return False
+        if _URL_OR_PATH.search(line):
+            return False
+        words = line.split()
+        if not 1 <= len(words) <= 5:
+            return False
+        alpha_count = sum(char.isalpha() for char in line)
+        punctuation_count = sum(unicodedata.category(char).startswith("P") for char in line)
+        if not alpha_count or punctuation_count > max(2, alpha_count // 3):
+            return False
+        key_words = candidate_key(line).split()
+        chrome_count = sum(word in _UI_CHROME_WORDS for word in key_words)
+        if chrome_count == len(key_words) or chrome_count >= 2:
+            return False
+
+        cased_words = [
+            word
+            for word in words
+            if any(char.isalpha() and char.lower() != char.upper() for char in word)
+        ]
+        if not cased_words:
+            return True  # Arabic/CJK and other scripts without letter case.
+        cased_letters = [
+            char
+            for char in line
+            if char.isalpha() and char.lower() != char.upper()
+        ]
+        if all(char.isupper() for char in cased_letters):
+            return True
+        for word in cased_words:
+            letters = [char for char in word if char.isalpha()]
+            if not letters:
+                continue
+            if candidate_key(word) in _NAME_PARTICLES:
+                continue
+            if not letters[0].isupper():
+                return False
+        return True
+
     for frame in nearby[:NAME_CANDIDATE_FRAME_LIMIT]:
         for raw_line in (frame.ocr_text or "").splitlines():
             line = " ".join(raw_line.split()).strip()
-            if not line or not any(character.isalpha() for character in line):
+            if not line or not name_like(line):
                 continue
-            line = line[:NAME_CANDIDATE_MAX_CHARS].rstrip()
-            folded = line.casefold()
+            folded = candidate_key(line)
             if folded in seen:
                 continue
             seen.add(folded)

@@ -560,9 +560,14 @@ def search(
             default=None,
         )
         if straddle_match is not None:
+            quote_label = (
+                "bounded quote"
+                if straddle_match.all_tokens_shown
+                else "bounded quote sample (not all matched tokens fit in the quote budget)"
+            )
             notes.append(
                 f"the words appear together around t_ms={straddle_match.t_ms}, split "
-                "across adjacent segments (matching is per-segment); bounded quote: "
+                f"across adjacent segments (matching is per-segment); {quote_label}: "
                 f"{straddle_match.quote!r} — read get_transcript there"
             )
         else:

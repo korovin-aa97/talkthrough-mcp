@@ -179,7 +179,7 @@ def create_engine(language_hint: str | None = None) -> OcrEngine | None:
 
 
 def ocr_image(engine: OcrEngine, path: Path) -> str:
-    """Joined text found on one frame; empty string when nothing is recognized."""
+    """Box/line text in reading order; empty string when nothing is recognized."""
     try:
         with contextlib.redirect_stdout(sys.stderr):
             result = engine(str(path))
@@ -187,4 +187,4 @@ def ocr_image(engine: OcrEngine, path: Path) -> str:
         logger.warning("OCR failed on %s: %s", path.name, exc)
         return ""
     texts = getattr(result, "txts", None) or ()
-    return " ".join(str(text).strip() for text in texts if str(text).strip())
+    return "\n".join(str(text).strip() for text in texts if str(text).strip())

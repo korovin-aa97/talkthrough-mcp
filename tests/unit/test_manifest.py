@@ -18,6 +18,7 @@ from talkthrough_mcp.core.diarize import (
 )
 from talkthrough_mcp.core.frames import Frame
 from talkthrough_mcp.core.manifest import (
+    STRADDLE_QUOTE_MAX_CHARS,
     FrameIndex,
     Manifest,
     format_srt,
@@ -231,8 +232,93 @@ def test_straddle_hint_quote_is_bounded() -> None:
     ]
     hint = straddle_hint(manifest, "start finish")
     assert hint is not None
-    assert len(hint.quote) == 240
-    assert hint.quote.endswith("...")
+    assert len(hint.quote) <= STRADDLE_QUOTE_MAX_CHARS
+    assert "start" in hint.quote
+    assert "finish" in hint.quote
+    assert "…" in hint.quote
+    assert hint.all_tokens_shown is True
+
+
+def test_straddle_hint_keeps_unique_tokens_from_two_long_segments() -> None:
+    manifest = make_manifest()
+    segment_type = type(manifest.transcript.segments[0])
+    manifest.transcript.segments = [
+        segment_type(
+            seq=1,
+            t0_ms=0,
+            t1_ms=1000,
+            text=" ".join(["before"] * 80 + ["alpha"] + ["after"] * 80),
+        ),
+        segment_type(
+            seq=2,
+            t0_ms=1000,
+            t1_ms=2000,
+            text=" ".join(["leading"] * 80 + ["omega"] + ["trailing"] * 80),
+        ),
+    ]
+    hint = straddle_hint(manifest, "alpha omega")
+    assert hint is not None
+    assert len(hint.quote) <= STRADDLE_QUOTE_MAX_CHARS
+    assert "alpha" in hint.quote and "omega" in hint.quote
+    assert hint.quote.startswith("… ") and hint.quote.endswith(" …")
+    assert hint.all_tokens_shown is True
+
+
+def test_straddle_hint_uses_search_unicode_normalization() -> None:
+    manifest = make_manifest()
+    segment_type = type(manifest.transcript.segments[0])
+    manifest.transcript.segments = [
+        segment_type(
+            seq=1,
+            t0_ms=0,
+            t1_ms=1000,
+            text=" ".join(["долго"] * 70 + ["НАЖМЁМ,"] + ["дальше"] * 70),
+        ),
+        segment_type(
+            seq=2,
+            t0_ms=1000,
+            t1_ms=2000,
+            text=" ".join(["avant"] * 70 + ["Élodie!"] + ["après"] * 70),
+        ),
+    ]
+    hint = straddle_hint(manifest, "нажмем élodie")
+    assert hint is not None
+    assert "НАЖМЁМ," in hint.quote
+    assert "Élodie!" in hint.quote
+    assert len(hint.quote) <= STRADDLE_QUOTE_MAX_CHARS
+
+
+def test_straddle_hint_marks_an_over_budget_anchor_set_as_a_sample() -> None:
+    manifest = make_manifest()
+    segment_type = type(manifest.transcript.segments[0])
+    manifest.transcript.segments = [
+        segment_type(
+            seq=1,
+            t0_ms=0,
+            t1_ms=1000,
+            text="alpha " + "middle " * 100 + "common",
+        ),
+        segment_type(seq=2, t0_ms=1000, t1_ms=2000, text="common omega"),
+    ]
+    hint = straddle_hint(manifest, "alpha common omega")
+    assert hint is not None
+    assert hint.quote == "alpha omega"
+    assert hint.all_tokens_shown is False
+
+
+def test_straddle_hint_selects_the_first_of_repeated_matching_pairs() -> None:
+    manifest = make_manifest()
+    segment_type = type(manifest.transcript.segments[0])
+    manifest.transcript.segments = [
+        segment_type(seq=1, t0_ms=100, t1_ms=200, text="alpha"),
+        segment_type(seq=2, t0_ms=200, t1_ms=300, text="omega"),
+        segment_type(seq=3, t0_ms=300, t1_ms=400, text="alpha"),
+        segment_type(seq=4, t0_ms=400, t1_ms=500, text="omega"),
+    ]
+    hint = straddle_hint(manifest, "alpha omega")
+    assert hint is not None
+    assert hint.t_ms == 100
+    assert hint.quote == "alpha omega"
 
 
 def test_straddle_hint_ignores_ocr_text() -> None:
