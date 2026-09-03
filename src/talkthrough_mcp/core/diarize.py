@@ -56,7 +56,8 @@ MAX_DEFAULT_THREADS = 4
 
 MISSING_EXTRA_REASON = (
     "speaker diarization needs the optional sherpa-onnx engine — reinstall with the "
-    "[diarization] extra, e.g. uvx \"talkthrough-mcp[diarization]\""
+    "[diarization] extra, e.g. uvx --python \">=3.11,<3.14\" "
+    "\"talkthrough-mcp[diarization]\""
 )
 
 

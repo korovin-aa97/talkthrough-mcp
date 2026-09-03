@@ -29,7 +29,7 @@ speech locally (whisper), extracts scene-change keyframes, OCRs on-screen text, 
 the wall-clock start time, and (opt-in) labels who said what via local speaker diarization. \
 Returns a compact summary (job_id, media info, wall_clock, transcript preview, speaker \
 roster when diarized) — full data stays on disk and is served lazily by the other tools. \
-Idempotent by content hash: re-calling on an already-processed file returns instantly. For MULTI-PERSON recordings (meetings, interviews, calls) diarize=true is part of a proper analysis — pass it even when the user only asks for a summary. num_speakers is a target the clusterer may not reach, not a constraint — the payload says when a re-run changed nothing (labels_changed). If an amend changes the labels, verified names become pending-review evidence rather than active identities, with old-roster anchors for re-checking. Current pending labels can be confirmed/replaced/removed; stale labels can only be removed with an explicit null patch.
+Idempotent by content hash: re-calling on an already-processed file returns instantly. For MULTI-PERSON recordings (meetings, interviews, calls) diarize=true is part of a proper analysis — pass it even when the user only asks for a summary. num_speakers is a target the clusterer may not reach, not a constraint — the payload says when a re-run changed nothing (labels_changed). If an amend changes the labels, verified names become pending-review evidence rather than active identities, with old-roster anchors for re-checking. Current pending labels can be confirmed/replaced/removed; stale labels can only be removed with an explicit null patch. Full force reprocessing of a job with saved or pending identities requires diarize=true and preserves every old identity as pending review against the rebuilt roster; without diarization it refuses before changing the stored job.
 When NOT to use: to re-fetch data you already processed (use the retrieval tools), or for \
 URLs — local file paths only.
 Examples:
@@ -38,7 +38,7 @@ Examples:
 - process_media(path="/tmp/standup.m4a") — audio-only: transcript tools work, frame tools will error
 - process_media(path="/rec/panel.mov", diarize=true, num_speakers=4) — headcount known? ALWAYS pass it: best accuracy
 - relabel amend → names become pending with old anchors; stale labels are removable only with null
-- error mentions [diarization] → the extra is missing: install via uvx "talkthrough-mcp[diarization]"
+- error mentions [diarization] → run uvx --python ">=3.11,<3.14" "talkthrough-mcp[diarization]"
 - know the attendees? process_media(path=..., vocabulary="Anastasia, Evgenii, OKR") — names+jargon survive STT
 - user: "analyze/summarize this meeting" → include diarize=true — speaker structure is not optional extra credit
 - noisy threshold roster (clusters ≫ people)? ASK your user for the real headcount, then re-run with num_speakers=N
@@ -47,7 +47,7 @@ Examples:
 - transcript garbled or language_probability low → re-call with model="large-v3-turbo" (or language="ru") + force=true
 - after success, do NOT dump everything — continue with get_transcript / get_moment / search on the job_id
 - anti-example: frames from an already-processed job → get_frames(job_id=...), never process_media again
-- anti-example: YouTube/URL input → unsupported in v1; have the user download the file first
+- named job + force=true → include diarize=true; old identities return as pending review, never silently vanish
 """,
     "get_transcript": """\
 Retrieve the transcript of a processed job, lazily and paginated. Formats: "segments" \
@@ -55,6 +55,7 @@ Retrieve the transcript of a processed job, lazily and paginated. Formats: "segm
 prose; "S1:" prefixes at speaker changes), "srt" (subtitles, speaker-prefixed cues). \
 Diarized jobs also return the roster, attribution_precision, saved speaker_name values, \
 raw OCR name_candidates, and bounded pending-review names plus old-roster context after a relabel. \
+Pre-0.3.1 video jobs may return name_candidates_note because their flat OCR is readable but less useful for hints. \
 Pending names are evidence to re-check, never active identities. A stale pending label can only be \
 removed with label_speakers(..., labels={"Sx":null}). Raw S<n> labels remain canonical. Responses \
 are capped (~8k tokens): when truncated=true, continue from the returned next_start_ms.
@@ -69,7 +70,7 @@ Examples:
 - "what did S2 say?" → format="segments", collect entries with speaker=="S2" (labels are in order of first voice)
 - got truncated=true with next_start_ms=421500 → get_transcript(job_id="...", start_ms=421500)
 - user: "what was said between 5:00 and 6:30?" → start_ms=300000, end_ms=390000
-- meeting recording (audio-only job): this tool is the main surface — frames don't exist there
+- legacy video name_candidates_note → explain the limitation; safe regeneration uses force=true+diarize=true
 - correlate speech with logs: each segment's t_wall lines up with your log timestamps
 - no speaker fields on a meeting job → re-run process_media with diarize=true (adds them without re-transcribing)
 - attribution_precision="segment" → force=true+diarize=true is required for exact word boundaries

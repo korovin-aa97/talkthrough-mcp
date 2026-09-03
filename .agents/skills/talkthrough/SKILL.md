@@ -19,7 +19,7 @@ never ask for more than the moment you are analyzing.
 
 The `talkthrough` MCP server must be connected (tools like
 `process_media` / `get_transcript` are visible). If not, tell the user to
-install it: `claude mcp add -s user talkthrough -- uvx talkthrough-mcp`
+install it: `claude mcp add -s user talkthrough -- uvx --python ">=3.11,<3.14" "talkthrough-mcp[diarization]"`
 (see the repository README for other clients).
 
 ## Core workflow
@@ -56,7 +56,10 @@ install it: `claude mcp add -s user talkthrough -- uvx talkthrough-mcp`
    old-roster context anchors to re-check them. A pending label still in the
    roster can be confirmed, replaced, or removed; a stale pending label can
    only be removed with `labels={"Sx":null}`. Never use a pending name in
-   minutes or search as though it were active.
+   minutes or search as though it were active. A full `force=true` rebuild of
+   a job with active or pending names must also use `diarize=true`; it rebuilds
+   safely and moves every old identity to pending review, while omitting
+   diarization is refused without changing the stored job.
 6. **Recall across sessions**: `list_jobs()` — the store persists; a file
    processed yesterday (even via CLI) is queryable by `job_id` today.
 
@@ -69,7 +72,8 @@ VERBATIM from the payload — never compute it from `t_ms` yourself
 correlate remarks with server/app logs (±30 s grep window). If
 `wall_clock` is null or low-confidence, ask the user when the recording
 started and re-anchor: `process_media(path, recorded_at="<ISO 8601>",
-force=true)`.
+force=true)`; when the job already has speaker identities, include
+`diarize=true` as required by the safe-rebuild contract.
 
 ## Packaged workflows (server prompts)
 
@@ -97,6 +101,10 @@ friendly), `correlate-with-logs`.
   UI text, a job title, or somebody else's name. Inspect the cited frame and
   persist only defensible mappings with `label_speakers`; never auto-save a
   candidate.
+  A `name_candidates_note` on a pre-0.3.1 video job explains that its legacy
+  flat OCR may not yield hints. The job remains readable; regenerate only when
+  useful, with `force=true, diarize=true`, so old identities become pending
+  review instead of being lost.
   `diarize=true` needs the `[diarization]` extra — its absence produces an
   actionable install-hint error.
 - Findings/quotes must cite the narrator's exact words + `t_ms` (+ `t_wall`

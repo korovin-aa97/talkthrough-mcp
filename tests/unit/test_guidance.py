@@ -228,9 +228,11 @@ def test_distribution_arg_order_and_shell_quoting_are_safe() -> None:
         _GIT_SPEC,
         _PYPI_SPEC,
         _UVX_ARGS,
+        MINIMAL_UVX_ARGS,
+        MINIMAL_UVX_CMDLINE,
         PROJECT_REQUIRES_PYTHON,
         UVX_CMDLINE,
-        _shell_quoted,
+        _shell_owned_arg,
     )
 
     assert _UVX_ARGS["git"] == [
@@ -241,11 +243,18 @@ def test_distribution_arg_order_and_shell_quoting_are_safe() -> None:
         "talkthrough-mcp",
     ]
     assert _UVX_ARGS["pypi"] == ["--python", PROJECT_REQUIRES_PYTHON, _PYPI_SPEC]
-    assert _shell_quoted(PROJECT_REQUIRES_PYTHON) == f"'{PROJECT_REQUIRES_PYTHON}'"
-    assert _shell_quoted(_PYPI_SPEC) == f"'{_PYPI_SPEC}'"
+    assert MINIMAL_UVX_ARGS == ["--python", PROJECT_REQUIRES_PYTHON, "talkthrough-mcp"]
+    assert _shell_owned_arg(PROJECT_REQUIRES_PYTHON) == f'"{PROJECT_REQUIRES_PYTHON}"'
+    assert _shell_owned_arg(_PYPI_SPEC) == f'"{_PYPI_SPEC}"'
     assert (
-        f"uvx --python '{PROJECT_REQUIRES_PYTHON}' '{_PYPI_SPEC}'"
+        f'uvx --python "{PROJECT_REQUIRES_PYTHON}" "{_PYPI_SPEC}"'
     ) == UVX_CMDLINE
+    assert (
+        f'uvx --python "{PROJECT_REQUIRES_PYTHON}" talkthrough-mcp'
+    ) == MINIMAL_UVX_CMDLINE
+    for unsafe in ('evil"arg', "evil$arg", "evil`arg", "evil\narg", "unowned"):
+        with pytest.raises(ValueError):
+            _shell_owned_arg(unsafe)
 
 
 def test_cold_start_documentation_contract() -> None:
@@ -253,22 +262,54 @@ def test_cold_start_documentation_contract() -> None:
     troubleshooting = (REPO_ROOT / "docs/TROUBLESHOOTING.md").read_text(encoding="utf-8")
     normalized = " ".join(troubleshooting.split())
 
-    assert "two separate stages" in readme
-    assert "~80 MB bundled ffmpeg again" in readme
-    assert "warm, network-free jobs" in readme
+    assert "cold setup" in readme.casefold()
+    assert "bundled ffmpeg" in readme
+    assert "network-free" in readme
     for fact in (
         "distinct `uvx` environment",
-        "~80 MB static build again",
-        "observation, not a timing promise",
-        "model caches are shared",
-        "Set `SSL_CERT_FILE`",
-        "Warm processing is network-free",
+        "managed Python",
+        "static-ffmpeg",
+        "model caches",
+        "`SSL_CERT_FILE`",
+        "Warm processing",
         "uv python find",
         "uv python install 3.12",
-        "uvx --python 3.12",
+        "UV_SYSTEM_CERTS",
+        "UV_PYTHON_INSTALL_MIRROR",
+        "uv cache prune",
+        "uv cache clean talkthrough-mcp",
         "`>=3.11,<3.14` range from `pyproject.toml`",
     ):
         assert fact in normalized
+
+
+def test_agent_facing_uvx_launchers_use_the_project_python_range() -> None:
+    project = tomllib.loads((REPO_ROOT / "pyproject.toml").read_text(encoding="utf-8"))[
+        "project"
+    ]
+    required = f'--python "{project["requires-python"]}"'
+    openclaw_required = f'--arg --python --arg "{project["requires-python"]}"'
+    files = [
+        REPO_ROOT / "README.md",
+        REPO_ROOT / "llms-install.md",
+        REPO_ROOT / ".agents/skills/talkthrough/SKILL.md",
+        REPO_ROOT / "docs/TROUBLESHOOTING.md",
+        *(REPO_ROOT / "integrations").rglob("*.md"),
+    ]
+    offenders: list[str] = []
+    launcher = re.compile(r"uvx[^\n`]*talkthrough-mcp[^\n`]*")
+    for path in files:
+        for match in launcher.finditer(path.read_text(encoding="utf-8")):
+            command = match.group(0)
+            context = path.read_text(encoding="utf-8")[max(0, match.start() - 160) : match.start()]
+            diagnostic = "diagnostic" in context.casefold()
+            encoded_config = "uvx%22" in command
+            portable = required in command or openclaw_required in command
+            if "..." not in command and not diagnostic and not encoded_config and not portable:
+                offenders.append(f"{path.relative_to(REPO_ROOT)}: {command}")
+    assert not offenders, "agent-facing uvx launchers missing Python range:\n" + "\n".join(
+        offenders
+    )
 
 
 def test_claude_plugin_agent_uses_plugin_mcp_tool_namespace() -> None:

@@ -1,6 +1,6 @@
 # GitHub Copilot CLI
 
-Server command (stdio): `uvx --python '>=3.11,<3.14' 'talkthrough-mcp[diarization]'`
+Server command (stdio): `uvx --python ">=3.11,<3.14" "talkthrough-mcp[diarization]"`
 
 Config: `~/.copilot/mcp-config.json`
 
@@ -19,7 +19,7 @@ Config: `~/.copilot/mcp-config.json`
 }
 ```
 
-Optional env vars: TALKTHROUGH_WHISPER_MODEL (default `small`; use `large-v3-turbo` for non-English narration — agents can also pass `model=` per call), TALKTHROUGH_OCR (`off` to disable), TALKTHROUGH_OCR_LANG (on-screen-text script, e.g. `ru`, `ja`, `ko`), TALKTHROUGH_HOME (job store root, default `~/.talkthrough`). Speaker diarization is included but off per call — agents pass `diarize=true` (plus `num_speakers` when known); the minimal server without the diarization engine is `uvx talkthrough-mcp`.
+Optional env vars: TALKTHROUGH_WHISPER_MODEL (default `small`; use `large-v3-turbo` for non-English narration — agents can also pass `model=` per call), TALKTHROUGH_OCR (`off` to disable), TALKTHROUGH_OCR_LANG (on-screen-text script, e.g. `ru`, `ja`, `ko`), TALKTHROUGH_HOME (job store root, default `~/.talkthrough`). Speaker diarization is included but off per call — agents pass `diarize=true` (plus `num_speakers` when known); the minimal server without the diarization engine is `uvx --python ">=3.11,<3.14" talkthrough-mcp`.
 
 Verify: the client should list 8 tools (process_media, get_transcript, get_frames, get_moment, search, label_speakers, extract_frame, list_jobs). A `list_jobs` call returning an empty list is a healthy first run.
 

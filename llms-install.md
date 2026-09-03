@@ -16,21 +16,23 @@ turns narrated screen recordings / audio files into queryable structured data
 ## Server command (stdio)
 
 ```
-uvx "talkthrough-mcp[diarization]"
+uvx --python ">=3.11,<3.14" "talkthrough-mcp[diarization]"
 ```
 
 This is the batteries-included form (adds local who-said-what speaker
 labeling; ~20 MB extra wheels, models download only on first use). The
-minimal server without the diarization engine is `uvx talkthrough-mcp`.
-(Latest unreleased main instead: `uvx --from "talkthrough-mcp[diarization] @
-git+https://github.com/korovin-aa97/talkthrough-mcp" talkthrough-mcp`)
+minimal server without the diarization engine is
+`uvx --python ">=3.11,<3.14" talkthrough-mcp`.
+(Latest unreleased main instead: `uvx --python ">=3.11,<3.14" --from
+"talkthrough-mcp[diarization] @ git+https://github.com/korovin-aa97/talkthrough-mcp"
+talkthrough-mcp`.)
 
 ## Client configuration
 
 ### Claude Code
 
 ```bash
-claude mcp add -s user talkthrough -- uvx talkthrough-mcp
+claude mcp add -s user talkthrough -- uvx --python ">=3.11,<3.14" "talkthrough-mcp[diarization]"
 ```
 
 ### Claude Desktop / Cursor / Cline / any JSON-config client
@@ -43,7 +45,7 @@ Add to the client's MCP servers config (`claude_desktop_config.json`,
   "mcpServers": {
     "talkthrough": {
       "command": "uvx",
-      "args": ["talkthrough-mcp"]
+      "args": ["--python", ">=3.11,<3.14", "talkthrough-mcp[diarization]"]
     }
   }
 }
@@ -64,7 +66,7 @@ participant count is known — it is the main accuracy lever. Calling
 `diarize=true` on an already-processed job adds speakers without
 re-transcribing. Diarization models (~47 MB) download once, pinned and
 checksum-verified. If the user explicitly wants the minimal install
-(`uvx talkthrough-mcp`, no diarization engine), an explicit `diarize=true`
+(`uvx --python ">=3.11,<3.14" talkthrough-mcp`, no diarization engine), an explicit `diarize=true`
 will answer with the one-line reinstall hint — relay it verbatim.
 
 ## Verify the installation
