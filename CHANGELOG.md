@@ -4,6 +4,73 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions follow
 [SemVer](https://semver.org/).
 
+## [0.3.2] — 2026-09-03
+
+A data-safety and portability patch from externally reproduced reports. No
+tools, prompts, dependencies, or manifest schema versions were added.
+
+### Fixed
+
+- **Pending speaker identities are lossless across repeated relabels.** Active
+  and already-pending names now merge deterministically instead of replacing
+  each other. Every retained item carries bounded old-roster context; current
+  labels can be confirmed, replaced, or removed, stale labels can be removed
+  explicitly, and superseded collisions are reported once instead of being
+  silently discarded.
+- **Full forced reprocessing is transactional and identity-safe.** A job is
+  rebuilt in a hidden same-filesystem staging directory, validated, and
+  committed manifest-last; STT, diarization, OCR, validation, or commit
+  failures keep the previous manifest and frames intact. A named job refuses
+  a full rebuild unless diarization is resolved on, and successful rebuilds
+  move every previous identity to pending review against the new roster.
+- **Legacy OCR limitations are explicit.** Video jobs produced before 0.3.1
+  with flat OCR remain readable without migration and now explain why name
+  candidates may be absent and how to regenerate safely. The candidate filter
+  accepts broader real-world names, particles, apostrophes, lowercase scripts,
+  and trailing role metadata while rejecting known UI chrome; hints remain
+  capped, deduplicated, and never become identities automatically.
+- **Every agent-facing `uvx` launcher selects supported Python portably.** The
+  canonical argv is `--python`, `>=3.11,<3.14`, and the package spec. Shell
+  prose uses portable double quotes, while JSON, TOML, deeplinks, and plugin
+  arguments retain raw argv values. A generator-owned quoting allowlist and
+  repository-wide semantic audit prevent shell redirection regressions.
+- **Supported interpreters are continuously exercised.** CI now runs frozen
+  unit/import/CLI/MCP inventory checks on Python 3.11, 3.12, and 3.13 in
+  addition to the existing Linux, macOS, and Windows gates. Native bash, sh,
+  zsh, PowerShell, and cmd launcher smokes verify the same 8-tool/6-prompt
+  server contract.
+- **Cold-start, TLS, and cache recovery instructions name the actual stages.**
+  Documentation separates uv environment resolution, managed Python, media
+  assets, and warm offline processing; covers `SSL_CERT_FILE`,
+  `UV_SYSTEM_CERTS`, `UV_PYTHON_INSTALL_MIRROR`, targeted prune/clean commands,
+  and the distinct Talkthrough job GC scope.
+- **GitHub Release notes are deterministic.** The release workflow extracts
+  this exact changelog section and fails before publishing on a missing,
+  duplicate, empty, or tag-mismatched section. Documentation tests now assert
+  operational facts instead of pinning incidental marketing prose.
+- **Cross-segment evidence no longer renders a doubled crop marker.** Two
+  independently cropped quote windows share one `…` at their boundary while
+  preserving search semantics and the 240-character cap.
+
+### Compatibility
+
+- Existing 0.1.x–0.3.1 manifests load in place without migration or rewrite;
+  pre-0.3.1 flat OCR remains unchanged and is described by a response-only
+  compatibility note.
+- Full force reprocessing of a job with saved or pending speaker identities now
+  requires diarization and changes those identities from active claims to
+  pending-review evidence. Unnamed jobs retain the previous force behavior.
+- OCR text produced by current versions keeps embedded newlines between
+  detected boxes; search whitespace behavior and bounded response shapes are
+  unchanged.
+- Progress remains the first MCP notification and no deprecated logging
+  capability is reintroduced. A failed diarization amend or full force returns
+  an error and preserves the old stored job rather than persisting an
+  `available=false` replacement.
+- The root development `.mcp.json` remains a local `uv run --directory`
+  configuration. Generated distribution launchers and the released Claude
+  plugin use the supported Python selector; tool and prompt counts remain 8/6.
+
 ## [0.3.1] — 2026-09-02
 
 A compatibility-and-honesty patch from six externally reproduced findings.

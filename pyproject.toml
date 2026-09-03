@@ -1,6 +1,6 @@
 [project]
 name = "talkthrough-mcp"
-version = "0.3.1"
+version = "0.3.2"
 description = "Local MCP server: turn screen recordings into transcript, exact frames, OCR and wall-clock evidence for coding agents."
 readme = "README.md"
 authors = [
