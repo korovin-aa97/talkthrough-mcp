@@ -19,7 +19,10 @@ async def check() -> None:
     with tempfile.TemporaryDirectory(prefix="talkthrough-inventory-") as home:
         params = StdioServerParameters(
             command=sys.executable,
-            args=["-m", "talkthrough_mcp.cli", "serve"],
+            args=[
+                "-c",
+                "from talkthrough_mcp.cli import main; main(['serve'])",
+            ],
             env={**os.environ, "TALKTHROUGH_HOME": home},
             cwd=str(Path(__file__).resolve().parents[1]),
         )
