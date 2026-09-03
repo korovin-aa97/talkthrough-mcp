@@ -262,6 +262,7 @@ def test_straddle_hint_keeps_unique_tokens_from_two_long_segments() -> None:
     assert len(hint.quote) <= STRADDLE_QUOTE_MAX_CHARS
     assert "alpha" in hint.quote and "omega" in hint.quote
     assert hint.quote.startswith("… ") and hint.quote.endswith(" …")
+    assert "… …" not in hint.quote
     assert hint.all_tokens_shown is True
 
 

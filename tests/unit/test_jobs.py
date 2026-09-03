@@ -47,6 +47,15 @@ def _store_job(job_id: str, created_at: str) -> None:
     save_manifest(make_manifest(job_id=job_id, created_at=created_at), directory)
 
 
+def _materialize_job(job_id: str, directory: Path, *, marker: bytes, created_at: str) -> None:
+    manifest = make_manifest(job_id=job_id, created_at=created_at)
+    frame_directory = directory / "frames"
+    frame_directory.mkdir(parents=True, exist_ok=True)
+    for frame in manifest.frames.items:
+        (frame_directory / frame.file).write_bytes(marker + frame.file.encode())
+    save_manifest(manifest, directory)
+
+
 def test_list_jobs_newest_first_and_skips_broken(isolated_home: Path) -> None:
     _store_job("aaaaaaaaaaaaaaaa", "2026-07-01T10:00:00+00:00")
     _store_job("bbbbbbbbbbbbbbbb", "2026-07-09T10:00:00+00:00")
@@ -121,6 +130,92 @@ def test_partial_job_cleanup_context_removes_only_manifestless_dirs(
     ):
         raise RuntimeError("amend failed after the manifest existed")
     assert jobs.job_exists(completed)
+
+
+def test_reprocess_workspace_is_nested_hidden_and_commit_replaces_complete_job(
+    isolated_home: Path,
+) -> None:
+    job_id = "a1" * 8
+    directory = jobs.job_dir(job_id)
+    _materialize_job(
+        job_id,
+        directory,
+        marker=b"old:",
+        created_at="2026-07-01T10:00:00+00:00",
+    )
+    with jobs.job_lock(job_id), jobs.reprocess_workspace(job_id) as staging:
+        assert staging.parent == directory
+        assert staging.name.startswith(jobs.REPROCESS_PREFIX)
+        assert [manifest.job_id for manifest in jobs.list_jobs()] == [job_id]
+        _materialize_job(
+            job_id,
+            staging,
+            marker=b"new:",
+            created_at="2026-07-02T10:00:00+00:00",
+        )
+        committed = jobs.commit_reprocessed_job(job_id, staging)
+        assert committed.created_at == "2026-07-02T10:00:00+00:00"
+        assert (directory / "manifest.json").is_file()
+        assert all(
+            (directory / "frames" / frame.file).read_bytes().startswith(b"new:")
+            for frame in committed.frames.items
+        )
+    assert not list(directory.glob(f"{jobs.REPROCESS_PREFIX}*"))
+
+
+def test_reprocess_commit_failure_restores_old_manifest_and_frames(
+    isolated_home: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    job_id = "b2" * 8
+    directory = jobs.job_dir(job_id)
+    _materialize_job(
+        job_id,
+        directory,
+        marker=b"old:",
+        created_at="2026-07-01T10:00:00+00:00",
+    )
+    old_manifest = (directory / "manifest.json").read_bytes()
+    old_frames = {
+        path.name: path.read_bytes() for path in (directory / "frames").iterdir()
+    }
+    with jobs.job_lock(job_id), jobs.reprocess_workspace(job_id) as staging:
+        _materialize_job(
+            job_id,
+            staging,
+            marker=b"new:",
+            created_at="2026-07-02T10:00:00+00:00",
+        )
+        real_replace = jobs.os.replace
+
+        def fail_manifest_replace(source: object, destination: object) -> None:
+            if Path(source) == staging / "manifest.json":
+                raise OSError("injected manifest commit failure")
+            real_replace(source, destination)
+
+        monkeypatch.setattr(jobs.os, "replace", fail_manifest_replace)
+        with pytest.raises(ToolFailureError, match="previous job was restored"):
+            jobs.commit_reprocessed_job(job_id, staging)
+
+    assert (directory / "manifest.json").read_bytes() == old_manifest
+    assert {
+        path.name: path.read_bytes() for path in (directory / "frames").iterdir()
+    } == old_frames
+    assert jobs.load_job(job_id).created_at == "2026-07-01T10:00:00+00:00"
+
+
+def test_gc_sweeps_stale_nested_reprocess_workspace(isolated_home: Path) -> None:
+    job_id = "c3" * 8
+    _store_job(job_id, datetime.now(UTC).isoformat(timespec="seconds"))
+    staging = jobs.job_dir(job_id) / f"{jobs.REPROCESS_PREFIX}abandoned"
+    staging.mkdir()
+    (staging / "audio.wav").write_bytes(b"partial")
+    stamp = time.time() - 3 * 86_400
+    os.utime(staging, (stamp, stamp))
+
+    result = jobs.gc(keep_days=30)
+    assert result.swept == [f"{job_id}/{staging.name}"]
+    assert jobs.job_exists(job_id)
+    assert not staging.exists()
 
 
 # --- v0.2.6 F6: gc sweeps manifest-less partial dirs ---------------------------

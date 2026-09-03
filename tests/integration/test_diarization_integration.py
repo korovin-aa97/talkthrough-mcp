@@ -34,7 +34,7 @@ from tests.integration.fixture_facts import (
 )
 
 from talkthrough_mcp.core import diarize, jobs, pipeline
-from talkthrough_mcp.core.errors import ValidationError
+from talkthrough_mcp.core.errors import ToolFailureError, ValidationError
 from talkthrough_mcp.core.pipeline import ProcessResult
 
 pytestmark = [
@@ -474,6 +474,88 @@ def test_label_changing_amend_persists_names_for_review_across_reload(
     final_cleanup = label_speakers(first.manifest.job_id, {"S2": None})
     assert "speaker_names_pending_review" not in final_cleanup
     assert final_cleanup["mapping_count"] == 1
+
+
+def test_full_force_preserves_active_and_pending_names_transactionally(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from talkthrough_mcp.core.diarize import Diarization
+    from talkthrough_mcp.server import label_speakers
+
+    monkeypatch.setenv("TALKTHROUGH_HOME", str(tmp_path / "force-home"))
+    first = pipeline.process_media(
+        str(INTERRUPT_M4A), diarize_speakers=True, num_speakers=2
+    )
+    label_speakers(
+        first.manifest.job_id,
+        {"S1": "Samantha"},
+        {"S1": "verified on the original two-speaker roster"},
+    )
+    pipeline.process_media(
+        str(INTERRUPT_M4A), diarize_speakers=True, num_speakers=3
+    )
+    label_speakers(
+        first.manifest.job_id,
+        {"S2": "Daniel"},
+        {"S2": "verified on the current three-speaker roster"},
+    )
+    directory = jobs.job_dir(first.manifest.job_id)
+
+    def snapshot() -> dict[str, bytes]:
+        return {
+            path.relative_to(directory).as_posix(): path.read_bytes()
+            for path in directory.rglob("*")
+            if path.is_file()
+            and path.name != jobs.LOCK_NAME
+            and jobs.REPROCESS_PREFIX not in path.parts
+        }
+
+    before_failure = snapshot()
+
+    def failed_diarization(
+        _wav: Path,
+        transcript: object,
+        _request: object,
+        _report: object,
+        _diarizer: object = None,
+    ) -> None:
+        transcript.diarization = Diarization(  # type: ignore[attr-defined]
+            available=False, reason="controlled engine failure"
+        )
+
+    with monkeypatch.context() as failure:
+        failure.setattr(pipeline, "_run_diarization", failed_diarization)
+        with pytest.raises(ToolFailureError, match="could not rebuild speaker labels"):
+            pipeline.process_media(
+                str(INTERRUPT_M4A),
+                force=True,
+                diarize_speakers=True,
+                num_speakers=2,
+            )
+    assert snapshot() == before_failure
+    assert not list(directory.glob(f"{jobs.REPROCESS_PREFIX}*"))
+
+    rebuilt = pipeline.process_media(
+        str(INTERRUPT_M4A),
+        force=True,
+        diarize_speakers=True,
+        num_speakers=2,
+    )
+    current = rebuilt.manifest.transcript.diarization
+    assert current is not None and current.available
+    assert current.speaker_names is None
+    assert current.speaker_names_pending_review == {
+        "S1": "Samantha",
+        "S2": "Daniel",
+    }
+    assert current.speaker_names_pending_review_context is not None
+    assert set(current.speaker_names_pending_review_context) == {"S1", "S2"}
+    assert rebuilt.manifest.transcript.words
+    assert any(segment.speaker for segment in rebuilt.manifest.transcript.segments)
+    summary = pipeline.summarize(rebuilt)["diarization"]
+    assert "force_identity_review_note" in summary
+    assert jobs.load_job(first.manifest.job_id).transcript.diarization == current
+    assert not list(directory.glob(f"{jobs.REPROCESS_PREFIX}*"))
 
 
 def test_explicit_diarize_amends_on_embedding_model_change(

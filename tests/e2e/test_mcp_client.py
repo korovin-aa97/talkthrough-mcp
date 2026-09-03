@@ -405,12 +405,66 @@ async def _run_session(home: Path) -> None:
             )
             assert named_hits["hits"]
             assert all(hit["speaker_name"] == "Samantha" for hit in named_hits["hits"])
+
+            unsafe_force = await session.call_tool(
+                "process_media",
+                {
+                    "path": str(TWO_VOICE_M4A),
+                    "force": True,
+                    "diarize": False,
+                },
+                read_timeout_seconds=PROCESS_TIMEOUT,
+            )
+            assert unsafe_force.is_error
+            unsafe_error = unsafe_force.content[0]
+            assert isinstance(unsafe_error, types.TextContent)
+            assert "force=true, diarize=true" in unsafe_error.text
+            survivor = _payload(
+                await session.call_tool("get_transcript", {"job_id": diarized_job_id})
+            )
+            assert {entry["speaker_name"] for entry in survivor["speakers"]} == {
+                "Samantha",
+                "Daniel",
+            }
+
+            forced = _payload(
+                await session.call_tool(
+                    "process_media",
+                    {
+                        "path": str(TWO_VOICE_M4A),
+                        "force": True,
+                        "diarize": True,
+                        "num_speakers": TWO_VOICE_NUM_SPEAKERS,
+                    },
+                    read_timeout_seconds=PROCESS_TIMEOUT,
+                )
+            )
+            assert forced["reused"] is False
+            assert "force_identity_review_note" in forced["diarization"]
+            assert forced["diarization"]["speaker_names_pending_review"] == {
+                "S1": "Samantha",
+                "S2": "Daniel",
+            }
             removed = _payload(
                 await session.call_tool(
                     "label_speakers", {"job_id": diarized_job_id, "labels": {"S1": None}}
                 )
             )
-            assert removed["mapping_count"] == 1
+            assert removed["mapping_count"] == 0
+            assert removed["speaker_names_pending_review"] == {"S2": "Daniel"}
+
+        # The successful force and pending cleanup must survive another MCP
+        # process rather than living only in the prior server's Python state.
+        async with (
+            stdio_client(_server_params(home)) as (read, write),
+            ClientSession(read, write) as session,
+        ):
+            await session.initialize()
+            persisted = _payload(
+                await session.call_tool("get_transcript", {"job_id": diarized_job_id})
+            )
+            assert "speaker_name" not in persisted["speakers"][0]
+            assert persisted["speaker_names_pending_review"] == {"S2": "Daniel"}
 
     errlog.flush()
     errlog.seek(0)

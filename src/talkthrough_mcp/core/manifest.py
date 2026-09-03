@@ -457,7 +457,12 @@ def _straddle_quote(first_text: str, second_text: str, tokens: list[str]) -> tup
     second_anchors = second_anchors or [0]
     first_window = _word_window(first_words, first_anchors)
     second_window = _word_window(second_words, second_anchors)
-    quote = f"{first_window} {second_window}"
+    if first_window.endswith(" …") and second_window.startswith("… "):
+        # Both independently cropped windows mark the same segment boundary.
+        # Render that boundary once instead of the noisy ``… …`` join.
+        quote = f"{first_window[:-2]} … {second_window[2:]}"
+    else:
+        quote = f"{first_window} {second_window}"
     if len(quote) <= STRADDLE_QUOTE_MAX_CHARS:
         folded_quote = _fold_for_search(quote)
         return quote, all(token in folded_quote for token in tokens)

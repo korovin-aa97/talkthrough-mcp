@@ -143,7 +143,10 @@ def _cmd_gc(args: argparse.Namespace) -> int:
     if result.removed:
         print(f"removed {len(result.removed)} job(s): {', '.join(result.removed)}")
     if result.swept:
-        print(f"swept {len(result.swept)} partial dir(s): {', '.join(result.swept)}")
+        print(
+            f"swept {len(result.swept)} partial/staging dir(s): "
+            f"{', '.join(result.swept)}"
+        )
     if not result.removed and not result.swept:
         print(f"nothing to remove (keep-days={args.keep_days})")
     return 0

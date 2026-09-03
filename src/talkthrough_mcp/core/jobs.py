@@ -12,6 +12,7 @@ import hashlib
 import logging
 import os
 import shutil
+import tempfile
 import threading
 import time
 from collections.abc import Iterator
@@ -21,7 +22,7 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 from .errors import ToolFailureError, UnknownJobError
-from .manifest import FRAMES_DIR_NAME, MANIFEST_NAME, Manifest, load_manifest
+from .manifest import FRAMES_DIR_NAME, MANIFEST_NAME, SCHEMA, Manifest, load_manifest
 
 logger = logging.getLogger(__name__)
 
@@ -31,6 +32,9 @@ _HASH_CHUNK_BYTES = 1 << 20
 # A manifest-less job dir this old cannot be a live run (processing is capped
 # at 2 h by default) — it is litter from a failure before cleanup existed.
 PARTIAL_SWEEP_MIN_AGE_S = 24 * 3600.0
+REPROCESS_PREFIX = ".reprocess-"
+REPROCESS_BACKUP_FRAMES = "previous-frames"
+REPROCESS_FAILED_FRAMES = "failed-new-frames"
 _PROCESS_LOCKS_GUARD = threading.Lock()
 _PROCESS_LOCKS: dict[str, threading.RLock] = {}
 
@@ -68,6 +72,136 @@ def load_job(job_id: str) -> Manifest:
     if not job_exists(job_id):
         raise UnknownJobError(job_id)
     return load_manifest(job_dir(job_id))
+
+
+def has_identity_state(manifest: Manifest) -> bool:
+    """Whether a full rebuild could discard human-reviewed speaker data."""
+    diarization = manifest.transcript.diarization
+    if diarization is None:
+        return False
+    return any(
+        (
+            diarization.speaker_names,
+            diarization.speaker_name_evidence,
+            diarization.speaker_names_pending_review,
+            diarization.speaker_name_evidence_pending_review,
+            diarization.speaker_names_pending_review_context,
+        )
+    )
+
+
+@contextmanager
+def reprocess_workspace(job_id: str) -> Iterator[Path]:
+    """Yield a hidden same-filesystem staging directory for a full rebuild.
+
+    The caller holds :func:`job_lock`. Keeping staging inside the live job
+    directory makes directory renames atomic while ensuring ``list_jobs``
+    never mistakes an incomplete rebuild for a separate job.
+    """
+    directory = job_dir(job_id)
+    directory.mkdir(parents=True, exist_ok=True)
+    staging = Path(tempfile.mkdtemp(prefix=REPROCESS_PREFIX, dir=directory))
+    try:
+        yield staging
+    finally:
+        shutil.rmtree(staging, ignore_errors=True)
+
+
+def _validate_staged_job(job_id: str, staging: Path) -> Manifest:
+    """Reload and validate the bounded invariants needed before commit."""
+    try:
+        manifest = load_manifest(staging)
+    except Exception as exc:
+        raise ToolFailureError(f"staged reprocess manifest is unreadable: {exc}") from exc
+    if manifest.job_id != job_id:
+        raise ToolFailureError(
+            f"staged reprocess job_id {manifest.job_id!r} does not match {job_id!r}"
+        )
+    if manifest.schema != SCHEMA:
+        raise ToolFailureError(
+            f"staged reprocess schema {manifest.schema!r} does not match {SCHEMA!r}"
+        )
+    if manifest.frames.count != len(manifest.frames.items):
+        raise ToolFailureError("staged reprocess frame count does not match its index")
+    unique_count = sum(frame.is_unique for frame in manifest.frames.items)
+    if manifest.frames.unique_count != unique_count:
+        raise ToolFailureError("staged reprocess unique frame count does not match its index")
+    staged_frames = staging / FRAMES_DIR_NAME
+    for frame in manifest.frames.items:
+        relative = Path(frame.file)
+        if relative.is_absolute() or relative.name != frame.file:
+            raise ToolFailureError(
+                f"staged reprocess frame path is not a safe filename: {frame.file!r}"
+            )
+        if not (staged_frames / relative).is_file():
+            raise ToolFailureError(
+                f"staged reprocess frame is missing from its index: {frame.file!r}"
+            )
+
+    diarization = manifest.transcript.diarization
+    if diarization is not None:
+        active_names = diarization.speaker_names or {}
+        pending_names = diarization.speaker_names_pending_review or {}
+        if not set(diarization.speaker_name_evidence or {}) <= set(active_names):
+            raise ToolFailureError("staged active speaker evidence has no matching name")
+        if not set(diarization.speaker_name_evidence_pending_review or {}) <= set(
+            pending_names
+        ):
+            raise ToolFailureError("staged pending speaker evidence has no matching name")
+        if not set(diarization.speaker_names_pending_review_context or {}) <= set(
+            pending_names
+        ):
+            raise ToolFailureError("staged pending speaker context has no matching name")
+    return manifest
+
+
+def commit_reprocessed_job(job_id: str, staging: Path) -> Manifest:
+    """Atomically publish a validated staged rebuild, rolling frames back on error.
+
+    The caller must hold :func:`job_lock`. The old manifest remains present
+    until the last ``os.replace``; catchable failures before that point restore
+    the old frames and leave the old manifest authoritative.
+    """
+    manifest = _validate_staged_job(job_id, staging)
+    directory = job_dir(job_id)
+    live_manifest = directory / MANIFEST_NAME
+    staged_manifest = staging / MANIFEST_NAME
+    live_frames = directory / FRAMES_DIR_NAME
+    staged_frames = staging / FRAMES_DIR_NAME
+    backup_frames = staging / REPROCESS_BACKUP_FRAMES
+    failed_frames = staging / REPROCESS_FAILED_FRAMES
+    old_frames_moved = False
+    new_frames_moved = False
+    manifest_replaced = False
+    try:
+        if live_frames.exists():
+            os.replace(live_frames, backup_frames)
+            old_frames_moved = True
+        if staged_frames.exists():
+            os.replace(staged_frames, live_frames)
+            new_frames_moved = True
+        os.replace(staged_manifest, live_manifest)
+        manifest_replaced = True
+    except BaseException as exc:
+        if not manifest_replaced:
+            try:
+                if new_frames_moved and live_frames.exists():
+                    os.replace(live_frames, failed_frames)
+                if old_frames_moved and backup_frames.exists():
+                    os.replace(backup_frames, live_frames)
+                shutil.rmtree(failed_frames, ignore_errors=True)
+            except Exception as rollback_exc:
+                raise ToolFailureError(
+                    "reprocess commit failed and frame rollback also failed: "
+                    f"{rollback_exc}"
+                ) from rollback_exc
+        if isinstance(exc, Exception):
+            raise ToolFailureError(
+                "reprocess commit failed before manifest publication; the previous "
+                "job was restored — retry the operation"
+            ) from exc
+        raise
+    return manifest
 
 
 @contextmanager
@@ -280,6 +414,44 @@ def _sweep_partial_dirs(min_age_s: float = PARTIAL_SWEEP_MIN_AGE_S) -> list[str]
     return swept
 
 
+def _sweep_reprocess_dirs(min_age_s: float = PARTIAL_SWEEP_MIN_AGE_S) -> list[str]:
+    """Remove abandoned hidden rebuild workspaces without touching live runs."""
+    root = jobs_root()
+    if not root.is_dir():
+        return []
+    now = time.time()
+    swept: list[str] = []
+    for directory in root.iterdir():
+        if not directory.is_dir():
+            continue
+        for staging in directory.glob(f"{REPROCESS_PREFIX}*"):
+            if not staging.is_dir():
+                continue
+            try:
+                if now - staging.stat().st_mtime < min_age_s:
+                    continue
+            except OSError:
+                continue
+            try:
+                with job_lock(directory.name, wait_seconds=0):
+                    if not staging.is_dir():
+                        continue
+                    try:
+                        if now - staging.stat().st_mtime < min_age_s:
+                            continue
+                    except OSError:
+                        continue
+                    shutil.rmtree(staging)
+                    swept.append(f"{directory.name}/{staging.name}")
+            except ToolFailureError:
+                logger.info(
+                    "found stale reprocess dir %s/%s, left in place (job lock is held)",
+                    directory.name,
+                    staging.name,
+                )
+    return swept
+
+
 def gc(keep_days: int) -> GcResult:
     """Delete jobs older than ``keep_days`` and sweep stale partial dirs."""
     cutoff = datetime.now(UTC) - timedelta(days=keep_days)
@@ -297,4 +469,7 @@ def gc(keep_days: int) -> GcResult:
         if created < cutoff:
             delete_job(manifest.job_id)
             removed.append(manifest.job_id)
-    return GcResult(removed=removed, swept=_sweep_partial_dirs())
+    return GcResult(
+        removed=removed,
+        swept=[*_sweep_partial_dirs(), *_sweep_reprocess_dirs()],
+    )

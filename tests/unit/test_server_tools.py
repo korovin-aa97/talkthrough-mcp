@@ -654,7 +654,21 @@ def test_name_candidates_are_bounded_deduplicated_name_like_ocr_hints(
 
 @pytest.mark.parametrize(
     "line",
-    ["Vera Smith", "MARTIN DUBOIS", "Ирина Петрова", "Élodie Martin", "张伟", "محمد علي"],
+    [
+        "Vera Smith",
+        "MARTIN DUBOIS",
+        "Ирина Петрова",
+        "Élodie Martin",
+        "张伟",
+        "محمد علي",
+        "Vera Smith (she/her)",
+        "Ludwig van der Beek",
+        "Jean d'Arc",
+        "Иван Петров (организатор)",
+        "Prof. Dr. Hans-Peter von der Linden",
+        "Ana María López de la Torre",
+        "vera smith",
+    ],
 )
 def test_name_candidate_filter_accepts_names_across_scripts(line: str) -> None:
     from talkthrough_mcp.core.pipeline import _name_candidates
@@ -676,6 +690,18 @@ def test_name_candidate_filter_accepts_names_across_scripts(line: str) -> None:
         r"C:\\Users\\alex\\project.py",
         "this is a long slide sentence explaining the quarterly product roadmap",
         "A" * 81,
+        "PROPHET",
+        "Terminal",
+        "Loading",
+        "Meeting Chat",
+        "Zoom Meeting",
+        "Waiting Room",
+        "Everyone",
+        "Unknown Caller",
+        "Copy Paste Delete",
+        "Stop Recording",
+        "参会者",
+        "Продажи Отчет",
     ],
 )
 def test_name_candidate_filter_rejects_ui_chrome_paths_and_long_text(line: str) -> None:
@@ -688,6 +714,41 @@ def test_name_candidate_filter_rejects_ui_chrome_paths_and_long_text(line: str) 
     assert _name_candidates(manifest, 0) == []
 
 
+@pytest.mark.parametrize(
+    ("line", "reason"),
+    [
+        ("Vera Smith (she/her)", None),
+        ("vera smith", None),
+        ("Meeting Chat", "ui_phrase"),
+        ("https://example.com/Vera", "url_or_path"),
+        ("Vera 123", "digit"),
+        ("ordinary lowercase sentence", None),
+        ("ordinary lowercase sentence with five", "casing"),
+    ],
+)
+def test_name_candidate_filter_exposes_explainable_reasons(
+    line: str, reason: str | None
+) -> None:
+    from talkthrough_mcp.core.pipeline import _name_candidate_rejection_reason
+
+    assert _name_candidate_rejection_reason(line) == reason
+
+
+def test_name_candidate_dedupe_uses_nfkc_casefold_and_punctuation() -> None:
+    from talkthrough_mcp.core.pipeline import _name_candidates
+
+    manifest = make_manifest()
+    fullwidth = "\uff36\uff45\uff52\uff41\u3000\uff33\uff4d\uff49\uff54\uff48"
+    manifest.frames.items[0].ocr_text = (
+        f"{fullwidth}\nVERA-SMITH\nVera Smith (she/her)"
+    )
+    manifest.frames.items[2].ocr_text = None
+    manifest.frames.items[3].ocr_text = None
+    assert _name_candidates(manifest, 0) == [
+        {"text": fullwidth.replace("\u3000", " "), "frame_ms": 0}
+    ]
+
+
 def test_old_flat_ocr_payload_does_not_become_a_long_name_candidate() -> None:
     from talkthrough_mcp.core.pipeline import _name_candidates
 
@@ -698,6 +759,52 @@ def test_old_flat_ocr_payload_does_not_become_a_long_name_candidate() -> None:
     manifest.frames.items[2].ocr_text = None
     manifest.frames.items[3].ocr_text = None
     assert _name_candidates(manifest, 0) == []
+
+
+def test_legacy_ocr_note_is_metadata_based_bounded_and_read_only(
+    isolated_home: Path,
+) -> None:
+    from talkthrough_mcp.core import jobs, pipeline
+    from talkthrough_mcp.server import get_transcript, label_speakers
+
+    manifest = _diarize(make_manifest())
+    manifest.tool_versions["talkthrough-mcp"] = "0.3.0"
+    manifest.frames.items[0].ocr_text = (
+        "Vera Smith File Edit View Navigate Code Refactor Run Tools Window Help"
+    )
+    job_id = _store(manifest)
+    path = jobs.job_dir(job_id) / "manifest.json"
+    before = path.read_bytes()
+
+    transcript = get_transcript(job_id)
+    summary = pipeline.summarize(
+        pipeline.ProcessResult(manifest=manifest, reused=True, elapsed_s=0)
+    )["diarization"]
+    labelled = label_speakers(job_id, {})
+    note = transcript["name_candidates_note"]
+    assert note == summary["name_candidates_note"] == labelled["name_candidates_note"]
+    assert "legacy single-line OCR" in note
+    assert "may be absent" in note
+    assert all("name_candidates" not in speaker for speaker in transcript["speakers"])
+    assert path.read_bytes() == before
+
+
+def test_legacy_ocr_note_uses_producer_not_newline_shape() -> None:
+    from talkthrough_mcp.core.pipeline import legacy_name_candidates_note
+
+    current = make_manifest()
+    current.tool_versions["talkthrough-mcp"] = "0.3.2"
+    current.frames.items[0].ocr_text = "Vera Smith"
+    assert legacy_name_candidates_note(current) is None
+
+    audio = make_manifest(kind="audio")
+    audio.tool_versions["talkthrough-mcp"] = "0.3.0"
+    assert legacy_name_candidates_note(audio) is None
+
+    no_ocr = make_manifest()
+    no_ocr.tool_versions["talkthrough-mcp"] = "0.3.0"
+    no_ocr.caps = replace(no_ocr.caps, ocr=False)
+    assert legacy_name_candidates_note(no_ocr) is None
 
 
 def test_search_whitespace_semantics_survive_ocr_line_boundaries() -> None:

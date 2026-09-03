@@ -279,6 +279,9 @@ def get_transcript(
     if diarization is not None and diarization.available:
         payload["diarized"] = True
         payload["speakers"], hidden = pipeline.roster_payload(diarization, manifest)
+        legacy_note = pipeline.legacy_name_candidates_note(manifest)
+        if legacy_note is not None:
+            payload["name_candidates_note"] = legacy_note
         payload["attribution_precision"] = pipeline.attribution_precision(manifest.transcript)
         if payload["attribution_precision"] == "segment":
             payload["attribution_note"] = (
@@ -626,11 +629,13 @@ def label_speakers(
         save_manifest(manifest, jobs.job_dir(job_id))
 
     speakers, hidden = pipeline.roster_payload(diarization, manifest)
+    legacy_note = pipeline.legacy_name_candidates_note(manifest)
     return {
         "job_id": job_id,
         "mapping_count": len(diarization.speaker_names or {}),
         "speakers": speakers,
         **({"speakers_truncated": hidden} if hidden else {}),
+        **({"name_candidates_note": legacy_note} if legacy_note else {}),
         **pipeline.pending_review_payload(diarization),
         "note": (
             "names are user/agent-verified labels; raw S<n> identifiers remain canonical "

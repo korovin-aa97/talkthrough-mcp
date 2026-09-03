@@ -10,6 +10,7 @@ from __future__ import annotations
 import itertools
 import json
 import os
+import shutil
 import subprocess
 from collections.abc import Iterator
 from pathlib import Path
@@ -28,7 +29,7 @@ from tests.integration.fixture_facts import (
 
 from talkthrough_mcp.core import jobs, pipeline
 from talkthrough_mcp.core.errors import ValidationError
-from talkthrough_mcp.core.manifest import search_manifest
+from talkthrough_mcp.core.manifest import save_manifest, search_manifest
 from talkthrough_mcp.core.pipeline import ProcessResult
 
 pytestmark = pytest.mark.timeout(900)
@@ -385,6 +386,48 @@ def test_japanese_narration_autoselects_the_japan_ocr_pack(integration_home: Pat
         f"katakana heading not OCR-indexed — japan pack not engaged? "
         f"frame texts: {[frame.ocr_text for frame in result.manifest.unique_frames()]}"
     )
+
+
+def test_copied_legacy_manifest_is_served_with_read_only_ocr_note(
+    demo: ProcessResult, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A private real-store specimen is unavailable; reproduce its flat OCR
+    shape on a copy of the committed video fixture without migrating it."""
+    copied_home = tmp_path / "legacy-home"
+    copied_job = copied_home / "jobs" / demo.manifest.job_id
+    shutil.copytree(jobs.job_dir(demo.manifest.job_id), copied_job)
+    monkeypatch.setenv("TALKTHROUGH_HOME", str(copied_home))
+    manifest = jobs.load_job(demo.manifest.job_id)
+    manifest.tool_versions["talkthrough-mcp"] = "0.3.0"
+    for frame in manifest.frames.items:
+        if frame.ocr_text:
+            frame.ocr_text = " ".join(frame.ocr_text.splitlines())
+    from talkthrough_mcp.core.diarize import (
+        Diarization,
+        Turn,
+        attribute_segments,
+        speaker_roster,
+    )
+
+    turns = [Turn(0, round(manifest.media.duration_s * 1000), "S1")]
+    manifest.transcript.segments = attribute_segments(
+        manifest.transcript.segments, turns
+    )
+    manifest.transcript.diarization = Diarization(
+        available=True,
+        reason="",
+        detected_num_speakers=1,
+        speakers=speaker_roster(turns),
+        turns=turns,
+    )
+    save_manifest(manifest, copied_job)
+    before = (copied_job / "manifest.json").read_bytes()
+
+    from talkthrough_mcp.server import get_transcript
+
+    payload = get_transcript(manifest.job_id)
+    assert "legacy single-line OCR" in payload["name_candidates_note"]
+    assert (copied_job / "manifest.json").read_bytes() == before
 
 
 # --- mutating tests: keep these LAST -----------------------------------------
