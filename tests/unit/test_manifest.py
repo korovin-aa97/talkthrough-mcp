@@ -12,6 +12,7 @@ from tests.conftest import make_manifest
 
 from talkthrough_mcp.core.diarize import (
     Diarization,
+    PendingSpeakerReviewContext,
     Turn,
     attribute_segments,
     speaker_roster,
@@ -261,6 +262,7 @@ def test_straddle_hint_keeps_unique_tokens_from_two_long_segments() -> None:
     assert len(hint.quote) <= STRADDLE_QUOTE_MAX_CHARS
     assert "alpha" in hint.quote and "omega" in hint.quote
     assert hint.quote.startswith("… ") and hint.quote.endswith(" …")
+    assert "… …" not in hint.quote
     assert hint.all_tokens_shown is True
 
 
@@ -446,6 +448,44 @@ def test_diarized_round_trip(tmp_path: Path) -> None:
     assert diarization is not None
     assert diarization.turns == [Turn(0, 5000, "S1"), Turn(5000, 8000, "S2")]
     assert [stat.label for stat in diarization.speakers] == ["S1", "S2"]
+
+
+def test_manifest_round_trips_additive_pending_context_without_changing_old_maps(
+    tmp_path: Path,
+) -> None:
+    manifest = _diarized_manifest()
+    diarization = manifest.transcript.diarization
+    assert diarization is not None
+    diarization.speaker_names_pending_review = {"S1": "Alice"}
+    diarization.speaker_name_evidence_pending_review = {"S1": "old intro"}
+    diarization.speaker_names_pending_review_context = {
+        "S1": PendingSpeakerReviewContext(
+            source_detected_num_speakers=2,
+            longest_turn_at_ms=0,
+        )
+    }
+    save_manifest(manifest, tmp_path)
+    loaded = load_manifest(tmp_path)
+    loaded_diarization = loaded.transcript.diarization
+    assert loaded_diarization is not None
+    assert loaded_diarization.speaker_names_pending_review == {"S1": "Alice"}
+    assert loaded_diarization.speaker_name_evidence_pending_review == {
+        "S1": "old intro"
+    }
+    assert loaded_diarization.speaker_names_pending_review_context == {
+        "S1": PendingSpeakerReviewContext(
+            source_detected_num_speakers=2,
+            longest_turn_at_ms=0,
+        )
+    }
+
+    old_reader_payload = manifest.to_dict()
+    old_diarization = old_reader_payload["transcript"]["diarization"]
+    old_diarization.pop("speaker_names_pending_review_context")
+    old_compatible = Manifest.from_dict(old_reader_payload).transcript.diarization
+    assert old_compatible is not None
+    assert old_compatible.speaker_names_pending_review == {"S1": "Alice"}
+    assert old_compatible.speaker_name_evidence_pending_review == {"S1": "old intro"}
 
 
 def test_srt_prefixes_every_diarized_cue() -> None:

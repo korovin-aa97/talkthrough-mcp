@@ -6,7 +6,11 @@ from typing import Any, cast
 
 import pytest
 
-from talkthrough_mcp.core.diarize import Diarization, SpeakerStat
+from talkthrough_mcp.core.diarize import (
+    Diarization,
+    PendingSpeakerReviewContext,
+    SpeakerStat,
+)
 from talkthrough_mcp.core.errors import ValidationError
 from talkthrough_mcp.core.speaker_labels import apply_speaker_label_patch
 
@@ -105,6 +109,10 @@ def test_explicit_label_patch_reviews_only_the_touched_pending_entries() -> None
         "S1": "old intro",
         "S2": "old name plate",
     }
+    diarization.speaker_names_pending_review_context = {
+        "S1": PendingSpeakerReviewContext(longest_turn_at_ms=1000),
+        "S2": PendingSpeakerReviewContext(longest_turn_at_ms=5000),
+    }
     apply_speaker_label_patch(
         diarization,
         {"S1": "Vera"},
@@ -116,10 +124,14 @@ def test_explicit_label_patch_reviews_only_the_touched_pending_entries() -> None
     }
     assert diarization.speaker_names_pending_review == {"S2": "Tom"}
     assert diarization.speaker_name_evidence_pending_review == {"S2": "old name plate"}
+    assert diarization.speaker_names_pending_review_context == {
+        "S2": PendingSpeakerReviewContext(longest_turn_at_ms=5000)
+    }
 
     apply_speaker_label_patch(diarization, {"S2": None})
     assert diarization.speaker_names_pending_review is None
     assert diarization.speaker_name_evidence_pending_review is None
+    assert diarization.speaker_names_pending_review_context is None
 
 
 def test_evidence_only_patch_does_not_claim_pending_identity_was_reviewed() -> None:
@@ -128,3 +140,53 @@ def test_evidence_only_patch_does_not_claim_pending_identity_was_reviewed() -> N
     diarization.speaker_names_pending_review = {"S2": "Tom"}
     apply_speaker_label_patch(diarization, {}, {"S1": "new proof"})
     assert diarization.speaker_names_pending_review == {"S2": "Tom"}
+
+
+def test_stale_pending_label_can_only_be_removed_with_explicit_null() -> None:
+    diarization = _diarization()
+    diarization.speaker_names_pending_review = {"S3": "Ghost"}
+    diarization.speaker_name_evidence_pending_review = {"S3": "old title card"}
+    diarization.speaker_names_pending_review_context = {
+        "S3": PendingSpeakerReviewContext(longest_turn_at_ms=9000)
+    }
+
+    before = diarization.to_dict()
+    with pytest.raises(ValidationError, match=r"inactive.*cannot be confirmed"):
+        apply_speaker_label_patch(diarization, {"S3": "Ghost"})
+    assert diarization.to_dict() == before
+
+    with pytest.raises(ValidationError, match=r"inactive.*cannot be confirmed"):
+        apply_speaker_label_patch(diarization, {"S3": "   "})
+    assert diarization.to_dict() == before
+
+    with pytest.raises(ValidationError, match=r"evidence.*inactive"):
+        apply_speaker_label_patch(diarization, {}, {"S3": "new proof"})
+    assert diarization.to_dict() == before
+
+    apply_speaker_label_patch(diarization, {" s3 ": None})
+    assert diarization.speaker_names_pending_review is None
+    assert diarization.speaker_name_evidence_pending_review is None
+    assert diarization.speaker_names_pending_review_context is None
+
+
+def test_unknown_label_error_names_current_and_pending_sets() -> None:
+    diarization = _diarization()
+    diarization.speaker_names_pending_review = {"S3": "Ghost"}
+    with pytest.raises(
+        ValidationError,
+        match=r"current roster labels: S1, S2; pending-review labels: S3",
+    ):
+        apply_speaker_label_patch(diarization, {"S4": None})
+
+
+def test_mixed_current_and_invalid_stale_patch_is_atomic() -> None:
+    diarization = _diarization()
+    diarization.speaker_names = {"S1": "Vera"}
+    diarization.speaker_names_pending_review = {"S3": "Ghost"}
+    before = diarization.to_dict()
+    with pytest.raises(ValidationError, match=r"inactive.*cannot be confirmed"):
+        apply_speaker_label_patch(
+            diarization,
+            {"S1": "Updated Vera", "S3": "Ghost"},
+        )
+    assert diarization.to_dict() == before

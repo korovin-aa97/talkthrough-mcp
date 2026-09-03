@@ -9,7 +9,7 @@ import pytest
 from tests.conftest import make_manifest
 
 from talkthrough_mcp.core import diarize
-from talkthrough_mcp.core.diarize import Diarization
+from talkthrough_mcp.core.diarize import Diarization, PendingSpeakerReviewContext
 from talkthrough_mcp.core.errors import ToolFailureError, ValidationError
 from talkthrough_mcp.core.pipeline import (
     ALLOWED_WHISPER_MODELS,
@@ -751,6 +751,124 @@ def _amend_through_fake_engine(media, monkeypatch: pytest.MonkeyPatch, *, turns,
     return pipeline.process_media(str(media), diarize_speakers=True, num_speakers=k)
 
 
+def _stored_force_identity_job(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    video: bool = False,
+):
+    from talkthrough_mcp.core import jobs
+    from talkthrough_mcp.core.diarize import Turn, attribute_segments, speaker_roster
+    from talkthrough_mcp.core.manifest import save_manifest
+
+    monkeypatch.setenv("TALKTHROUGH_HOME", str(tmp_path / "force-home"))
+    media = tmp_path / ("force.mp4" if video else "force.m4a")
+    media.write_bytes(b"force fixture bytes")
+    job_id = jobs.compute_job_id(media)
+    turns = [Turn(0, 4000, "S1"), Turn(4000, 8000, "S2")]
+    manifest = make_manifest(job_id=job_id, kind="video" if video else "audio")
+    manifest.media = type(manifest.media)(
+        **{
+            **manifest.media.__dict__,
+            "path": str(media),
+            "filename": media.name,
+            "size_bytes": media.stat().st_size,
+        }
+    )
+    manifest.transcript.segments = attribute_segments(
+        manifest.transcript.segments, turns
+    )
+    manifest.transcript.diarization = Diarization(
+        available=True,
+        reason="",
+        requested_num_speakers=2,
+        detected_num_speakers=2,
+        speakers=speaker_roster(turns),
+        turns=turns,
+        speaker_names={"S1": "Alice"},
+        speaker_name_evidence={"S1": "old introduction"},
+        speaker_names_pending_review={"S3": "Carol"},
+        speaker_name_evidence_pending_review={"S3": "older roster"},
+        speaker_names_pending_review_context={
+            "S3": PendingSpeakerReviewContext(longest_turn_at_ms=7000)
+        },
+    )
+    directory = jobs.job_dir(job_id)
+    directory.mkdir(parents=True)
+    if video:
+        frame_directory = directory / "frames"
+        frame_directory.mkdir()
+        for frame in manifest.frames.items:
+            (frame_directory / frame.file).write_bytes(b"old:" + frame.file.encode())
+    save_manifest(manifest, directory)
+    return media, manifest
+
+
+def _stub_successful_force(
+    media: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    video: bool = False,
+) -> None:
+    from tests.conftest import make_manifest as _make_manifest
+
+    from talkthrough_mcp.core import audio, dedup, frames, ocr, pipeline, stt
+    from talkthrough_mcp.core.diarize import Turn
+    from talkthrough_mcp.core.probe import MediaInfo
+
+    stat = media.stat()
+    monkeypatch.setattr(
+        pipeline,
+        "probe_media",
+        lambda path: MediaInfo(
+            path=str(media),
+            filename=media.name,
+            size_bytes=stat.st_size,
+            duration_s=8.0,
+            has_video=video,
+            has_audio=True,
+            width=1280 if video else 0,
+            height=720 if video else 0,
+            video_codec="h264" if video else "",
+            mtime_epoch=stat.st_mtime,
+        ),
+    )
+    monkeypatch.setattr(audio, "extract_wav", lambda *args, **kwargs: None)
+    monkeypatch.setattr(
+        stt,
+        "transcribe",
+        lambda *args, **kwargs: stt.SttResult(
+            language="en",
+            model="tiny",
+            segments=tuple(_make_manifest(kind="audio").transcript.segments[:2]),
+            latency_ms=1,
+            words=(
+                stt.SttWord(0, 2000, "Hello"),
+                stt.SttWord(4000, 6000, "There"),
+            ),
+        ),
+    )
+    engine(monkeypatch, available=True)
+    monkeypatch.setattr(
+        diarize,
+        "create_diarizer",
+        lambda: _FakeDiarizer([Turn(0, 4000, "S1"), Turn(4000, 8000, "S2")]),
+    )
+    monkeypatch.setattr(diarize, "load_wav_float32", lambda path: ([], 16000))
+    monkeypatch.setattr(pipeline, "_tool_versions", lambda: {"talkthrough-mcp": "test"})
+    if video:
+        def extract_frames(media_path, frame_directory, **kwargs):  # type: ignore[no-untyped-def]
+            frame_directory.mkdir(parents=True)
+            frame = frames.Frame(ms=0, file="t00000000.jpg")
+            (frame_directory / frame.file).write_bytes(b"new frame")
+            return [frame], False
+
+        monkeypatch.setattr(frames, "extract_keyframes", extract_frames)
+        monkeypatch.setattr(dedup, "mark_duplicates", lambda *args, **kwargs: None)
+        monkeypatch.setattr(ocr, "create_engine", lambda **kwargs: object())
+        monkeypatch.setattr(ocr, "ocr_image", lambda *args, **kwargs: "Alice")
+
+
 def test_noop_amend_reports_labels_unchanged_and_keeps_provenance(
     tmp_path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -767,6 +885,11 @@ def test_noop_amend_reports_labels_unchanged_and_keeps_provenance(
     assert before_diarization is not None
     before_diarization.speaker_names = {"S1": "Vera"}
     before_diarization.speaker_name_evidence = {"S1": "intro"}
+    before_diarization.speaker_names_pending_review = {"S2": "Tom"}
+    before_diarization.speaker_name_evidence_pending_review = {"S2": "old plate"}
+    before_diarization.speaker_names_pending_review_context = {
+        "S2": PendingSpeakerReviewContext(longest_turn_at_ms=5000)
+    }
     save_manifest(before_amend, jobs.job_dir(before_amend.job_id))
     result = _amend_through_fake_engine(media, monkeypatch, turns=turns, k=3)
     assert result.amended is True  # the amend RAN and landed labels…
@@ -776,6 +899,11 @@ def test_noop_amend_reports_labels_unchanged_and_keeps_provenance(
     assert diarization.amend_reason == "num_speakers"
     assert diarization.speaker_names == {"S1": "Vera"}
     assert diarization.speaker_name_evidence == {"S1": "intro"}
+    assert diarization.speaker_names_pending_review == {"S2": "Tom"}
+    assert diarization.speaker_name_evidence_pending_review == {"S2": "old plate"}
+    assert diarization.speaker_names_pending_review_context == {
+        "S2": PendingSpeakerReviewContext(longest_turn_at_ms=5000)
+    }
     summary = pipeline.summarize(result)["diarization"]
     assert summary["labels_changed"] is False
     assert "nothing was relabelled" in summary["amend_note"]
@@ -878,6 +1006,328 @@ def test_relabelling_amend_moves_verified_names_to_persistent_pending_review(
     assert latest_diarization.speaker_name_evidence_pending_review == {
         "S1": "reviewed against current roster"
     }
+
+
+def test_multiple_relabel_generations_merge_disjoint_pending_and_keep_old_anchors(
+    tmp_path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from talkthrough_mcp.core import jobs, pipeline
+    from talkthrough_mcp.core.diarize import Turn
+    from talkthrough_mcp.core.manifest import save_manifest
+    from talkthrough_mcp.server import label_speakers
+
+    media, original = _stored_attributed_job(tmp_path, monkeypatch)
+    stored = jobs.load_job(jobs.compute_job_id(media))
+    first_diarization = stored.transcript.diarization
+    assert first_diarization is not None
+    first_diarization.speaker_names = {"S1": "Samantha", "S2": "Daniel"}
+    first_diarization.speaker_name_evidence = {
+        "S1": "first voice",
+        "S2": "second voice",
+    }
+    save_manifest(stored, jobs.job_dir(stored.job_id))
+
+    three_speakers = [
+        Turn(0, 2500, "S1"),
+        Turn(2500, 5000, "S2"),
+        Turn(5000, 8000, "S3"),
+    ]
+    first_amend = _amend_through_fake_engine(
+        media, monkeypatch, turns=three_speakers, k=3
+    )
+    first_pending = first_amend.manifest.transcript.diarization
+    assert first_pending is not None
+    assert first_pending.speaker_names_pending_review == {
+        "S1": "Samantha",
+        "S2": "Daniel",
+    }
+    assert first_pending.speaker_names_pending_review_context is not None
+    assert first_pending.speaker_names_pending_review_context["S1"].talk_time_ms == 5000
+    assert first_pending.speaker_names_pending_review_context[
+        "S2"
+    ].longest_turn_at_ms == 5000
+
+    label_speakers(stored.job_id, {"S3": "Ghost"}, {"S3": "third voice"})
+    second_amend = _amend_through_fake_engine(
+        media, monkeypatch, turns=original, k=2
+    )
+    final = second_amend.manifest.transcript.diarization
+    assert final is not None
+    assert final.speaker_names is None
+    assert final.speaker_names_pending_review == {
+        "S1": "Samantha",
+        "S2": "Daniel",
+        "S3": "Ghost",
+    }
+    assert final.speaker_names_pending_review_context is not None
+    assert set(final.speaker_names_pending_review_context) == {"S1", "S2", "S3"}
+    assert final.speaker_names_pending_review_context[
+        "S3"
+    ].source_detected_num_speakers == 3
+    assert final.speaker_names_pending_review_context["S3"].longest_turn_at_ms == 5000
+    summary = pipeline.summarize(second_amend)["diarization"]
+    assert summary["speaker_names_pending_review_stale_labels"] == ["S3"]
+
+    label_speakers(stored.job_id, {"S3": None})
+    cleaned = jobs.load_job(stored.job_id).transcript.diarization
+    assert cleaned is not None
+    assert cleaned.speaker_names_pending_review == {
+        "S1": "Samantha",
+        "S2": "Daniel",
+    }
+    assert cleaned.speaker_names_pending_review_context is not None
+    assert set(cleaned.speaker_names_pending_review_context) == {"S1", "S2"}
+
+
+def test_same_label_collision_is_reported_once_and_active_value_wins(
+    tmp_path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from talkthrough_mcp.core import jobs, pipeline
+    from talkthrough_mcp.core.diarize import Turn
+    from talkthrough_mcp.core.manifest import save_manifest
+
+    media, _original = _stored_attributed_job(tmp_path, monkeypatch)
+    stored = jobs.load_job(jobs.compute_job_id(media))
+    diarization = stored.transcript.diarization
+    assert diarization is not None
+    diarization.speaker_names = {"S1": "New Alice"}
+    diarization.speaker_name_evidence = {"S1": "fresh intro"}
+    diarization.speaker_names_pending_review = {"S1": "Old Alice"}
+    diarization.speaker_name_evidence_pending_review = {"S1": "old intro"}
+    save_manifest(stored, jobs.job_dir(stored.job_id))
+
+    changed = [Turn(0, 3000, "S1"), Turn(3000, 8000, "S2")]
+    result = _amend_through_fake_engine(media, monkeypatch, turns=changed, k=3)
+    updated = result.manifest.transcript.diarization
+    assert updated is not None
+    assert updated.speaker_names_pending_review == {"S1": "New Alice"}
+    summary = pipeline.summarize(result)["diarization"]
+    assert summary["speaker_names_pending_review_dropped"] == {"S1": "Old Alice"}
+    assert summary["speaker_names_pending_review_dropped_total"] == 1
+    assert "superseded" in summary["speaker_names_pending_review_dropped_note"]
+
+    reloaded = jobs.load_job(stored.job_id)
+    later = pipeline.summarize(
+        pipeline.ProcessResult(manifest=reloaded, reused=True, elapsed_s=0)
+    )["diarization"]
+    assert "speaker_names_pending_review_dropped" not in later
+
+
+def test_same_label_and_name_does_not_report_a_drop(
+    tmp_path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from talkthrough_mcp.core import jobs, pipeline
+    from talkthrough_mcp.core.diarize import Turn
+    from talkthrough_mcp.core.manifest import save_manifest
+
+    media, _original = _stored_attributed_job(tmp_path, monkeypatch)
+    stored = jobs.load_job(jobs.compute_job_id(media))
+    diarization = stored.transcript.diarization
+    assert diarization is not None
+    diarization.speaker_names = {"S1": "Alice"}
+    diarization.speaker_names_pending_review = {"S1": "Alice"}
+    save_manifest(stored, jobs.job_dir(stored.job_id))
+
+    changed = [Turn(0, 3000, "S1"), Turn(3000, 8000, "S2")]
+    result = _amend_through_fake_engine(media, monkeypatch, turns=changed, k=3)
+    summary = pipeline.summarize(result)["diarization"]
+    assert summary["speaker_names_pending_review"] == {"S1": "Alice"}
+    assert "speaker_names_pending_review_dropped" not in summary
+
+
+@pytest.mark.parametrize("diarize_flag", [False, None])
+def test_force_on_named_job_without_resolved_diarization_fails_before_probe(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    diarize_flag: bool | None,
+) -> None:
+    from talkthrough_mcp.core import jobs, pipeline
+
+    media, stored = _stored_force_identity_job(tmp_path, monkeypatch)
+    engine(monkeypatch, available=True)
+    monkeypatch.delenv("TALKTHROUGH_DIARIZE", raising=False)
+    before = (jobs.job_dir(stored.job_id) / "manifest.json").read_bytes()
+
+    def no_probe(path: Path):  # type: ignore[no-untyped-def]
+        raise AssertionError("unsafe force must fail before probing or staging")
+
+    monkeypatch.setattr(pipeline, "probe_media", no_probe)
+    with pytest.raises(ValidationError, match=r"force=true, diarize=true"):
+        pipeline.process_media(
+            str(media),
+            force=True,
+            diarize_speakers=diarize_flag,
+        )
+    assert (jobs.job_dir(stored.job_id) / "manifest.json").read_bytes() == before
+    assert not list(jobs.job_dir(stored.job_id).glob(f"{jobs.REPROCESS_PREFIX}*"))
+
+
+def test_successful_named_force_moves_all_identities_to_pending_review(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from talkthrough_mcp.core import jobs, pipeline
+
+    media, stored = _stored_force_identity_job(tmp_path, monkeypatch)
+    _stub_successful_force(media, monkeypatch)
+    result = pipeline.process_media(
+        str(media), force=True, diarize_speakers=True, num_speakers=2
+    )
+    rebuilt = result.manifest.transcript.diarization
+    assert rebuilt is not None and rebuilt.available
+    assert rebuilt.speaker_names is None
+    assert rebuilt.speaker_name_evidence is None
+    assert rebuilt.speaker_names_pending_review == {
+        "S1": "Alice",
+        "S3": "Carol",
+    }
+    assert rebuilt.speaker_name_evidence_pending_review == {
+        "S1": "old introduction",
+        "S3": "older roster",
+    }
+    assert rebuilt.speaker_names_pending_review_context is not None
+    assert set(rebuilt.speaker_names_pending_review_context) == {"S1", "S3"}
+    summary = pipeline.summarize(result)["diarization"]
+    assert "rebuilt the transcript and speaker labels" in summary[
+        "force_identity_review_note"
+    ]
+    assert "not as an active identity" in summary["force_identity_review_note"]
+    assert not list(jobs.job_dir(stored.job_id).glob(f"{jobs.REPROCESS_PREFIX}*"))
+
+
+def test_named_force_same_label_collision_is_reported_once(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from talkthrough_mcp.core import jobs, pipeline
+    from talkthrough_mcp.core.manifest import save_manifest
+
+    media, stored = _stored_force_identity_job(tmp_path, monkeypatch)
+    diarization = stored.transcript.diarization
+    assert diarization is not None
+    diarization.speaker_names_pending_review = {"S1": "Older Alice"}
+    diarization.speaker_name_evidence_pending_review = {"S1": "old proof"}
+    diarization.speaker_names_pending_review_context = None
+    save_manifest(stored, jobs.job_dir(stored.job_id))
+    _stub_successful_force(media, monkeypatch)
+
+    result = pipeline.process_media(
+        str(media), force=True, diarize_speakers=True, num_speakers=2
+    )
+    summary = pipeline.summarize(result)["diarization"]
+    assert summary["speaker_names_pending_review"] == {"S1": "Alice"}
+    assert summary["speaker_names_pending_review_dropped"] == {
+        "S1": "Older Alice"
+    }
+    later = pipeline.summarize(
+        pipeline.ProcessResult(
+            manifest=jobs.load_job(stored.job_id), reused=True, elapsed_s=0
+        )
+    )["diarization"]
+    assert "speaker_names_pending_review_dropped" not in later
+
+
+@pytest.mark.parametrize("failure_stage", ["stt", "diarization", "ocr"])
+def test_failed_named_force_keeps_old_manifest_and_frames(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    failure_stage: str,
+) -> None:
+    from talkthrough_mcp.core import jobs, ocr, pipeline, stt
+
+    video = failure_stage == "ocr"
+    media, stored = _stored_force_identity_job(
+        tmp_path, monkeypatch, video=video
+    )
+    _stub_successful_force(media, monkeypatch, video=video)
+    directory = jobs.job_dir(stored.job_id)
+    before_manifest = (directory / "manifest.json").read_bytes()
+    before_frames = (
+        {
+            path.name: path.read_bytes()
+            for path in (directory / "frames").iterdir()
+        }
+        if video
+        else {}
+    )
+    if failure_stage == "stt":
+        monkeypatch.setattr(
+            stt,
+            "transcribe",
+            lambda *args, **kwargs: (_ for _ in ()).throw(
+                ToolFailureError("controlled STT failure")
+            ),
+        )
+    elif failure_stage == "diarization":
+        monkeypatch.setattr(
+            diarize,
+            "create_diarizer",
+            lambda: (_ for _ in ()).throw(
+                ToolFailureError("controlled diarizer failure")
+            ),
+        )
+    else:
+        monkeypatch.setattr(
+            ocr,
+            "ocr_image",
+            lambda *args, **kwargs: (_ for _ in ()).throw(
+                ToolFailureError("controlled OCR failure")
+            ),
+        )
+
+    with pytest.raises(ToolFailureError):
+        pipeline.process_media(
+            str(media), force=True, diarize_speakers=True, num_speakers=2
+        )
+    assert (directory / "manifest.json").read_bytes() == before_manifest
+    if video:
+        assert {
+            path.name: path.read_bytes()
+            for path in (directory / "frames").iterdir()
+        } == before_frames
+    assert jobs.load_job(stored.job_id).transcript.diarization is not None
+    assert not list(directory.glob(f"{jobs.REPROCESS_PREFIX}*"))
+
+
+def test_two_named_force_calls_serialize_under_the_job_lock(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import threading
+    import time
+
+    from talkthrough_mcp.core import pipeline, stt
+
+    media, _stored = _stored_force_identity_job(tmp_path, monkeypatch)
+    _stub_successful_force(media, monkeypatch)
+    real_transcribe = stt.transcribe
+    guard = threading.Lock()
+    active = 0
+    max_active = 0
+
+    def observed_transcribe(*args, **kwargs):  # type: ignore[no-untyped-def]
+        nonlocal active, max_active
+        with guard:
+            active += 1
+            max_active = max(max_active, active)
+        try:
+            time.sleep(0.05)
+            return real_transcribe(*args, **kwargs)
+        finally:
+            with guard:
+                active -= 1
+
+    monkeypatch.setattr(stt, "transcribe", observed_transcribe)
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        calls = [
+            pool.submit(
+                pipeline.process_media,
+                str(media),
+                force=True,
+                diarize_speakers=True,
+                num_speakers=2,
+            )
+            for _ in range(2)
+        ]
+        assert all(call.result(timeout=10).reused is False for call in calls)
+    assert max_active == 1
 
 
 def test_concurrent_label_and_relabel_amend_never_lose_verified_names(

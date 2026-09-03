@@ -13,7 +13,7 @@ workflow. Everything runs locally: recordings never leave the machine.
 Add the MCP server:
 
 ```bash
-openclaw mcp add talkthrough --command uvx --arg --python --arg '>=3.11,<3.14' --arg 'talkthrough-mcp[diarization]'
+openclaw mcp add talkthrough --command uvx --arg --python --arg ">=3.11,<3.14" --arg "talkthrough-mcp[diarization]"
 ```
 
 Requires `uv` (https://astral.sh/uv). First processing downloads a whisper

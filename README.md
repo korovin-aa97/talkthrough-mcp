@@ -72,7 +72,7 @@ system. Choose this for a minimal setup, or when you manage MCP servers
 yourself across several clients:
 
 ```bash
-claude mcp add -s user talkthrough -- uvx --python '>=3.11,<3.14' 'talkthrough-mcp[diarization]'
+claude mcp add -s user talkthrough -- uvx --python ">=3.11,<3.14" "talkthrough-mcp[diarization]"
 ```
 
 **Full plugin** — the same server, plus native slash commands
@@ -344,7 +344,7 @@ More: [`integrations/zed/`](integrations/zed/)
 
 </details>
 
-Any other MCP stdio client uses the same server command: `uvx --python '>=3.11,<3.14' 'talkthrough-mcp[diarization]'`.
+Any other MCP stdio client uses the same server command: `uvx --python ">=3.11,<3.14" "talkthrough-mcp[diarization]"`.
 Per-engine folders with exactly these snippets plus verification steps live
 in [`integrations/`](integrations/); agents can self-install via
 [`llms-install.md`](llms-install.md).
@@ -361,7 +361,7 @@ works — diarization itself still runs only when requested per call
 and its models download once on first use.
 
 Prefer the minimal server without the diarization engine? Use
-`uvx talkthrough-mcp` as the command instead (the MCP registry entry also
+`uvx --python ">=3.11,<3.14" talkthrough-mcp` as the command instead (the MCP registry entry also
 resolves to this lean form) — an explicit `diarize=true` will then answer
 with the one-line install fix. Details in
 [Speakers](#speakers-optional-diarization).
@@ -460,6 +460,11 @@ torch, no accounts, no GPU):
   it re-runs *only* diarization — whisper is not re-run, and labels land in
   the existing job. Same for changing `num_speakers`. The diarization stage
   itself still re-scans the full audio: minutes on long recordings.
+- **Full rebuilds keep named jobs safe.** If a job has active or pending names,
+  `force=true` also requires `diarize=true`; otherwise the call refuses before
+  changing stored data. A successful force rebuilds in staging and moves every
+  previous identity to pending review against the fresh roster. Any processing
+  or commit failure leaves the prior manifest and frames intact.
 - Labels start anonymous. After checking self-introductions, vocatives, or
   video evidence, call `label_speakers` to preserve a verified mapping such
   as `S1` → "Alice" across sessions. The roster can expose bounded OCR
@@ -469,6 +474,10 @@ torch, no accounts, no GPU):
   active and move to bounded `speaker_names_pending_review` evidence instead
   of being silently lost. Re-check the current roster and explicitly confirm
   or remove each affected label with `label_speakers`.
+- Video jobs produced before 0.3.1 keep their original flat OCR and can return
+  `name_candidates_note` to explain why hints are absent. They remain fully
+  readable without migration; `force=true, diarize=true` regenerates line-aware
+  OCR while preserving saved identities for review.
 
 Models download once (~47 MB total) from pinned, checksum-verified URLs into
 `~/.talkthrough/models/`; warm runs are zero-network like the rest of the

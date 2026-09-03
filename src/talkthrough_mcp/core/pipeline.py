@@ -95,6 +95,12 @@ class ProcessResult:
     # the outcome either way.
     amended: bool = False
     vocabulary_echo_trimmed: int = 0  # opening initial_prompt echoes dropped
+    # Response-only collision report. The superseded pending value is not
+    # persisted because the latest human-verified active value wins.
+    speaker_names_pending_review_dropped: dict[str, str] | None = None
+    # Response-only explanation for a successful full rebuild that moved
+    # durable identities to pending review.
+    reprocessed_identity_review: bool = False
 
 
 def _env_int(name: str, default: int) -> int:
@@ -357,7 +363,7 @@ def _labels_snapshot(
 
 def _amend_diarization(
     media: Path, manifest: Manifest, request: _DiarizeRequest, report: ProgressFn
-) -> Manifest:
+) -> tuple[Manifest, dict[str, str]]:
     """Re-extract the WAV and run ONLY diarization on an existing job.
 
     Whisper is not re-run; stored segments are re-attributed in place and the
@@ -405,6 +411,16 @@ def _amend_diarization(
         if previous_diarization
         else {}
     )
+    previous_pending_context = (
+        dict(previous_diarization.speaker_names_pending_review_context or {})
+        if previous_diarization
+        else {}
+    )
+    pending_merge = (
+        diarize.merge_pending_speaker_identities(previous_diarization)
+        if previous_diarization is not None
+        else diarize.PendingSpeakerIdentityMerge({}, {}, {}, {})
+    )
     report("extracting audio", 0.10)
     try:
         audio.extract_wav(media, wav_path, timeout=tool_timeout)
@@ -435,22 +451,189 @@ def _amend_diarization(
             diarization.speaker_name_evidence_pending_review = (
                 previous_pending_evidence or None
             )
-        elif previous_names:
-            # Keep only the most recent unreviewed mapping. Active identities
-            # are deliberately not carried onto changed labels.
-            diarization.speaker_names_pending_review = previous_names
-            diarization.speaker_name_evidence_pending_review = previous_evidence or None
+            diarization.speaker_names_pending_review_context = (
+                previous_pending_context or None
+            )
         else:
-            # A second amend before review must not erase the saved mapping
-            # merely because there are no active names left to move.
-            diarization.speaker_names_pending_review = previous_pending_names or None
+            # Labels changed: no previous identity is safe to activate on the
+            # new roster. Merge every disjoint pending generation with the
+            # latest active values and anchor the latter to the old roster.
+            diarization.speaker_names_pending_review = pending_merge.names or None
             diarization.speaker_name_evidence_pending_review = (
-                previous_pending_evidence or None
+                pending_merge.evidence or None
+            )
+            diarization.speaker_names_pending_review_context = (
+                pending_merge.context or None
             )
     report("writing manifest", 0.99)
     save_manifest(manifest, directory)
     report("done", 1.0)
-    return manifest
+    return manifest, pending_merge.dropped if diarization.labels_changed else {}
+
+
+def _preserve_reprocessed_identities(
+    manifest: Manifest, previous: Manifest | None
+) -> tuple[dict[str, str], bool]:
+    """Move every durable identity from a prior full job into pending review."""
+    if previous is None or not jobs.has_identity_state(previous):
+        return {}, False
+    previous_diarization = previous.transcript.diarization
+    if previous_diarization is None:  # guarded by has_identity_state
+        return {}, False
+    current = manifest.transcript.diarization
+    if current is None or not current.available:
+        reason = current.reason if current is not None else "no diarization result"
+        raise ToolFailureError(
+            "forced reprocess could not rebuild speaker labels; the stored job and "
+            f"speaker identities were kept unchanged: {reason}"
+        )
+    merged = diarize.merge_pending_speaker_identities(previous_diarization)
+    current.speaker_names = None
+    current.speaker_name_evidence = None
+    current.speaker_names_pending_review = merged.names or None
+    current.speaker_name_evidence_pending_review = merged.evidence or None
+    current.speaker_names_pending_review_context = merged.context or None
+    return merged.dropped, True
+
+
+def _build_manifest(
+    media: Path,
+    job_id: str,
+    directory: Path,
+    info: MediaInfo,
+    diarize_request: _DiarizeRequest,
+    *,
+    recorded_at: str | None,
+    vocabulary: str | None,
+    language: str | None,
+    model_name: str,
+    previous: Manifest | None,
+    report: ProgressFn,
+) -> tuple[Manifest, int, dict[str, str], bool]:
+    """Build one complete manifest and its artifacts inside ``directory``."""
+    wall_clock = resolve_wall_clock(
+        recorded_at=recorded_at,
+        format_tags=info.format_tags,
+        mtime_epoch=info.mtime_epoch,
+        duration_s=info.duration_s,
+    )
+    tool_timeout = max(600, int(info.duration_s * 4) + 120)
+    duration_ms = max(1, int(info.duration_s * 1000))
+
+    transcript = Transcript(
+        available=False, reason="no audio stream in recording", language=None, model=None
+    )
+    echo_trimmed = 0
+    if info.has_audio:
+        report("extracting audio", 0.10)
+        wav_path = directory / "audio.wav"
+        try:
+            audio.extract_wav(media, wav_path, timeout=tool_timeout)
+            report("transcribing (local whisper)", 0.15)
+            # Diarization (when on) takes the 0.56→0.70 window; whisper
+            # keeps its full 0.15→0.70 span otherwise.
+            stt_span = (DIARIZE_PROGRESS_START - 0.15) if diarize_request.run else 0.55
+
+            def on_segment(t1_ms: int) -> None:
+                report("transcribing (local whisper)", 0.15 + stt_span * (t1_ms / duration_ms))
+
+            stt_result = stt.transcribe(
+                wav_path,
+                model_name=model_name,
+                language=language,
+                vocabulary=vocabulary,
+                word_timestamps=diarize_request.run,
+                on_segment=on_segment,
+            )
+            transcript = Transcript(
+                available=True,
+                reason="",
+                language=stt_result.language,
+                model=stt_result.model,
+                language_probability=stt_result.language_probability,
+                segments=list(stt_result.segments),
+                words=(list(stt_result.words) or None) if diarize_request.run else None,
+            )
+            echo_trimmed = stt_result.vocabulary_echo_trimmed
+            if diarize_request.run:
+                # The stage eats the same WAV — it must run before unlink.
+                _run_diarization(wav_path, transcript, diarize_request, report)
+            elif diarize_request.engine_missing:
+                transcript.diarization = Diarization(
+                    available=False,
+                    reason=diarize.MISSING_EXTRA_REASON,
+                    produced_by=__version__,
+                )
+        finally:
+            wav_path.unlink(missing_ok=True)
+
+    frames_directory = directory / FRAMES_DIR_NAME
+    frame_index = FrameIndex(count=0, unique_count=0, cap_hit=False)
+    ocr_ran = False
+    if info.has_video:
+        report("extracting keyframes", 0.72)
+        extracted, cap_hit = frames.extract_keyframes(
+            media,
+            frames_directory,
+            max_frames=max_frames_cap(),
+            timeout=tool_timeout,
+            duration_s=info.duration_s,
+        )
+        report("deduplicating frames", 0.82)
+        dedup.mark_duplicates(extracted, frames_directory)
+        unique = [frame for frame in extracted if frame.is_unique]
+
+        # STT ran first (pipeline order), so the detected narration language
+        # can pick the OCR script pack when no env is set.
+        engine = ocr.create_engine(language_hint=transcript.language)
+        if engine is not None:
+            ocr_ran = True
+            for index, frame in enumerate(unique):
+                fraction = 0.86 + 0.12 * (index / max(1, len(unique)))
+                report("reading text on frames (OCR)", fraction)
+                text = ocr.ocr_image(engine, frames_directory / frame.file)
+                frame.ocr_text = text or None
+
+        frame_index = FrameIndex(
+            count=len(extracted),
+            unique_count=len(unique),
+            cap_hit=cap_hit,
+            items=extracted,
+        )
+
+    manifest = Manifest(
+        schema="talkthrough-manifest/v1",
+        job_id=job_id,
+        created_at=datetime.now(UTC).isoformat(timespec="seconds"),
+        media=MediaMeta(
+            path=info.path,
+            filename=info.filename,
+            kind="video" if info.has_video else "audio",
+            duration_s=info.duration_s,
+            size_bytes=info.size_bytes,
+            width=info.width,
+            height=info.height,
+            video_codec=info.video_codec,
+            has_audio=info.has_audio,
+            has_video=info.has_video,
+        ),
+        wall_clock=wall_clock,
+        transcript=transcript,
+        frames=frame_index,
+        caps=Caps(
+            max_seconds=max_seconds_cap(),
+            max_frames=max_frames_cap(),
+            scene_threshold=frames.DEFAULT_SCENE_THRESHOLD,
+            ocr=ocr_ran,
+        ),
+        tool_versions=_tool_versions(),
+    )
+    dropped, identities_preserved = _preserve_reprocessed_identities(
+        manifest, previous
+    )
+    report("writing manifest", 0.99)
+    save_manifest(manifest, directory)
+    return manifest, echo_trimmed, dropped, identities_preserved
 
 
 def process_media(
@@ -520,149 +703,70 @@ def process_media(
                 logger.info(
                     "job %s exists — amending diarization only, whisper is not re-run", job_id
                 )
-                amended = _amend_diarization(media, manifest_hit, diarize_request, report)
+                amended, dropped = _amend_diarization(
+                    media, manifest_hit, diarize_request, report
+                )
                 diarization = amended.transcript.diarization
                 return ProcessResult(
                     manifest=amended,
                     reused=True,
                     elapsed_s=time.monotonic() - started,
-                    # the flag reflects the OUTCOME: a failed amend keeps the
-                    # transcript, records available=false + reason, and must
-                    # not be reported as an applied amend
+                    # The flag reflects the outcome. A failed amend keeps the
+                    # old manifest unchanged and raises instead of returning
+                    # an ``available=false`` replacement.
                     amended=diarization is not None and diarization.available,
+                    speaker_names_pending_review_dropped=dropped or None,
                 )
             return ProcessResult(
                 manifest=manifest_hit, reused=True, elapsed_s=time.monotonic() - started
             )
 
+        directory = jobs.job_dir(job_id)
+        previous = jobs.load_job(job_id) if jobs.job_exists(job_id) else None
+        if (
+            previous is not None
+            and jobs.has_identity_state(previous)
+            and not diarize_request.run
+        ):
+            raise ValidationError(
+                "full reprocessing a job with saved speaker identities requires "
+                "force=true, diarize=true so the old identities can be preserved for "
+                "review; otherwise remove them explicitly with label_speakers first"
+            )
+
         report("probing media", 0.05)
         info = probe_media(media)
-        directory = jobs.job_dir(job_id)
         _validate_caps(info, directory)
-        wall_clock = resolve_wall_clock(
-            recorded_at=recorded_at,
-            format_tags=info.format_tags,
-            mtime_epoch=info.mtime_epoch,
-            duration_s=info.duration_s,
-        )
-
-        frames_directory = directory / FRAMES_DIR_NAME
-        if force:
-            shutil.rmtree(frames_directory, ignore_errors=True)
-            (directory / "manifest.json").unlink(missing_ok=True)
-
-        tool_timeout = max(600, int(info.duration_s * 4) + 120)
-        duration_ms = max(1, int(info.duration_s * 1000))
-
-        transcript = Transcript(
-            available=False, reason="no audio stream in recording", language=None, model=None
-        )
-        echo_trimmed = 0
-        if info.has_audio:
-            report("extracting audio", 0.10)
-            wav_path = directory / "audio.wav"
-            try:
-                audio.extract_wav(media, wav_path, timeout=tool_timeout)
-                report("transcribing (local whisper)", 0.15)
-                # Diarization (when on) takes the 0.56→0.70 window; whisper
-                # keeps its full 0.15→0.70 span otherwise.
-                stt_span = (DIARIZE_PROGRESS_START - 0.15) if diarize_request.run else 0.55
-
-                def on_segment(t1_ms: int) -> None:
-                    report("transcribing (local whisper)", 0.15 + stt_span * (t1_ms / duration_ms))
-
-                stt_result = stt.transcribe(
-                    wav_path,
-                    model_name=model_name,
-                    language=language,
-                    vocabulary=vocabulary,
-                    word_timestamps=diarize_request.run,
-                    on_segment=on_segment,
-                )
-                transcript = Transcript(
-                    available=True,
-                    reason="",
-                    language=stt_result.language,
-                    model=stt_result.model,
-                    language_probability=stt_result.language_probability,
-                    segments=list(stt_result.segments),
-                    words=(list(stt_result.words) or None) if diarize_request.run else None,
-                )
-                echo_trimmed = stt_result.vocabulary_echo_trimmed
-                if diarize_request.run:
-                    # The stage eats the same WAV — it must run before unlink.
-                    _run_diarization(wav_path, transcript, diarize_request, report)
-                elif diarize_request.engine_missing:
-                    transcript.diarization = Diarization(
-                        available=False,
-                        reason=diarize.MISSING_EXTRA_REASON,
-                        produced_by=__version__,
-                    )
-            finally:
-                wav_path.unlink(missing_ok=True)
-
-        frame_index = FrameIndex(count=0, unique_count=0, cap_hit=False)
-        ocr_ran = False
-        if info.has_video:
-            report("extracting keyframes", 0.72)
-            extracted, cap_hit = frames.extract_keyframes(
+        if previous is None:
+            manifest, echo_trimmed, dropped, identities_preserved = _build_manifest(
                 media,
-                frames_directory,
-                max_frames=max_frames_cap(),
-                timeout=tool_timeout,
-                duration_s=info.duration_s,
+                job_id,
+                directory,
+                info,
+                diarize_request,
+                recorded_at=recorded_at,
+                vocabulary=vocabulary,
+                language=language,
+                model_name=model_name,
+                previous=None,
+                report=report,
             )
-            report("deduplicating frames", 0.82)
-            dedup.mark_duplicates(extracted, frames_directory)
-            unique = [frame for frame in extracted if frame.is_unique]
-
-            # STT ran first (pipeline order), so the detected narration
-            # language can pick the OCR script pack when no env is set.
-            engine = ocr.create_engine(language_hint=transcript.language)
-            if engine is not None:
-                ocr_ran = True
-                for index, frame in enumerate(unique):
-                    fraction = 0.86 + 0.12 * (index / max(1, len(unique)))
-                    report("reading text on frames (OCR)", fraction)
-                    text = ocr.ocr_image(engine, frames_directory / frame.file)
-                    frame.ocr_text = text or None
-
-            frame_index = FrameIndex(
-                count=len(extracted),
-                unique_count=len(unique),
-                cap_hit=cap_hit,
-                items=extracted,
-            )
-
-        manifest = Manifest(
-            schema="talkthrough-manifest/v1",
-            job_id=job_id,
-            created_at=datetime.now(UTC).isoformat(timespec="seconds"),
-            media=MediaMeta(
-                path=info.path,
-                filename=info.filename,
-                kind="video" if info.has_video else "audio",
-                duration_s=info.duration_s,
-                size_bytes=info.size_bytes,
-                width=info.width,
-                height=info.height,
-                video_codec=info.video_codec,
-                has_audio=info.has_audio,
-                has_video=info.has_video,
-            ),
-            wall_clock=wall_clock,
-            transcript=transcript,
-            frames=frame_index,
-            caps=Caps(
-                max_seconds=max_seconds_cap(),
-                max_frames=max_frames_cap(),
-                scene_threshold=frames.DEFAULT_SCENE_THRESHOLD,
-                ocr=ocr_ran,
-            ),
-            tool_versions=_tool_versions(),
-        )
-        report("writing manifest", 0.99)
-        save_manifest(manifest, directory)
+        else:
+            with jobs.reprocess_workspace(job_id) as staging:
+                manifest, echo_trimmed, dropped, identities_preserved = _build_manifest(
+                    media,
+                    job_id,
+                    staging,
+                    info,
+                    diarize_request,
+                    recorded_at=recorded_at,
+                    vocabulary=vocabulary,
+                    language=language,
+                    model_name=model_name,
+                    previous=previous,
+                    report=report,
+                )
+                manifest = jobs.commit_reprocessed_job(job_id, staging)
 
     report("done", 1.0)
     return ProcessResult(
@@ -670,6 +774,8 @@ def process_media(
         reused=False,
         elapsed_s=time.monotonic() - started,
         vocabulary_echo_trimmed=echo_trimmed,
+        speaker_names_pending_review_dropped=dropped or None,
+        reprocessed_identity_review=identities_preserved,
     )
 
 
@@ -679,7 +785,31 @@ NAME_CANDIDATE_WINDOW_MS = 30_000
 NAME_CANDIDATE_FRAME_LIMIT = 3
 NAME_CANDIDATE_LIMIT = 3
 NAME_CANDIDATE_MAX_CHARS = 80
-_NAME_PARTICLES = frozenset({"al", "bin", "da", "de", "del", "la", "van", "von"})
+_NAME_PARTICLES = frozenset(
+    {
+        "abu",
+        "af",
+        "al",
+        "bin",
+        "d",
+        "da",
+        "de",
+        "del",
+        "den",
+        "der",
+        "di",
+        "du",
+        "e",
+        "ibn",
+        "la",
+        "le",
+        "ter",
+        "van",
+        "von",
+        "y",
+        "zu",
+    }
+)
 _UI_CHROME_WORDS = frozenset(
     {
         "build",
@@ -715,6 +845,24 @@ _URL_OR_PATH = re.compile(
     r"(?:https?://|www\.|[A-Za-z]:\\|[/\\]|\b[^\s]+\.(?:com|org|net|io|dev|py|js|ts|java)\b)",
     re.IGNORECASE,
 )
+_TRAILING_NAME_METADATA = re.compile(r"\s*\([^()\n]{1,40}\)\s*$")
+_APOSTROPHE_PARTICLE = re.compile(r"^([^\W\d_]+)['\u2019](.+)$", re.UNICODE)
+_EXACT_UI_PHRASES = frozenset(
+    {
+        "copy paste delete",
+        "everyone",
+        "loading",
+        "meeting chat",
+        "prophet",
+        "stop recording",
+        "terminal",
+        "unknown caller",
+        "waiting room",
+        "zoom meeting",
+        "продажи отчет",
+        "参会者",
+    }
+)
 # Above this, an unconstrained cluster count stops being merely unreliable
 # and becomes implausible for one recording (tester report, 2026-07-27: a
 # large meeting "detected" 123 speakers) — the note escalates accordingly.
@@ -736,10 +884,18 @@ def pending_review_note(diarization: Diarization) -> str | None:
     count = len(diarization.speaker_names_pending_review or {})
     if not count:
         return None
+    current_labels = {speaker.label for speaker in diarization.speakers}
+    stale_count = sum(
+        label not in current_labels
+        for label in (diarization.speaker_names_pending_review or {})
+    )
     return (
-        f"{count} saved speaker name(s) moved to pending review because diarization "
-        "changed the labels; they are not active identities. Re-check the current "
-        "roster and confirm or remove them with label_speakers."
+        f"{count} saved speaker name(s) are pending review because diarization changed "
+        "the labels; they are not active identities. Re-check the current roster. "
+        "Current pending labels can be confirmed, replaced, or removed with "
+        "label_speakers; stale pending labels"
+        + (f" ({stale_count})" if stale_count else "")
+        + " can only be removed with labels={\"Sx\": null}."
     )
 
 
@@ -749,11 +905,20 @@ def pending_review_payload(diarization: Diarization) -> dict[str, Any]:
     if not names:
         return {}
     roster_order = [speaker.label for speaker in diarization.speakers]
+    current_labels = set(roster_order)
     ordered_labels = [label for label in roster_order if label in names]
-    ordered_labels.extend(sorted(label for label in names if label not in ordered_labels))
+    ordered_labels.extend(
+        sorted(
+            (label for label in names if label not in current_labels),
+            key=diarize.speaker_label_sort_key,
+        )
+    )
     served_labels = ordered_labels[:SUMMARY_ROSTER_CAP]
     hidden = len(ordered_labels) - len(served_labels)
     evidence = diarization.speaker_name_evidence_pending_review or {}
+    context = diarization.speaker_names_pending_review_context or {}
+    stale_labels = [label for label in served_labels if label not in current_labels]
+    stale_total = sum(label not in current_labels for label in ordered_labels)
     note = pending_review_note(diarization)
     assert note is not None
     return {
@@ -767,9 +932,59 @@ def pending_review_payload(diarization: Diarization) -> dict[str, Any]:
             if any(label in evidence for label in served_labels)
             else {}
         ),
+        **(
+            {
+                "speaker_names_pending_review_context": {
+                    label: context[label].to_dict()
+                    for label in served_labels
+                    if label in context and context[label].to_dict()
+                }
+            }
+            if any(label in context and context[label].to_dict() for label in served_labels)
+            else {}
+        ),
+        **(
+            {"speaker_names_pending_review_stale_labels": stale_labels}
+            if stale_labels
+            else {}
+        ),
+        **(
+            {"speaker_names_pending_review_stale_total": stale_total}
+            if stale_total
+            else {}
+        ),
+        **(
+            {
+                "speaker_names_pending_review_stale_truncated": (
+                    stale_total - len(stale_labels)
+                )
+            }
+            if stale_total > len(stale_labels)
+            else {}
+        ),
         "speaker_names_pending_review_total": len(ordered_labels),
         **({"speaker_names_pending_review_truncated": hidden} if hidden else {}),
         "speaker_names_pending_review_note": note,
+    }
+
+
+def pending_review_dropped_payload(dropped: dict[str, str] | None) -> dict[str, Any]:
+    """Bounded one-shot collision report for the amend response only."""
+    if not dropped:
+        return {}
+    ordered = sorted(dropped, key=diarize.speaker_label_sort_key)
+    served = ordered[:SUMMARY_ROSTER_CAP]
+    hidden = len(ordered) - len(served)
+    return {
+        "speaker_names_pending_review_dropped": {
+            label: dropped[label] for label in served
+        },
+        "speaker_names_pending_review_dropped_total": len(ordered),
+        **({"speaker_names_pending_review_dropped_truncated": hidden} if hidden else {}),
+        "speaker_names_pending_review_dropped_note": (
+            "A newer human-verified active name superseded each conflicting pending "
+            "value for the same raw label; the listed older values are no longer stored."
+        ),
     }
 
 
@@ -883,6 +1098,101 @@ def speaker_name(diarization: Diarization | None, label: str | None) -> str | No
     return diarization.speaker_names.get(label)
 
 
+def _candidate_key(line: str) -> str:
+    folded = unicodedata.normalize("NFKC", line).casefold()
+    return " ".join(
+        "".join(character if character.isalnum() else " " for character in folded).split()
+    )
+
+
+def _candidate_parts(line: str) -> tuple[str, str, str]:
+    """Return bounded raw display, validation base, and dedupe key."""
+    raw = " ".join(line.split()).strip()
+    base = _TRAILING_NAME_METADATA.sub("", raw).strip()
+    return raw, base, _candidate_key(base)
+
+
+def _name_candidate_rejection_reason(line: str) -> str | None:
+    """Explain why one OCR line is not a conservative name-like hint."""
+    raw, base, key = _candidate_parts(line)
+    if not raw or not base:
+        return "empty"
+    if len(raw) > NAME_CANDIDATE_MAX_CHARS:
+        return "too_long"
+    if any(char.isdigit() for char in base):
+        return "digit"
+    if _URL_OR_PATH.search(base):
+        return "url_or_path"
+    words = base.split()
+    if not 1 <= len(words) <= 7:
+        return "word_count"
+    alpha_count = sum(char.isalpha() for char in base)
+    punctuation_count = sum(
+        unicodedata.category(char).startswith("P") for char in base
+    )
+    if not alpha_count:
+        return "no_letters"
+    if punctuation_count > max(2, alpha_count // 3):
+        return "punctuation"
+    if key in _EXACT_UI_PHRASES:
+        return "ui_phrase"
+    key_words = key.split()
+    chrome_count = sum(word in _UI_CHROME_WORDS for word in key_words)
+    if chrome_count == len(key_words) or chrome_count >= 2:
+        return "ui_chrome"
+
+    cased_words = [
+        word
+        for word in words
+        if any(char.isalpha() and char.lower() != char.upper() for char in word)
+    ]
+    if not cased_words:
+        return None  # Arabic/CJK and other scripts without letter case.
+    cased_letters = [
+        char for char in base if char.isalpha() and char.lower() != char.upper()
+    ]
+    if all(char.isupper() for char in cased_letters):
+        return None
+    if (
+        2 <= len(words) <= 4
+        and cased_letters
+        and all(char.islower() for char in cased_letters)
+    ):
+        return None
+    for word in cased_words:
+        letters = [char for char in word if char.isalpha()]
+        if not letters:
+            continue
+        word_key = _candidate_key(word)
+        if word_key in _NAME_PARTICLES:
+            continue
+        apostrophe = _APOSTROPHE_PARTICLE.match(word)
+        if apostrophe is not None and apostrophe.group(1).casefold() in _NAME_PARTICLES:
+            suffix_letters = [char for char in apostrophe.group(2) if char.isalpha()]
+            if suffix_letters and suffix_letters[0].isupper():
+                continue
+        if not letters[0].isupper():
+            return "casing"
+    return None
+
+
+def legacy_name_candidates_note(manifest: Manifest) -> str | None:
+    """Explain a known pre-0.3.1 flat-OCR limitation without rewriting it."""
+    if not manifest.media.has_video or not manifest.caps.ocr:
+        return None
+    if not any(frame.ocr_text for frame in manifest.frames.items):
+        return None
+    producer = manifest.tool_versions.get("talkthrough-mcp")
+    match = re.match(r"^(\d+)\.(\d+)\.(\d+)", producer or "")
+    if match is None or tuple(int(part) for part in match.groups()) >= (0, 3, 1):
+        return None
+    return (
+        "This job stores legacy single-line OCR, so name candidates may be absent. "
+        "Re-run with force=true and diarize=true to regenerate line-aware OCR; saved "
+        "names will move to pending review instead of being discarded."
+    )
+
+
 def _name_candidates(manifest: Manifest, at_ms: int) -> list[dict[str, Any]]:
     """Bounded name-like OCR hints near a longest turn; never identities."""
     if not manifest.media.has_video or not manifest.caps.ocr:
@@ -896,59 +1206,11 @@ def _name_candidates(manifest: Manifest, at_ms: int) -> list[dict[str, Any]]:
     candidates: list[dict[str, Any]] = []
     seen: set[str] = set()
 
-    def candidate_key(line: str) -> str:
-        folded = unicodedata.normalize("NFKC", line).casefold()
-        return " ".join(
-            "".join(character if character.isalnum() else " " for character in folded).split()
-        )
-
-    def name_like(line: str) -> bool:
-        if len(line) > NAME_CANDIDATE_MAX_CHARS or any(char.isdigit() for char in line):
-            return False
-        if _URL_OR_PATH.search(line):
-            return False
-        words = line.split()
-        if not 1 <= len(words) <= 5:
-            return False
-        alpha_count = sum(char.isalpha() for char in line)
-        punctuation_count = sum(unicodedata.category(char).startswith("P") for char in line)
-        if not alpha_count or punctuation_count > max(2, alpha_count // 3):
-            return False
-        key_words = candidate_key(line).split()
-        chrome_count = sum(word in _UI_CHROME_WORDS for word in key_words)
-        if chrome_count == len(key_words) or chrome_count >= 2:
-            return False
-
-        cased_words = [
-            word
-            for word in words
-            if any(char.isalpha() and char.lower() != char.upper() for char in word)
-        ]
-        if not cased_words:
-            return True  # Arabic/CJK and other scripts without letter case.
-        cased_letters = [
-            char
-            for char in line
-            if char.isalpha() and char.lower() != char.upper()
-        ]
-        if all(char.isupper() for char in cased_letters):
-            return True
-        for word in cased_words:
-            letters = [char for char in word if char.isalpha()]
-            if not letters:
-                continue
-            if candidate_key(word) in _NAME_PARTICLES:
-                continue
-            if not letters[0].isupper():
-                return False
-        return True
-
     for frame in nearby[:NAME_CANDIDATE_FRAME_LIMIT]:
         for raw_line in (frame.ocr_text or "").splitlines():
-            line = " ".join(raw_line.split()).strip()
-            if not line or not name_like(line):
+            line, _base, folded = _candidate_parts(raw_line)
+            if not line or _name_candidate_rejection_reason(line) is not None:
                 continue
-            folded = candidate_key(line)
             if folded in seen:
                 continue
             seen.add(folded)
@@ -1029,6 +1291,10 @@ def _summarize_diarization(
             attribution_precision(transcript) if transcript is not None else "segment"
         ),
     }
+    if manifest is not None:
+        legacy_note = legacy_name_candidates_note(manifest)
+        if legacy_note is not None:
+            payload["name_candidates_note"] = legacy_note
     if transcript is not None and attribution_precision(transcript) == "segment":
         payload["attribution_note"] = (
             "speaker boundaries use segment-level timestamps; exact word splitting "
@@ -1114,6 +1380,23 @@ def summarize(result: ProcessResult) -> dict[str, Any]:
         for segment in segments[:TRANSCRIPT_PREVIEW_SEGMENTS]
     ]
     frames_with_text = sum(1 for frame in manifest.frames.items if frame.ocr_text)
+    diarization_summary: dict[str, Any] | None = None
+    if diarization is not None:
+        diarization_summary = _summarize_diarization(
+            diarization, manifest.transcript, manifest
+        )
+        diarization_summary.update(
+            pending_review_dropped_payload(
+                result.speaker_names_pending_review_dropped
+            )
+        )
+        if result.reprocessed_identity_review:
+            diarization_summary["force_identity_review_note"] = (
+                "Full reprocessing rebuilt the transcript and speaker labels. Every "
+                "saved identity from the previous job was preserved as pending review, "
+                "not as an active identity; re-check the new roster before confirming "
+                "current labels or removing stale ones."
+            )
     return {
         "job_id": manifest.job_id,
         "reused": result.reused,
@@ -1144,15 +1427,7 @@ def summarize(result: ProcessResult) -> dict[str, Any]:
             "preview_segments": preview,
             "preview_truncated": len(segments) > len(preview),
         },
-        **(
-            {
-                "diarization": _summarize_diarization(
-                    diarization, manifest.transcript, manifest
-                )
-            }
-            if diarization
-            else {}
-        ),
+        **({"diarization": diarization_summary} if diarization_summary else {}),
         "frames": _summarize_frames(manifest),
         "ocr": {"enabled": manifest.caps.ocr, "unique_frames_with_text": frames_with_text},
         "next_steps": (

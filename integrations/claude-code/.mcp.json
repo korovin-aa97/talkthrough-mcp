@@ -5,7 +5,7 @@
       "args": [
         "--python",
         ">=3.11,<3.14",
-        "talkthrough-mcp[diarization]==0.3.1"
+        "talkthrough-mcp[diarization]==0.3.2"
       ]
     }
   }

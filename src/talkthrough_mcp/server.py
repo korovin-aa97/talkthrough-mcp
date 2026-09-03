@@ -279,6 +279,9 @@ def get_transcript(
     if diarization is not None and diarization.available:
         payload["diarized"] = True
         payload["speakers"], hidden = pipeline.roster_payload(diarization, manifest)
+        legacy_note = pipeline.legacy_name_candidates_note(manifest)
+        if legacy_note is not None:
+            payload["name_candidates_note"] = legacy_note
         payload["attribution_precision"] = pipeline.attribution_precision(manifest.transcript)
         if payload["attribution_precision"] == "segment":
             payload["attribution_note"] = (
@@ -503,11 +506,11 @@ def search(
                     name.casefold() == folded for name in pending_names.values()
                 )
                 if pending_match:
+                    pending_note = pipeline.pending_review_note(diarization)
+                    assert pending_note is not None
                     note = (
-                        f"speaker name {speaker_query!r} is saved in pending review because "
-                        "diarization changed the labels; it is not an active identity and is "
-                        "not used for search. Re-check the current roster and confirm or "
-                        "remove it with label_speakers"
+                        f"speaker name {speaker_query!r} is saved in pending review; it is "
+                        f"not an active identity and is not used for search. {pending_note}"
                     )
                 else:
                     note = (
@@ -626,11 +629,13 @@ def label_speakers(
         save_manifest(manifest, jobs.job_dir(job_id))
 
     speakers, hidden = pipeline.roster_payload(diarization, manifest)
+    legacy_note = pipeline.legacy_name_candidates_note(manifest)
     return {
         "job_id": job_id,
         "mapping_count": len(diarization.speaker_names or {}),
         "speakers": speakers,
         **({"speakers_truncated": hidden} if hidden else {}),
+        **({"name_candidates_note": legacy_note} if legacy_note else {}),
         **pipeline.pending_review_payload(diarization),
         "note": (
             "names are user/agent-verified labels; raw S<n> identifiers remain canonical "

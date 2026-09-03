@@ -19,6 +19,7 @@ from talkthrough_mcp.core.diarize import (
     SEGMENTATION_MODELS,
     Diarization,
     ModelSpec,
+    PendingSpeakerReviewContext,
     SpeakerStat,
     Turn,
     attribute_segments,
@@ -28,6 +29,7 @@ from talkthrough_mcp.core.diarize import (
     diarize_default,
     ensure_model_file,
     load_wav_float32,
+    merge_pending_speaker_identities,
     models_root,
     relabel_turns,
     resolve_model,
@@ -207,6 +209,100 @@ def test_diarization_round_trips_pending_review_names_and_omits_empty_maps() -> 
     serialized = empty.to_dict()
     assert "speaker_names_pending_review" not in serialized
     assert "speaker_name_evidence_pending_review" not in serialized
+
+
+def test_pending_review_context_round_trips_and_filters_orphans() -> None:
+    diarization = make_diarization()
+    diarization.speaker_names_pending_review = {"S1": "Alice"}
+    diarization.speaker_names_pending_review_context = {
+        "S1": PendingSpeakerReviewContext(
+            source_detected_num_speakers=2,
+            source_requested_num_speakers=3,
+            source_produced_by="0.3.1",
+            talk_time_ms=5000,
+            turn_count=1,
+            longest_turn_at_ms=0,
+            longest_turn_duration_ms=5000,
+        ),
+        "S9": PendingSpeakerReviewContext(talk_time_ms=1),
+    }
+    payload = diarization.to_dict()
+    assert payload["speaker_names_pending_review_context"] == {
+        "S1": {
+            "source_detected_num_speakers": 2,
+            "source_requested_num_speakers": 3,
+            "source_produced_by": "0.3.1",
+            "talk_time_ms": 5000,
+            "turn_count": 1,
+            "longest_turn_at_ms": 0,
+            "longest_turn_duration_ms": 5000,
+        }
+    }
+    assert Diarization.from_dict(payload).speaker_names_pending_review_context == {
+        "S1": diarization.speaker_names_pending_review_context["S1"]
+    }
+
+    diarization.speaker_names_pending_review_context = {
+        "S9": PendingSpeakerReviewContext(talk_time_ms=1)
+    }
+    assert "speaker_names_pending_review_context" not in diarization.to_dict()
+
+
+def test_pending_review_context_tolerates_unknown_and_skips_malformed_entries() -> None:
+    payload = make_diarization().to_dict()
+    payload["speaker_names_pending_review"] = {
+        "S1": "Alice",
+        "S2": "Bob",
+        "S3": "Ghost",
+    }
+    payload["speaker_names_pending_review_context"] = {
+        "S1": {"talk_time_ms": 5000, "future_anchor": "ignored"},
+        "S2": {"talk_time_ms": -1},
+        "S3": "not an object",
+        "S9": {"talk_time_ms": 1},
+    }
+    rebuilt = Diarization.from_dict(payload)
+    assert rebuilt.speaker_names_pending_review_context == {
+        "S1": PendingSpeakerReviewContext(talk_time_ms=5000)
+    }
+
+
+def test_merge_pending_identities_keeps_disjoint_labels_and_reports_collision() -> None:
+    diarization = make_diarization()
+    diarization.speaker_names = {"S1": "Current Alice", "S3": "Carol"}
+    diarization.speaker_name_evidence = {"S1": "fresh intro", "S3": "fresh plate"}
+    diarization.speaker_names_pending_review = {"S1": "Older Alice", "S2": "Bob"}
+    diarization.speaker_name_evidence_pending_review = {
+        "S1": "old intro",
+        "S2": "old plate",
+    }
+    diarization.speaker_names_pending_review_context = {
+        "S2": PendingSpeakerReviewContext(longest_turn_at_ms=5000)
+    }
+
+    merged = merge_pending_speaker_identities(diarization)
+    assert merged.names == {"S1": "Current Alice", "S2": "Bob", "S3": "Carol"}
+    assert merged.evidence == {
+        "S1": "fresh intro",
+        "S2": "old plate",
+        "S3": "fresh plate",
+    }
+    assert merged.dropped == {"S1": "Older Alice"}
+    assert merged.context["S1"].talk_time_ms == 5000
+    assert merged.context["S1"].longest_turn_at_ms == 0
+    assert merged.context["S2"].longest_turn_at_ms == 5000
+    assert list(merged.names) == ["S1", "S2", "S3"]
+
+
+def test_merge_same_label_and_name_is_not_a_drop() -> None:
+    diarization = make_diarization()
+    diarization.speaker_names = {"S1": "Alice"}
+    diarization.speaker_names_pending_review = {"S1": "Alice"}
+    diarization.speaker_name_evidence_pending_review = {"S1": "older proof"}
+    merged = merge_pending_speaker_identities(diarization)
+    assert merged.names == {"S1": "Alice"}
+    assert merged.evidence == {"S1": "older proof"}
+    assert merged.dropped == {}
 
 
 def test_diarization_round_trips_amend_outcome_fields() -> None:

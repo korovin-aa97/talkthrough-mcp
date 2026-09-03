@@ -22,7 +22,6 @@ from __future__ import annotations
 
 import base64
 import json
-import shlex
 import sys
 import tomllib
 import urllib.parse
@@ -56,14 +55,34 @@ _UVX_ARGS = {
     "pypi": [*UVX_PYTHON_ARGS, _PYPI_SPEC],
 }
 UVX_ARGS: list[str] = _UVX_ARGS[INSTALL_PHASE]
+MINIMAL_UVX_ARGS = [*UVX_PYTHON_ARGS, "talkthrough-mcp"]
 
 
-def _shell_quoted(arg: str) -> str:
-    """Quote a single argv item for POSIX shell snippets and one-liners."""
-    return shlex.quote(arg)
+_SHELL_OWNED_ARGS = frozenset(
+    {
+        "--from",
+        "--python",
+        PROJECT_REQUIRES_PYTHON,
+        _GIT_SPEC,
+        _PYPI_SPEC,
+        "talkthrough-mcp",
+    }
+)
 
 
-UVX_CMDLINE = "uvx " + " ".join(_shell_quoted(arg) for arg in UVX_ARGS)
+def _shell_owned_arg(arg: str) -> str:
+    """Render one generator-owned argv item portably for human shell snippets."""
+    if arg not in _SHELL_OWNED_ARGS:
+        raise ValueError(f"refusing to quote non-generator argv item: {arg!r}")
+    if any(character in arg for character in ('"', "$", "`", "\r", "\n")):
+        raise ValueError(f"unsafe generator argv item: {arg!r}")
+    return arg if arg.startswith("--") or arg == "talkthrough-mcp" else f'"{arg}"'
+
+
+UVX_CMDLINE = "uvx " + " ".join(_shell_owned_arg(arg) for arg in UVX_ARGS)
+MINIMAL_UVX_CMDLINE = "uvx " + " ".join(
+    _shell_owned_arg(arg) for arg in MINIMAL_UVX_ARGS
+)
 
 # A released Claude Code plugin pack must always start its matching server.
 # User-facing install snippets intentionally remain unpinned latest via
@@ -82,7 +101,7 @@ ENV_DOC = (
     "TALKTHROUGH_HOME (job store root, default `~/.talkthrough`). "
     "Speaker diarization is included but off per call — agents pass "
     "`diarize=true` (plus `num_speakers` when known); the minimal server "
-    "without the diarization engine is `uvx talkthrough-mcp`."
+    f"without the diarization engine is `{MINIMAL_UVX_CMDLINE}`."
 )
 
 VERIFY_DOC = (
@@ -162,7 +181,7 @@ ENGINE_SPECS: list[dict[str, str]] = [
         ),
         "extra": (
             "Or via CLI:\n\n```bash\nopenclaw mcp add talkthrough --command uvx "
-            + " ".join(f"--arg {_shell_quoted(arg)}" for arg in UVX_ARGS)
+            + " ".join(f"--arg {_shell_owned_arg(arg)}" for arg in UVX_ARGS)
             + "\n```\n\nClawHub: a publish-ready skill wrapper lives in "
             "[`clawhub/`](clawhub/) (submit after the repo is public)."
         ),
@@ -629,7 +648,7 @@ workflow. Everything runs locally: recordings never leave the machine.
 Add the MCP server:
 
 ```bash
-openclaw mcp add talkthrough --command uvx {" ".join(f"--arg {_shell_quoted(arg)}" for arg in UVX_ARGS)}
+openclaw mcp add talkthrough --command uvx {" ".join(f"--arg {_shell_owned_arg(arg)}" for arg in UVX_ARGS)}
 ```
 
 Requires `uv` (https://astral.sh/uv). First processing downloads a whisper

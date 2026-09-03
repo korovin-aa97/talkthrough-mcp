@@ -31,6 +31,14 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
+      - name: Extract release notes from CHANGELOG
+        shell: bash
+        run: |
+          PROJECT_VERSION="$(uv version --short)"
+          uv run python scripts/extract_release_notes.py \
+            --version "$PROJECT_VERSION" \
+            --tag "$GITHUB_REF_NAME" \
+            --output release-notes.md
       - run: uv build
 
       - name: Generate signed build provenance
@@ -57,6 +65,10 @@ jobs:
         with:
           name: provenance
           path: dist/*.intoto.jsonl
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: release-notes
+          path: release-notes.md
 
   publish-pypi:
     needs: build
@@ -86,6 +98,11 @@ jobs:
         with:
           name: provenance
           path: provenance/
-      - run: gh release create "$GITHUB_REF_NAME" dist/* provenance/* --generate-notes
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        with:
+          name: release-notes
+      - run: >-
+          gh release create "$GITHUB_REF_NAME" dist/* provenance/*
+          --notes-file release-notes.md
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}

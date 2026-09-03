@@ -25,7 +25,13 @@ from tests.integration.fixture_facts import DEMO_MP4, TWO_VOICE_M4A, TWO_VOICE_N
 from talkthrough_mcp import __version__ as package_version
 from talkthrough_mcp import guidance
 from talkthrough_mcp.core import diarize
-from talkthrough_mcp.core.diarize import Diarization, Turn, attribute_segments, speaker_roster
+from talkthrough_mcp.core.diarize import (
+    Diarization,
+    PendingSpeakerReviewContext,
+    Turn,
+    attribute_segments,
+    speaker_roster,
+)
 from talkthrough_mcp.core.manifest import save_manifest
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -399,12 +405,66 @@ async def _run_session(home: Path) -> None:
             )
             assert named_hits["hits"]
             assert all(hit["speaker_name"] == "Samantha" for hit in named_hits["hits"])
+
+            unsafe_force = await session.call_tool(
+                "process_media",
+                {
+                    "path": str(TWO_VOICE_M4A),
+                    "force": True,
+                    "diarize": False,
+                },
+                read_timeout_seconds=PROCESS_TIMEOUT,
+            )
+            assert unsafe_force.is_error
+            unsafe_error = unsafe_force.content[0]
+            assert isinstance(unsafe_error, types.TextContent)
+            assert "force=true, diarize=true" in unsafe_error.text
+            survivor = _payload(
+                await session.call_tool("get_transcript", {"job_id": diarized_job_id})
+            )
+            assert {entry["speaker_name"] for entry in survivor["speakers"]} == {
+                "Samantha",
+                "Daniel",
+            }
+
+            forced = _payload(
+                await session.call_tool(
+                    "process_media",
+                    {
+                        "path": str(TWO_VOICE_M4A),
+                        "force": True,
+                        "diarize": True,
+                        "num_speakers": TWO_VOICE_NUM_SPEAKERS,
+                    },
+                    read_timeout_seconds=PROCESS_TIMEOUT,
+                )
+            )
+            assert forced["reused"] is False
+            assert "force_identity_review_note" in forced["diarization"]
+            assert forced["diarization"]["speaker_names_pending_review"] == {
+                "S1": "Samantha",
+                "S2": "Daniel",
+            }
             removed = _payload(
                 await session.call_tool(
                     "label_speakers", {"job_id": diarized_job_id, "labels": {"S1": None}}
                 )
             )
-            assert removed["mapping_count"] == 1
+            assert removed["mapping_count"] == 0
+            assert removed["speaker_names_pending_review"] == {"S2": "Daniel"}
+
+        # The successful force and pending cleanup must survive another MCP
+        # process rather than living only in the prior server's Python state.
+        async with (
+            stdio_client(_server_params(home)) as (read, write),
+            ClientSession(read, write) as session,
+        ):
+            await session.initialize()
+            persisted = _payload(
+                await session.call_tool("get_transcript", {"job_id": diarized_job_id})
+            )
+            assert "speaker_name" not in persisted["speakers"][0]
+            assert persisted["speaker_names_pending_review"] == {"S2": "Daniel"}
 
     errlog.flush()
     errlog.seek(0)
@@ -429,10 +489,23 @@ async def _run_pending_review_session(home: Path) -> None:
         detected_num_speakers=2,
         speakers=speaker_roster(turns),
         turns=turns,
-        speaker_names_pending_review={"S1": "Samantha", "S2": "Daniel"},
+        speaker_names_pending_review={
+            "S1": "Samantha",
+            "S2": "Daniel",
+            "S3": "Ghost",
+        },
         speaker_name_evidence_pending_review={
             "S1": "old fixture order",
             "S2": "old fixture order",
+            "S3": "old third cluster",
+        },
+        speaker_names_pending_review_context={
+            "S1": PendingSpeakerReviewContext(longest_turn_at_ms=0),
+            "S2": PendingSpeakerReviewContext(longest_turn_at_ms=5000),
+            "S3": PendingSpeakerReviewContext(
+                source_detected_num_speakers=3,
+                longest_turn_at_ms=9000,
+            ),
         },
         labels_changed=True,
     )
@@ -449,6 +522,12 @@ async def _run_pending_review_session(home: Path) -> None:
         assert transcript["speaker_names_pending_review"] == {
             "S1": "Samantha",
             "S2": "Daniel",
+            "S3": "Ghost",
+        }
+        assert transcript["speaker_names_pending_review_stale_labels"] == ["S3"]
+        assert transcript["speaker_names_pending_review_context"]["S3"] == {
+            "source_detected_num_speakers": 3,
+            "longest_turn_at_ms": 9000,
         }
         assert "not active identities" in transcript["speaker_names_pending_review_note"]
         assert all("speaker_name" not in segment for segment in transcript["segments"])
@@ -462,7 +541,35 @@ async def _run_pending_review_session(home: Path) -> None:
         assert "saved in pending review" in pending_search["note"]
         jobs_payload = _payload(await session.call_tool("list_jobs", {}))
         entry = next(job for job in jobs_payload["jobs"] if job["job_id"] == manifest.job_id)
-        assert entry["speaker_names_pending_review_count"] == 2
+        assert entry["speaker_names_pending_review_count"] == 3
+        removed = _payload(
+            await session.call_tool(
+                "label_speakers",
+                {"job_id": manifest.job_id, "labels": {"S3": None}},
+            )
+        )
+        assert removed["speaker_names_pending_review"] == {
+            "S1": "Samantha",
+            "S2": "Daniel",
+        }
+        assert "speaker_names_pending_review_stale_labels" not in removed
+
+    # A new server process proves stale cleanup and the remaining context are
+    # durable rather than cached in one SDK session.
+    async with (
+        stdio_client(_server_params(home)) as (read, write),
+        ClientSession(read, write) as session,
+    ):
+        await session.initialize()
+        transcript = _payload(
+            await session.call_tool("get_transcript", {"job_id": manifest.job_id})
+        )
+        assert transcript["speaker_names_pending_review"] == {
+            "S1": "Samantha",
+            "S2": "Daniel",
+        }
+        assert set(transcript["speaker_names_pending_review_context"]) == {"S1", "S2"}
+        assert "speaker_names_pending_review_stale_labels" not in transcript
 
 
 @pytest.mark.timeout(900)

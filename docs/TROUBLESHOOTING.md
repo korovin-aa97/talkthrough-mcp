@@ -5,9 +5,16 @@ Short answers to the failure modes people actually hit. If yours isn't here,
 
 ## First run is slow / downloads a lot
 
-There are two separate cold-start stages. First, `uvx` resolves a compatible
-Python and creates an environment for the requested package version. Then the
-first `process_media` downloads media/model assets that are still missing:
+Cold setup has four separate stages; identify the failing stage before
+changing caches or certificates:
+
+1. `uvx` resolves the package and creates its isolated environment.
+2. If no compatible interpreter exists, uv downloads a managed Python.
+3. The first `process_media` downloads media/model assets that are still missing.
+4. Warm processing uses the installed environment and local caches without
+   runtime network access.
+
+First-media assets can include:
 
 - no system ffmpeg → `static-ffmpeg` fetches a bundled build (~80 MB);
 - first transcription → whisper model download into `~/.cache/huggingface`
@@ -20,9 +27,9 @@ environment. After a plugin update, a machine without system ffmpeg may
 therefore fetch the ~80 MB static build again; one external cold run took
 about 50 seconds, but that is an observation, not a timing promise. The
 Whisper, OCR, and diarization model caches are shared across those tool
-environments. Set `SSL_CERT_FILE` in the MCP server environment before the
-first media processing on a TLS-inspecting corporate network, because the
-static-ffmpeg download needs the same trusted CA as model downloads.
+environments. Set `SSL_CERT_FILE` before either uv setup or the first media
+processing on a TLS-inspecting corporate network: managed Python, package,
+static-ffmpeg, and model downloads all need the trusted CA.
 
 A second run in the same warm environment does not redownload dependencies.
 Warm processing is network-free and reuses model caches; re-processing the
@@ -32,8 +39,21 @@ typically around 3× faster than real time (a 2-minute clip ≈ 40 s).
 
 ## Corporate networks: model downloads stall or fail TLS
 
-Two env vars fix the one-time downloads on locked-down networks (warm runs
+The settings below fix one-time downloads on locked-down networks (warm runs
 are offline and unaffected):
+
+- **uv environment or managed Python download fails TLS** — use the OS trust
+  store with `UV_SYSTEM_CERTS=true`, or point `SSL_CERT_FILE` at a PEM bundle
+  containing the corporate CA. A diagnostic/preseed command isolates this
+  stage before launching the server:
+
+  ```bash
+  uv python install 3.12
+  ```
+
+  `UV_PYTHON_INSTALL_MIRROR` is supported for an organization mirror of
+  `python-build-standalone`; use it only when that mirror preserves uv's
+  expected release path layout. It does not disable certificate validation.
 
 - **Whisper download hangs / stalls at 0%** — some proxies break Hugging
   Face's Xet transfer protocol. Disable it; downloads fall back to plain
@@ -72,7 +92,7 @@ diarization integration tests download models on first run, so a fresh
 
 Your Python is older than 3.11 (macOS ships 3.9 as `/usr/bin/python3`), so
 pip filters out every release and prints the confusing "from versions: none".
-Fixes: use `uvx talkthrough-mcp` (uv picks a compatible Python by itself), or
+Fixes: use `uvx --python ">=3.11,<3.14" talkthrough-mcp`, or
 create the venv from a modern interpreter, e.g. `python3.12 -m venv`.
 
 ## `uvx` selects managed Python 3.10 and cannot resolve Talkthrough
@@ -84,14 +104,14 @@ No solution found ... current Python version (3.10.x) does not satisfy Python>=3
 ```
 
 Inspect the selected interpreter with `uv python find`. If no compatible
-managed Python is available, install one with `uv python install 3.12`; a
-manual launch can select it explicitly:
+managed Python is available, install one with `uv python install 3.12`; this
+diagnostic manual launch pins 3.12 explicitly:
 
 ```bash
-uvx --python 3.12 "talkthrough-mcp[diarization]"
+uvx --python "3.12" "talkthrough-mcp[diarization]"
 ```
 
-Generated Talkthrough v0.3.1 client configs and the Claude plugin already
+Generated Talkthrough v0.3.2 client configs and the Claude plugin
 pass the canonical `>=3.11,<3.14` range from `pyproject.toml`, so uv selects
 or downloads a compatible interpreter instead of inheriting Python 3.10.
 
@@ -113,7 +133,7 @@ constraint rather than overriding the package metadata, so using it with
 0.3.0 fails resolution as unsatisfiable. Refresh the tool environment instead:
 
 ```bash
-uvx --refresh "talkthrough-mcp[diarization]" --help
+uvx --refresh --python ">=3.11,<3.14" "talkthrough-mcp[diarization]" --help
 ```
 
 The history below applies only to older Talkthrough releases.
@@ -130,7 +150,7 @@ Fixed for the 0.2.x line in **0.2.5** (`mcp>=1.28.1,<2`). Unpinned `uvx`
 setups picked that bound up on their next resolve; the historical refresh was:
 
 ```bash
-uvx --refresh "talkthrough-mcp[diarization]" --help
+uvx --refresh --python ">=3.11,<3.14" "talkthrough-mcp[diarization]" --help
 ```
 
 then reconnect (`/mcp`). The interim `"--with", "mcp<2"` launch argument is
@@ -158,7 +178,8 @@ plugin list` prints the id to use.
 ## The plugin says 0.2.3 but the server reports a newer version
 
 Also expected, and the reverse of the case above. The plugin launches the
-server unpinned (`uvx talkthrough-mcp[diarization]`), so a session started
+server unpinned (`uvx --python ">=3.11,<3.14" "talkthrough-mcp[diarization]"`),
+so a session started
 after a PyPI release resolves the NEWEST server even while the plugin — the
 slash commands, the skill, the triage agent — is still on your installed
 version. Sessions started before the release keep serving the older one in
@@ -229,8 +250,9 @@ same file is an instant re-call, and `list_jobs()` finds the job.
 ## `diarize=true` fails with "[diarization]" in the error
 
 The optional engine isn't installed. Use
-`uvx "talkthrough-mcp[diarization]"` as the server command (JSON configs:
-`"args": ["talkthrough-mcp[diarization]"]`), restart the client, retry.
+`uvx --python ">=3.11,<3.14" "talkthrough-mcp[diarization]"` as the server
+command (JSON configs: `"args": ["--python", ">=3.11,<3.14",
+"talkthrough-mcp[diarization]"]`), restart the client, retry.
 
 If you installed into your own uv **project** (`uv add
 "talkthrough-mcp[diarization]"`) and `import sherpa_onnx` fails with a
@@ -272,6 +294,22 @@ the engine (a mistyped `TALKTHROUGH_DIARIZATION_*_MODEL`, a dead model
 download); 0.3.1 extends the same fail-safe contract to failures inside the
 diarization run. Correct the environment and retry the amend.
 
+The same atomic contract covers a full `force=true` rebuild. If the stored job
+has active or pending speaker identities, the rebuild must explicitly resolve
+`diarize=true`; omitting or disabling diarization is rejected before probing or
+staging. On success every previous identity becomes pending-review evidence
+against the fresh roster. A transcription, diarization, frame/OCR, validation,
+or commit failure leaves the previous manifest and frames readable.
+
+## A legacy video has no OCR name candidates
+
+Video jobs produced before 0.3.1 stored OCR as a flat line, so current name
+candidate heuristics may have no useful line boundaries. The job is not corrupt
+and is served without migration; transcript and saved identities remain intact.
+The response-only `name_candidates_note` explains this case. Regenerate only if
+the hints matter, using `force=true, diarize=true`; line-aware OCR is rebuilt and
+all previous identities move to pending review rather than disappearing.
+
 ## `t_wall` is null or looks wrong
 
 - The recorder wrote no usable metadata — pass
@@ -289,8 +327,13 @@ Everything lives under `~/.talkthrough` (override with `TALKTHROUGH_HOME`):
 
 - `talkthrough-mcp gc --keep-days 30` prunes old jobs; deleting the whole
   directory removes every job.
-- Whisper models cache in `~/.cache/huggingface`; uvx environments are
-  cleared with `uv cache clean`.
+- Whisper models cache in `~/.cache/huggingface`; `uv cache prune` is the
+  ordinary cleanup for unused uv entries and cached tool environments.
+- `uv cache clean talkthrough-mcp` removes that package's uv cache entries;
+  bare `uv cache clean` clears the entire uv cache. Both can force package or
+  tool-environment downloads again, so use them only for deliberate repair.
+- `talkthrough-mcp gc --keep-days 30` cleans Talkthrough jobs and abandoned
+  job staging; it does not clean uv environments, Python installs, or models.
 
 Nothing is written anywhere else, and there is no telemetry to opt out of.
 
