@@ -34,8 +34,9 @@ jobs:
       - name: Extract release notes from CHANGELOG
         shell: bash
         run: |
+          PROJECT_VERSION="$(uv version --short)"
           uv run python scripts/extract_release_notes.py \
-            --version "${GITHUB_REF_NAME#v}" \
+            --version "$PROJECT_VERSION" \
             --tag "$GITHUB_REF_NAME" \
             --output release-notes.md
       - run: uv build

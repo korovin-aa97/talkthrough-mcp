@@ -83,3 +83,14 @@ def test_cli_writes_output_file(tmp_path: Path) -> None:
     assert output.read_text(encoding="utf-8") == extract_release_notes(
         CHANGELOG, "0.3.2", tag="v0.3.2"
     )
+
+
+def test_release_workflow_checks_project_version_before_publish() -> None:
+    workflow = (REPO_ROOT / ".github" / "workflows" / "release.yml").read_text(
+        encoding="utf-8"
+    )
+    assert 'PROJECT_VERSION="$(uv version --short)"' in workflow
+    assert '--version "$PROJECT_VERSION"' in workflow
+    assert '--tag "$GITHUB_REF_NAME"' in workflow
+    assert "--notes-file release-notes.md" in workflow
+    assert "--generate-notes" not in workflow
