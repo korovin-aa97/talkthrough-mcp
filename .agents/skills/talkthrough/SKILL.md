@@ -52,9 +52,11 @@ install it: `claude mcp add -s user talkthrough -- uvx talkthrough-mcp`
    evidence={"S1":"intro or frame proof"})`. Saved names appear in later
    transcript, moment, and search calls while raw `S1`/`S2` labels remain.
    If a diarization amend changes labels, those names move to
-   `speaker_names_pending_review` and stop being identities. Re-check the
-   current roster, then explicitly confirm or remove each affected label;
-   never use a pending name in minutes or search as though it were active.
+   `speaker_names_pending_review` and stop being identities. Use the stored
+   old-roster context anchors to re-check them. A pending label still in the
+   roster can be confirmed, replaced, or removed; a stale pending label can
+   only be removed with `labels={"Sx":null}`. Never use a pending name in
+   minutes or search as though it were active.
 6. **Recall across sessions**: `list_jobs()` — the store persists; a file
    processed yesterday (even via CLI) is queryable by `job_id` today.
 

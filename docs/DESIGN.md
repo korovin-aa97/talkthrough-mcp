@@ -97,6 +97,17 @@ the second call on the same bytes returns the stored summary in milliseconds.
                                     "speaker_name_evidence_pending_review"?: {
                                       "S1": "frame proof"
                                     },
+                                    "speaker_names_pending_review_context"?: {
+                                      "S1": {
+                                        "source_detected_num_speakers": 2,
+                                        "source_requested_num_speakers": 2,
+                                        "source_produced_by": "0.3.2",
+                                        "talk_time_ms": 18342,
+                                        "turn_count": 4,
+                                        "longest_turn_at_ms": 5210,
+                                        "longest_turn_duration_ms": 7040
+                                      }
+                                    },
                                     "turns": [[t0_ms, t1_ms, "S1"], …] } },
   "frames": { "count", "unique_count", "cap_hit",
               "items": [{ "ms", "file", "duplicate_of"?, "ocr_text"? }] },
@@ -144,6 +155,10 @@ The whole tool surface is built to keep responses small:
   each ≤80 characters. The deterministic filter rejects obvious UI chrome,
   digits, URLs/paths, and long copy; candidates remain unverified hints and
   never become active names without `label_speakers`.
+- Pending speaker identities are capped on response surfaces and stay
+  separate from active names. Each served entry may carry a bounded anchor
+  to its source roster; stale labels can only be removed with an explicit
+  null patch and never become active automatically.
 - Tool descriptions themselves are budgeted: one-line examples, ≤120 chars
   each (gated by `tests/unit/test_guidance.py`).
 
