@@ -5,7 +5,7 @@ from __future__ import annotations
 import unicodedata
 from collections.abc import Mapping
 
-from .diarize import Diarization
+from .diarize import Diarization, speaker_label_sort_key
 from .errors import ValidationError
 
 MAX_SPEAKER_NAME_CHARS = 100
@@ -17,7 +17,12 @@ def _has_control_characters(value: str) -> bool:
 
 
 def _normalize_patch_keys(
-    values: Mapping[str, object], valid_labels: list[str], field: str
+    values: Mapping[str, object],
+    valid_labels: list[str],
+    field: str,
+    *,
+    current_labels: list[str],
+    pending_labels: list[str],
 ) -> dict[str, object]:
     normalized: dict[str, object] = {}
     for raw_label, value in values.items():
@@ -26,6 +31,8 @@ def _normalize_patch_keys(
             raise ValidationError(
                 f"unknown speaker label {raw_label!r} in {field}; valid labels: "
                 + ", ".join(valid_labels)
+                + f" (current roster labels: {', '.join(current_labels) or 'none'}; "
+                f"pending-review labels: {', '.join(pending_labels) or 'none'})"
             )
         if label in normalized:
             raise ValidationError(
@@ -42,16 +49,50 @@ def apply_speaker_label_patch(
     evidence: Mapping[str, str] | None = None,
 ) -> None:
     """Validate and atomically-in-memory apply one names/evidence patch."""
-    valid_labels = [speaker.label for speaker in diarization.speakers]
+    current_labels = [speaker.label for speaker in diarization.speakers]
+    current_set = set(current_labels)
+    pending_labels = sorted(
+        diarization.speaker_names_pending_review or {}, key=speaker_label_sort_key
+    )
+    valid_labels = [*current_labels]
+    valid_labels.extend(label for label in pending_labels if label not in current_set)
     if not valid_labels:
-        raise ValidationError("this diarized job has an empty speaker roster")
-    label_patch = _normalize_patch_keys(labels, valid_labels, "labels")
-    evidence_patch = _normalize_patch_keys(evidence or {}, valid_labels, "evidence")
+        raise ValidationError(
+            "this diarized job has an empty speaker roster and no pending-review labels"
+        )
+    label_patch = _normalize_patch_keys(
+        labels,
+        valid_labels,
+        "labels",
+        current_labels=current_labels,
+        pending_labels=pending_labels,
+    )
+    evidence_patch = _normalize_patch_keys(
+        evidence or {},
+        valid_labels,
+        "evidence",
+        current_labels=current_labels,
+        pending_labels=pending_labels,
+    )
+    pending_only = set(pending_labels) - current_set
+    for label, raw_value in label_patch.items():
+        if label in pending_only and raw_value is not None:
+            raise ValidationError(
+                f"inactive pending-review label {label} cannot be confirmed or replaced; "
+                "remove it with an explicit null value"
+            )
+    for label in evidence_patch:
+        if label in pending_only:
+            raise ValidationError(
+                f"evidence for inactive pending-review label {label} is not accepted; "
+                "remove the identity with labels={...: null}"
+            )
 
     names = dict(diarization.speaker_names or {})
     saved_evidence = dict(diarization.speaker_name_evidence or {})
     pending_names = dict(diarization.speaker_names_pending_review or {})
     pending_evidence = dict(diarization.speaker_name_evidence_pending_review or {})
+    pending_context = dict(diarization.speaker_names_pending_review_context or {})
     validated_names: dict[str, str | None] = {}
     for label, raw_value in label_patch.items():
         if raw_value is not None and not isinstance(raw_value, str):
@@ -91,6 +132,8 @@ def apply_speaker_label_patch(
         validated_evidence[label] = value or None
 
     for label, stored_name in validated_names.items():
+        if label in pending_only:
+            continue  # validated above: explicit null only, handled as pending review
         if stored_name is None:
             names.pop(label, None)
             saved_evidence.pop(label, None)
@@ -111,10 +154,15 @@ def apply_speaker_label_patch(
     for label in label_patch:
         pending_names.pop(label, None)
         pending_evidence.pop(label, None)
+        pending_context.pop(label, None)
     pending_evidence = {
         label: value for label, value in pending_evidence.items() if label in pending_names
+    }
+    pending_context = {
+        label: value for label, value in pending_context.items() if label in pending_names
     }
     diarization.speaker_names = names or None
     diarization.speaker_name_evidence = saved_evidence or None
     diarization.speaker_names_pending_review = pending_names or None
     diarization.speaker_name_evidence_pending_review = pending_evidence or None
+    diarization.speaker_names_pending_review_context = pending_context or None

@@ -503,11 +503,11 @@ def search(
                     name.casefold() == folded for name in pending_names.values()
                 )
                 if pending_match:
+                    pending_note = pipeline.pending_review_note(diarization)
+                    assert pending_note is not None
                     note = (
-                        f"speaker name {speaker_query!r} is saved in pending review because "
-                        "diarization changed the labels; it is not an active identity and is "
-                        "not used for search. Re-check the current roster and confirm or "
-                        "remove it with label_speakers"
+                        f"speaker name {speaker_query!r} is saved in pending review; it is "
+                        f"not an active identity and is not used for search. {pending_note}"
                     )
                 else:
                     note = (

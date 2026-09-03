@@ -15,7 +15,13 @@ from pathlib import Path
 import pytest
 from tests.conftest import make_manifest
 
-from talkthrough_mcp.core.diarize import Diarization, Turn, attribute_segments, speaker_roster
+from talkthrough_mcp.core.diarize import (
+    Diarization,
+    PendingSpeakerReviewContext,
+    Turn,
+    attribute_segments,
+    speaker_roster,
+)
 from talkthrough_mcp.core.jobs import job_dir
 from talkthrough_mcp.core.manifest import Manifest, Transcript, save_manifest
 from talkthrough_mcp.core.stt import SttWord
@@ -548,6 +554,7 @@ def test_unknown_saved_name_returns_bounded_honesty_note(isolated_home: Path) ->
 
 
 def test_pending_review_name_is_not_an_active_search_identity(isolated_home: Path) -> None:
+    from talkthrough_mcp.core import pipeline
     from talkthrough_mcp.server import search
 
     manifest = _diarize(make_manifest())
@@ -558,6 +565,29 @@ def test_pending_review_name_is_not_an_active_search_identity(isolated_home: Pat
     assert payload["hits"] == []
     assert "saved in pending review" in payload["note"]
     assert "not an active identity" in payload["note"]
+    assert pipeline.pending_review_note(diarization) in payload["note"]
+
+
+def test_pending_review_payload_marks_stale_labels_and_bounds_context() -> None:
+    from talkthrough_mcp.core import pipeline
+
+    manifest = _diarize(make_manifest())
+    diarization = manifest.transcript.diarization
+    assert diarization is not None
+    diarization.speaker_names_pending_review = {"S1": "Vera", "S3": "Ghost"}
+    diarization.speaker_names_pending_review_context = {
+        "S1": PendingSpeakerReviewContext(longest_turn_at_ms=0),
+        "S3": PendingSpeakerReviewContext(longest_turn_at_ms=9000),
+        "S9": PendingSpeakerReviewContext(longest_turn_at_ms=9999),
+    }
+    payload = pipeline.pending_review_payload(diarization)
+    assert payload["speaker_names_pending_review_stale_labels"] == ["S3"]
+    assert payload["speaker_names_pending_review_stale_total"] == 1
+    assert payload["speaker_names_pending_review_context"] == {
+        "S1": {"longest_turn_at_ms": 0},
+        "S3": {"longest_turn_at_ms": 9000},
+    }
+    assert "S9" not in payload["speaker_names_pending_review_context"]
 
 
 def test_pending_review_payload_is_roster_capped(isolated_home: Path) -> None:
@@ -569,10 +599,21 @@ def test_pending_review_payload_is_roster_capped(isolated_home: Path) -> None:
     diarization.speaker_names_pending_review = {
         f"S{index}": f"Name {index}" for index in range(1, pipeline.SUMMARY_ROSTER_CAP + 4)
     }
+    diarization.speaker_names_pending_review["S99"] = "Stale name"
+    diarization.speaker_names_pending_review_context = {
+        label: PendingSpeakerReviewContext(longest_turn_at_ms=index)
+        for index, label in enumerate(diarization.speaker_names_pending_review)
+    }
     payload = pipeline.pending_review_payload(diarization)
     assert len(payload["speaker_names_pending_review"]) == pipeline.SUMMARY_ROSTER_CAP
-    assert payload["speaker_names_pending_review_total"] == pipeline.SUMMARY_ROSTER_CAP + 3
-    assert payload["speaker_names_pending_review_truncated"] == 3
+    assert payload["speaker_names_pending_review_total"] == pipeline.SUMMARY_ROSTER_CAP + 4
+    assert payload["speaker_names_pending_review_truncated"] == 4
+    assert set(payload["speaker_names_pending_review_context"]) == set(
+        payload["speaker_names_pending_review"]
+    )
+    assert payload["speaker_names_pending_review_stale_total"] == 1
+    assert payload["speaker_names_pending_review_stale_truncated"] == 1
+    assert "speaker_names_pending_review_stale_labels" not in payload
 
 
 def test_name_candidates_are_bounded_deduplicated_name_like_ocr_hints(

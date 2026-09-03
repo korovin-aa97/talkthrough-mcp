@@ -95,6 +95,9 @@ class ProcessResult:
     # the outcome either way.
     amended: bool = False
     vocabulary_echo_trimmed: int = 0  # opening initial_prompt echoes dropped
+    # Response-only collision report. The superseded pending value is not
+    # persisted because the latest human-verified active value wins.
+    speaker_names_pending_review_dropped: dict[str, str] | None = None
 
 
 def _env_int(name: str, default: int) -> int:
@@ -357,7 +360,7 @@ def _labels_snapshot(
 
 def _amend_diarization(
     media: Path, manifest: Manifest, request: _DiarizeRequest, report: ProgressFn
-) -> Manifest:
+) -> tuple[Manifest, dict[str, str]]:
     """Re-extract the WAV and run ONLY diarization on an existing job.
 
     Whisper is not re-run; stored segments are re-attributed in place and the
@@ -405,6 +408,16 @@ def _amend_diarization(
         if previous_diarization
         else {}
     )
+    previous_pending_context = (
+        dict(previous_diarization.speaker_names_pending_review_context or {})
+        if previous_diarization
+        else {}
+    )
+    pending_merge = (
+        diarize.merge_pending_speaker_identities(previous_diarization)
+        if previous_diarization is not None
+        else diarize.PendingSpeakerIdentityMerge({}, {}, {}, {})
+    )
     report("extracting audio", 0.10)
     try:
         audio.extract_wav(media, wav_path, timeout=tool_timeout)
@@ -435,22 +448,24 @@ def _amend_diarization(
             diarization.speaker_name_evidence_pending_review = (
                 previous_pending_evidence or None
             )
-        elif previous_names:
-            # Keep only the most recent unreviewed mapping. Active identities
-            # are deliberately not carried onto changed labels.
-            diarization.speaker_names_pending_review = previous_names
-            diarization.speaker_name_evidence_pending_review = previous_evidence or None
+            diarization.speaker_names_pending_review_context = (
+                previous_pending_context or None
+            )
         else:
-            # A second amend before review must not erase the saved mapping
-            # merely because there are no active names left to move.
-            diarization.speaker_names_pending_review = previous_pending_names or None
+            # Labels changed: no previous identity is safe to activate on the
+            # new roster. Merge every disjoint pending generation with the
+            # latest active values and anchor the latter to the old roster.
+            diarization.speaker_names_pending_review = pending_merge.names or None
             diarization.speaker_name_evidence_pending_review = (
-                previous_pending_evidence or None
+                pending_merge.evidence or None
+            )
+            diarization.speaker_names_pending_review_context = (
+                pending_merge.context or None
             )
     report("writing manifest", 0.99)
     save_manifest(manifest, directory)
     report("done", 1.0)
-    return manifest
+    return manifest, pending_merge.dropped if diarization.labels_changed else {}
 
 
 def process_media(
@@ -520,7 +535,9 @@ def process_media(
                 logger.info(
                     "job %s exists — amending diarization only, whisper is not re-run", job_id
                 )
-                amended = _amend_diarization(media, manifest_hit, diarize_request, report)
+                amended, dropped = _amend_diarization(
+                    media, manifest_hit, diarize_request, report
+                )
                 diarization = amended.transcript.diarization
                 return ProcessResult(
                     manifest=amended,
@@ -530,6 +547,7 @@ def process_media(
                     # transcript, records available=false + reason, and must
                     # not be reported as an applied amend
                     amended=diarization is not None and diarization.available,
+                    speaker_names_pending_review_dropped=dropped or None,
                 )
             return ProcessResult(
                 manifest=manifest_hit, reused=True, elapsed_s=time.monotonic() - started
@@ -736,10 +754,18 @@ def pending_review_note(diarization: Diarization) -> str | None:
     count = len(diarization.speaker_names_pending_review or {})
     if not count:
         return None
+    current_labels = {speaker.label for speaker in diarization.speakers}
+    stale_count = sum(
+        label not in current_labels
+        for label in (diarization.speaker_names_pending_review or {})
+    )
     return (
-        f"{count} saved speaker name(s) moved to pending review because diarization "
-        "changed the labels; they are not active identities. Re-check the current "
-        "roster and confirm or remove them with label_speakers."
+        f"{count} saved speaker name(s) are pending review because diarization changed "
+        "the labels; they are not active identities. Re-check the current roster. "
+        "Current pending labels can be confirmed, replaced, or removed with "
+        "label_speakers; stale pending labels"
+        + (f" ({stale_count})" if stale_count else "")
+        + " can only be removed with labels={\"Sx\": null}."
     )
 
 
@@ -749,11 +775,20 @@ def pending_review_payload(diarization: Diarization) -> dict[str, Any]:
     if not names:
         return {}
     roster_order = [speaker.label for speaker in diarization.speakers]
+    current_labels = set(roster_order)
     ordered_labels = [label for label in roster_order if label in names]
-    ordered_labels.extend(sorted(label for label in names if label not in ordered_labels))
+    ordered_labels.extend(
+        sorted(
+            (label for label in names if label not in current_labels),
+            key=diarize.speaker_label_sort_key,
+        )
+    )
     served_labels = ordered_labels[:SUMMARY_ROSTER_CAP]
     hidden = len(ordered_labels) - len(served_labels)
     evidence = diarization.speaker_name_evidence_pending_review or {}
+    context = diarization.speaker_names_pending_review_context or {}
+    stale_labels = [label for label in served_labels if label not in current_labels]
+    stale_total = sum(label not in current_labels for label in ordered_labels)
     note = pending_review_note(diarization)
     assert note is not None
     return {
@@ -767,9 +802,59 @@ def pending_review_payload(diarization: Diarization) -> dict[str, Any]:
             if any(label in evidence for label in served_labels)
             else {}
         ),
+        **(
+            {
+                "speaker_names_pending_review_context": {
+                    label: context[label].to_dict()
+                    for label in served_labels
+                    if label in context and context[label].to_dict()
+                }
+            }
+            if any(label in context and context[label].to_dict() for label in served_labels)
+            else {}
+        ),
+        **(
+            {"speaker_names_pending_review_stale_labels": stale_labels}
+            if stale_labels
+            else {}
+        ),
+        **(
+            {"speaker_names_pending_review_stale_total": stale_total}
+            if stale_total
+            else {}
+        ),
+        **(
+            {
+                "speaker_names_pending_review_stale_truncated": (
+                    stale_total - len(stale_labels)
+                )
+            }
+            if stale_total > len(stale_labels)
+            else {}
+        ),
         "speaker_names_pending_review_total": len(ordered_labels),
         **({"speaker_names_pending_review_truncated": hidden} if hidden else {}),
         "speaker_names_pending_review_note": note,
+    }
+
+
+def pending_review_dropped_payload(dropped: dict[str, str] | None) -> dict[str, Any]:
+    """Bounded one-shot collision report for the amend response only."""
+    if not dropped:
+        return {}
+    ordered = sorted(dropped, key=diarize.speaker_label_sort_key)
+    served = ordered[:SUMMARY_ROSTER_CAP]
+    hidden = len(ordered) - len(served)
+    return {
+        "speaker_names_pending_review_dropped": {
+            label: dropped[label] for label in served
+        },
+        "speaker_names_pending_review_dropped_total": len(ordered),
+        **({"speaker_names_pending_review_dropped_truncated": hidden} if hidden else {}),
+        "speaker_names_pending_review_dropped_note": (
+            "A newer human-verified active name superseded each conflicting pending "
+            "value for the same raw label; the listed older values are no longer stored."
+        ),
     }
 
 
@@ -1114,6 +1199,16 @@ def summarize(result: ProcessResult) -> dict[str, Any]:
         for segment in segments[:TRANSCRIPT_PREVIEW_SEGMENTS]
     ]
     frames_with_text = sum(1 for frame in manifest.frames.items if frame.ocr_text)
+    diarization_summary: dict[str, Any] | None = None
+    if diarization is not None:
+        diarization_summary = _summarize_diarization(
+            diarization, manifest.transcript, manifest
+        )
+        diarization_summary.update(
+            pending_review_dropped_payload(
+                result.speaker_names_pending_review_dropped
+            )
+        )
     return {
         "job_id": manifest.job_id,
         "reused": result.reused,
@@ -1144,15 +1239,7 @@ def summarize(result: ProcessResult) -> dict[str, Any]:
             "preview_segments": preview,
             "preview_truncated": len(segments) > len(preview),
         },
-        **(
-            {
-                "diarization": _summarize_diarization(
-                    diarization, manifest.transcript, manifest
-                )
-            }
-            if diarization
-            else {}
-        ),
+        **({"diarization": diarization_summary} if diarization_summary else {}),
         "frames": _summarize_frames(manifest),
         "ocr": {"enabled": manifest.caps.ocr, "unique_frames_with_text": frames_with_text},
         "next_steps": (

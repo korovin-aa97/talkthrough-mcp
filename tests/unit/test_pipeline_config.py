@@ -9,7 +9,7 @@ import pytest
 from tests.conftest import make_manifest
 
 from talkthrough_mcp.core import diarize
-from talkthrough_mcp.core.diarize import Diarization
+from talkthrough_mcp.core.diarize import Diarization, PendingSpeakerReviewContext
 from talkthrough_mcp.core.errors import ToolFailureError, ValidationError
 from talkthrough_mcp.core.pipeline import (
     ALLOWED_WHISPER_MODELS,
@@ -767,6 +767,11 @@ def test_noop_amend_reports_labels_unchanged_and_keeps_provenance(
     assert before_diarization is not None
     before_diarization.speaker_names = {"S1": "Vera"}
     before_diarization.speaker_name_evidence = {"S1": "intro"}
+    before_diarization.speaker_names_pending_review = {"S2": "Tom"}
+    before_diarization.speaker_name_evidence_pending_review = {"S2": "old plate"}
+    before_diarization.speaker_names_pending_review_context = {
+        "S2": PendingSpeakerReviewContext(longest_turn_at_ms=5000)
+    }
     save_manifest(before_amend, jobs.job_dir(before_amend.job_id))
     result = _amend_through_fake_engine(media, monkeypatch, turns=turns, k=3)
     assert result.amended is True  # the amend RAN and landed labels…
@@ -776,6 +781,11 @@ def test_noop_amend_reports_labels_unchanged_and_keeps_provenance(
     assert diarization.amend_reason == "num_speakers"
     assert diarization.speaker_names == {"S1": "Vera"}
     assert diarization.speaker_name_evidence == {"S1": "intro"}
+    assert diarization.speaker_names_pending_review == {"S2": "Tom"}
+    assert diarization.speaker_name_evidence_pending_review == {"S2": "old plate"}
+    assert diarization.speaker_names_pending_review_context == {
+        "S2": PendingSpeakerReviewContext(longest_turn_at_ms=5000)
+    }
     summary = pipeline.summarize(result)["diarization"]
     assert summary["labels_changed"] is False
     assert "nothing was relabelled" in summary["amend_note"]
@@ -878,6 +888,133 @@ def test_relabelling_amend_moves_verified_names_to_persistent_pending_review(
     assert latest_diarization.speaker_name_evidence_pending_review == {
         "S1": "reviewed against current roster"
     }
+
+
+def test_multiple_relabel_generations_merge_disjoint_pending_and_keep_old_anchors(
+    tmp_path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from talkthrough_mcp.core import jobs, pipeline
+    from talkthrough_mcp.core.diarize import Turn
+    from talkthrough_mcp.core.manifest import save_manifest
+    from talkthrough_mcp.server import label_speakers
+
+    media, original = _stored_attributed_job(tmp_path, monkeypatch)
+    stored = jobs.load_job(jobs.compute_job_id(media))
+    first_diarization = stored.transcript.diarization
+    assert first_diarization is not None
+    first_diarization.speaker_names = {"S1": "Samantha", "S2": "Daniel"}
+    first_diarization.speaker_name_evidence = {
+        "S1": "first voice",
+        "S2": "second voice",
+    }
+    save_manifest(stored, jobs.job_dir(stored.job_id))
+
+    three_speakers = [
+        Turn(0, 2500, "S1"),
+        Turn(2500, 5000, "S2"),
+        Turn(5000, 8000, "S3"),
+    ]
+    first_amend = _amend_through_fake_engine(
+        media, monkeypatch, turns=three_speakers, k=3
+    )
+    first_pending = first_amend.manifest.transcript.diarization
+    assert first_pending is not None
+    assert first_pending.speaker_names_pending_review == {
+        "S1": "Samantha",
+        "S2": "Daniel",
+    }
+    assert first_pending.speaker_names_pending_review_context is not None
+    assert first_pending.speaker_names_pending_review_context["S1"].talk_time_ms == 5000
+    assert first_pending.speaker_names_pending_review_context[
+        "S2"
+    ].longest_turn_at_ms == 5000
+
+    label_speakers(stored.job_id, {"S3": "Ghost"}, {"S3": "third voice"})
+    second_amend = _amend_through_fake_engine(
+        media, monkeypatch, turns=original, k=2
+    )
+    final = second_amend.manifest.transcript.diarization
+    assert final is not None
+    assert final.speaker_names is None
+    assert final.speaker_names_pending_review == {
+        "S1": "Samantha",
+        "S2": "Daniel",
+        "S3": "Ghost",
+    }
+    assert final.speaker_names_pending_review_context is not None
+    assert set(final.speaker_names_pending_review_context) == {"S1", "S2", "S3"}
+    assert final.speaker_names_pending_review_context[
+        "S3"
+    ].source_detected_num_speakers == 3
+    assert final.speaker_names_pending_review_context["S3"].longest_turn_at_ms == 5000
+    summary = pipeline.summarize(second_amend)["diarization"]
+    assert summary["speaker_names_pending_review_stale_labels"] == ["S3"]
+
+    label_speakers(stored.job_id, {"S3": None})
+    cleaned = jobs.load_job(stored.job_id).transcript.diarization
+    assert cleaned is not None
+    assert cleaned.speaker_names_pending_review == {
+        "S1": "Samantha",
+        "S2": "Daniel",
+    }
+    assert cleaned.speaker_names_pending_review_context is not None
+    assert set(cleaned.speaker_names_pending_review_context) == {"S1", "S2"}
+
+
+def test_same_label_collision_is_reported_once_and_active_value_wins(
+    tmp_path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from talkthrough_mcp.core import jobs, pipeline
+    from talkthrough_mcp.core.diarize import Turn
+    from talkthrough_mcp.core.manifest import save_manifest
+
+    media, _original = _stored_attributed_job(tmp_path, monkeypatch)
+    stored = jobs.load_job(jobs.compute_job_id(media))
+    diarization = stored.transcript.diarization
+    assert diarization is not None
+    diarization.speaker_names = {"S1": "New Alice"}
+    diarization.speaker_name_evidence = {"S1": "fresh intro"}
+    diarization.speaker_names_pending_review = {"S1": "Old Alice"}
+    diarization.speaker_name_evidence_pending_review = {"S1": "old intro"}
+    save_manifest(stored, jobs.job_dir(stored.job_id))
+
+    changed = [Turn(0, 3000, "S1"), Turn(3000, 8000, "S2")]
+    result = _amend_through_fake_engine(media, monkeypatch, turns=changed, k=3)
+    updated = result.manifest.transcript.diarization
+    assert updated is not None
+    assert updated.speaker_names_pending_review == {"S1": "New Alice"}
+    summary = pipeline.summarize(result)["diarization"]
+    assert summary["speaker_names_pending_review_dropped"] == {"S1": "Old Alice"}
+    assert summary["speaker_names_pending_review_dropped_total"] == 1
+    assert "superseded" in summary["speaker_names_pending_review_dropped_note"]
+
+    reloaded = jobs.load_job(stored.job_id)
+    later = pipeline.summarize(
+        pipeline.ProcessResult(manifest=reloaded, reused=True, elapsed_s=0)
+    )["diarization"]
+    assert "speaker_names_pending_review_dropped" not in later
+
+
+def test_same_label_and_name_does_not_report_a_drop(
+    tmp_path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from talkthrough_mcp.core import jobs, pipeline
+    from talkthrough_mcp.core.diarize import Turn
+    from talkthrough_mcp.core.manifest import save_manifest
+
+    media, _original = _stored_attributed_job(tmp_path, monkeypatch)
+    stored = jobs.load_job(jobs.compute_job_id(media))
+    diarization = stored.transcript.diarization
+    assert diarization is not None
+    diarization.speaker_names = {"S1": "Alice"}
+    diarization.speaker_names_pending_review = {"S1": "Alice"}
+    save_manifest(stored, jobs.job_dir(stored.job_id))
+
+    changed = [Turn(0, 3000, "S1"), Turn(3000, 8000, "S2")]
+    result = _amend_through_fake_engine(media, monkeypatch, turns=changed, k=3)
+    summary = pipeline.summarize(result)["diarization"]
+    assert summary["speaker_names_pending_review"] == {"S1": "Alice"}
+    assert "speaker_names_pending_review_dropped" not in summary
 
 
 def test_concurrent_label_and_relabel_amend_never_lose_verified_names(

@@ -130,6 +130,85 @@ class SpeakerStat:
     last_ms: int
 
 
+@dataclass(frozen=True)
+class PendingSpeakerReviewContext:
+    """Bounded anchor back to the diarization generation an identity came from.
+
+    The context is evidence location only. It never claims that an old ``S1``
+    and the current ``S1`` describe the same voice.
+    """
+
+    source_detected_num_speakers: int | None = None
+    source_requested_num_speakers: int | None = None
+    source_produced_by: str | None = None
+    talk_time_ms: int | None = None
+    turn_count: int | None = None
+    longest_turn_at_ms: int | None = None
+    longest_turn_duration_ms: int | None = None
+
+    def to_dict(self) -> dict[str, int | str]:
+        return {
+            key: value
+            for key, value in (
+                ("source_detected_num_speakers", self.source_detected_num_speakers),
+                ("source_requested_num_speakers", self.source_requested_num_speakers),
+                ("source_produced_by", self.source_produced_by),
+                ("talk_time_ms", self.talk_time_ms),
+                ("turn_count", self.turn_count),
+                ("longest_turn_at_ms", self.longest_turn_at_ms),
+                ("longest_turn_duration_ms", self.longest_turn_duration_ms),
+            )
+            if value is not None
+        }
+
+    @staticmethod
+    def from_dict(payload: object) -> PendingSpeakerReviewContext | None:
+        """Parse one future-tolerant entry; malformed entries are skipped."""
+        if not isinstance(payload, dict):
+            return None
+
+        def nonnegative_int(key: str) -> int | None:
+            value = payload.get(key)
+            if value is None:
+                return None
+            if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+                raise ValueError(key)
+            return value
+
+        try:
+            produced_by = payload.get("source_produced_by")
+            if produced_by is not None and (
+                not isinstance(produced_by, str) or not produced_by.strip()
+            ):
+                return None
+            context = PendingSpeakerReviewContext(
+                source_detected_num_speakers=nonnegative_int(
+                    "source_detected_num_speakers"
+                ),
+                source_requested_num_speakers=nonnegative_int(
+                    "source_requested_num_speakers"
+                ),
+                source_produced_by=produced_by,
+                talk_time_ms=nonnegative_int("talk_time_ms"),
+                turn_count=nonnegative_int("turn_count"),
+                longest_turn_at_ms=nonnegative_int("longest_turn_at_ms"),
+                longest_turn_duration_ms=nonnegative_int(
+                    "longest_turn_duration_ms"
+                ),
+            )
+        except ValueError:
+            return None
+        return context if context.to_dict() else None
+
+
+@dataclass(frozen=True)
+class PendingSpeakerIdentityMerge:
+    names: dict[str, str]
+    evidence: dict[str, str]
+    context: dict[str, PendingSpeakerReviewContext]
+    dropped: dict[str, str]
+
+
 @dataclass
 class Diarization:
     """Additive manifest block under ``transcript`` (schema stays v1).
@@ -154,10 +233,13 @@ class Diarization:
     speaker_name_evidence: dict[str, str] | None = None
     # A label-changing amend must deactivate human-verified identities (the
     # new S<n> roster may describe different voices), but it must never erase
-    # the user's work. Keep exactly the latest unreviewed mapping as bounded
-    # evidence until label_speakers explicitly confirms/removes each label.
+    # the user's work. Persist every disjoint pending label; response surfaces
+    # apply their own cap until label_speakers reviews or removes each entry.
     speaker_names_pending_review: dict[str, str] | None = None
     speaker_name_evidence_pending_review: dict[str, str] | None = None
+    speaker_names_pending_review_context: (
+        dict[str, PendingSpeakerReviewContext] | None
+    ) = None
     # Amend outcome metadata; each field stays absent on legacy manifests.
     # ``labels_changed``: set only by the amend path — did the re-run actually
     # relabel anything? ``amend_reason``: which explicit input invalidated the
@@ -206,6 +288,16 @@ class Diarization:
             }
             if pending_evidence:
                 payload["speaker_name_evidence_pending_review"] = pending_evidence
+            pending_context = {
+                label: context.to_dict()
+                for label, context in sorted(
+                    (self.speaker_names_pending_review_context or {}).items(),
+                    key=lambda item: speaker_label_sort_key(item[0]),
+                )
+                if label in self.speaker_names_pending_review and context.to_dict()
+            }
+            if pending_context:
+                payload["speaker_names_pending_review_context"] = pending_context
         if self.labels_changed is not None:
             payload["labels_changed"] = self.labels_changed
         if self.amend_reason is not None:
@@ -255,6 +347,19 @@ class Diarization:
             else {}
         )
         known["speaker_name_evidence_pending_review"] = pending_evidence_clean or None
+        pending_context = payload.get("speaker_names_pending_review_context")
+        pending_context_clean: dict[str, PendingSpeakerReviewContext] = {}
+        if isinstance(pending_context, dict) and known["speaker_names_pending_review"]:
+            for label in sorted(
+                pending_context, key=lambda value: speaker_label_sort_key(str(value))
+            ):
+                normalized_label = str(label)
+                if normalized_label not in known["speaker_names_pending_review"]:
+                    continue
+                parsed = PendingSpeakerReviewContext.from_dict(pending_context[label])
+                if parsed is not None:
+                    pending_context_clean[normalized_label] = parsed
+        known["speaker_names_pending_review_context"] = pending_context_clean or None
         amend_reason = payload.get("amend_reason")
         known["amend_reason"] = amend_reason if amend_reason in AMEND_REASONS else None
         return Diarization(**known)
@@ -274,6 +379,147 @@ def _label_number(label: str) -> int:
         return int(label.lstrip("S"))
     except ValueError:
         return 1 << 30
+
+
+def speaker_label_sort_key(label: str) -> tuple[int, int, str]:
+    """Numeric ``S<n>`` labels first, then deterministic lexical fallback."""
+    if label.startswith("S") and label[1:].isdigit():
+        return 0, int(label[1:]), ""
+    return 1, 0, label
+
+
+def _source_review_context(
+    diarization: Diarization, label: str
+) -> PendingSpeakerReviewContext | None:
+    stat = next((item for item in diarization.speakers if item.label == label), None)
+    valid_turns = [
+        turn
+        for turn in diarization.turns
+        if turn.speaker == label and turn.t0_ms >= 0 and turn.t1_ms >= turn.t0_ms
+    ]
+    longest = (
+        max(valid_turns, key=lambda turn: (turn.t1_ms - turn.t0_ms, -turn.t0_ms))
+        if valid_turns
+        else None
+    )
+
+    def nonnegative(value: int | None) -> int | None:
+        return value if value is not None and value >= 0 else None
+
+    context = PendingSpeakerReviewContext(
+        source_detected_num_speakers=nonnegative(
+            diarization.detected_num_speakers
+        ),
+        source_requested_num_speakers=nonnegative(
+            diarization.requested_num_speakers
+        ),
+        source_produced_by=diarization.produced_by or None,
+        talk_time_ms=nonnegative(stat.talk_time_ms) if stat is not None else None,
+        turn_count=nonnegative(stat.turn_count) if stat is not None else None,
+        longest_turn_at_ms=longest.t0_ms if longest is not None else None,
+        longest_turn_duration_ms=(
+            longest.t1_ms - longest.t0_ms if longest is not None else None
+        ),
+    )
+    return context if context.to_dict() else None
+
+
+def _combine_same_identity_context(
+    older: PendingSpeakerReviewContext | None,
+    newer: PendingSpeakerReviewContext | None,
+) -> PendingSpeakerReviewContext | None:
+    if older is None:
+        return newer
+    if newer is None:
+        return older
+    return PendingSpeakerReviewContext(
+        source_detected_num_speakers=(
+            newer.source_detected_num_speakers
+            if newer.source_detected_num_speakers is not None
+            else older.source_detected_num_speakers
+        ),
+        source_requested_num_speakers=(
+            newer.source_requested_num_speakers
+            if newer.source_requested_num_speakers is not None
+            else older.source_requested_num_speakers
+        ),
+        source_produced_by=newer.source_produced_by or older.source_produced_by,
+        talk_time_ms=(
+            newer.talk_time_ms
+            if newer.talk_time_ms is not None
+            else older.talk_time_ms
+        ),
+        turn_count=(
+            newer.turn_count if newer.turn_count is not None else older.turn_count
+        ),
+        longest_turn_at_ms=(
+            newer.longest_turn_at_ms
+            if newer.longest_turn_at_ms is not None
+            else older.longest_turn_at_ms
+        ),
+        longest_turn_duration_ms=(
+            newer.longest_turn_duration_ms
+            if newer.longest_turn_duration_ms is not None
+            else older.longest_turn_duration_ms
+        ),
+    )
+
+
+def merge_pending_speaker_identities(
+    previous: Diarization,
+) -> PendingSpeakerIdentityMerge:
+    """Merge pending identities with the previous active generation.
+
+    Active values are the latest human-verified data. They supersede a
+    conflicting pending value for the same label, while disjoint pending
+    labels remain actionable. The returned ``dropped`` map is response-only.
+    """
+    names = dict(previous.speaker_names_pending_review or {})
+    evidence = {
+        label: value
+        for label, value in (previous.speaker_name_evidence_pending_review or {}).items()
+        if label in names
+    }
+    context = {
+        label: value
+        for label, value in (previous.speaker_names_pending_review_context or {}).items()
+        if label in names
+    }
+    dropped: dict[str, str] = {}
+    for label in sorted(previous.speaker_names or {}, key=speaker_label_sort_key):
+        name = (previous.speaker_names or {})[label]
+        pending_name = names.get(label)
+        same_identity = pending_name == name
+        if pending_name is not None and not same_identity:
+            dropped[label] = pending_name
+        names[label] = name
+
+        active_evidence = (previous.speaker_name_evidence or {}).get(label)
+        if active_evidence is not None:
+            evidence[label] = active_evidence
+        elif not same_identity:
+            evidence.pop(label, None)
+
+        active_context = _source_review_context(previous, label)
+        if same_identity:
+            combined = _combine_same_identity_context(context.get(label), active_context)
+            if combined is not None:
+                context[label] = combined
+        elif active_context is not None:
+            context[label] = active_context
+        else:
+            context.pop(label, None)
+
+    ordered_labels = sorted(names, key=speaker_label_sort_key)
+    return PendingSpeakerIdentityMerge(
+        names={label: names[label] for label in ordered_labels},
+        evidence={label: evidence[label] for label in ordered_labels if label in evidence},
+        context={label: context[label] for label in ordered_labels if label in context},
+        dropped={
+            label: dropped[label]
+            for label in sorted(dropped, key=speaker_label_sort_key)
+        },
+    )
 
 
 def relabel_turns(raw_turns: Sequence[tuple[int, int, int]]) -> list[Turn]:
