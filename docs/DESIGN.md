@@ -128,7 +128,10 @@ also indexed by provider identity (`site:<extractor>:<id>`), so two URL
 forms of one Instagram/TikTok video converge before a second download; the
 raw URL, its query and userinfo never reach a manifest, the index, a log
 line, a progress message or an error (`url_ingest.redact` is the single
-choke point and a canary test pins it); `extract_frame` decodes the kept
+choke point; the CLI holds the HTTP client loggers — httpx logs every
+request line with its URL — at WARNING and passes every foreign log record
+and every traceback through the same redactor; canary tests pin errors,
+files and log lines); `extract_frame` decodes the kept
 source, so URL jobs never need the network again; `gc` deletes the source
 with its job and drops index entries whose job is gone. Same-URL calls
 serialize on a URL lock, and the install + pipeline run under the job lock,

@@ -203,7 +203,11 @@ def _open_pinned(client: Any, url: str, host: str, addresses: list[str]) -> Iter
         except (httpx.ConnectError, httpx.ConnectTimeout) as exc:
             last = exc
             if index + 1 < len(addresses):
-                logger.info("connect to %s failed (%s); trying the next address", address, exc)
+                logger.info(
+                    "connect to %s failed (%s); trying the next address",
+                    address,
+                    _bounded_reason(str(exc)),
+                )
                 continue
             raise
         try:
