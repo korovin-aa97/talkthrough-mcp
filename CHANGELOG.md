@@ -4,6 +4,74 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions follow
 [SemVer](https://semver.org/).
 
+## [0.4.1] — 2026-09-05
+
+External findings against 0.4.0 — a negative release QA over the published
+wheel and a corpus of 40+ live URLs — all reproduced first (the log leak
+offline, with `httpx.MockTransport`). No new tools; the wire contract is
+unchanged: 9 tools, 6 prompts.
+
+### Fixed
+
+- **A request URL no longer reaches a log line.** httpx logs every request
+  line at INFO with the full URL — one line per hop, redirect targets
+  included — and the CLI enabled INFO on the root logger before dispatching
+  any command, `serve` included. A direct link's query and a CDN's signed
+  redirect target therefore landed in stderr, which MCP clients keep as log
+  files, against the 0.4.0 promise. The CLI now holds the HTTP client
+  loggers at WARNING and passes every foreign log record and every
+  traceback through `url_ingest.redact`; a canary test with real httpx
+  records over a redirect pins it.
+- **A multi-video page is refused, not silently truncated.** The page probe
+  asked yt-dlp for playlist item 1 only, so the entry count it checked was
+  always 1: a Loom folder or an Instagram carousel was ingested as its first
+  video. The probe now reads a flat entry list, counts, and refuses with
+  `the page contains N videos — pass a link to one video` before any
+  download instance exists.
+- **`refresh=true` replaces the stored provider metadata.** When the
+  refreshed bytes were unchanged the job was served with its old
+  `media.origin`: the summary said `refreshed: true` next to a stale title
+  and `downloaded_at` while the URL index entry was rewritten. The block is
+  now replaced under the job lock; ordinary convergence (a local file
+  first, then a URL with the same bytes) stays additive as documented.
+- **`gc` sweeps orphan URL lock files.** One empty `urls/<key>.lock` per URL
+  was created before validation and never removed, so refused and failed
+  URLs grew the index directory forever. `gc` unlinks every lock without a
+  mapping while holding it and reports them as `urls/<key>.lock`;
+  `url_lock` re-checks the inode after acquiring, so a waiter never ends up
+  holding a lock on a file the sweep removed.
+- **Page-reader crashes say what to do.** An exception the extractor stack
+  raised past yt-dlp's own error class (yt-dlp's TED extractor on a changed
+  page: a bare `TypeError`) now reads `the page reader failed on
+  https://host/… (TypeError: …) — the site may have changed its page
+  layout: refresh the tool environment so yt-dlp updates, or pass a direct
+  link to the media file`, on both the YouTube and the page path.
+
+### Added
+
+- **`talkthrough-mcp --version`** prints the package version, the Python it
+  runs on and the state of the optional extras (`url extra: yt-dlp <v>` or
+  `not installed (direct https:// media links only)`; `diarization extra:
+  sherpa-onnx <v>`). The server logs the same line to stderr at every
+  start, so a client's MCP log shows which server and which extras
+  answered — a hand-written `uvx talkthrough-mcp` config upgrades in place
+  and lists `process_url` without being able to read YouTube or video
+  pages. CI runs it in the version matrix and on the clean-installed wheel.
+- **`--json` on failure** leaves one JSON document on stdout,
+  `{"error": {"type": "UnsupportedUrlError", "message": "…"}}`, next to the
+  unchanged exit code 2 and the human `error:` line on stderr, so
+  automation parses one format on both outcomes.
+- [`docs/URL_ACCEPTANCE_CORPUS.md`](docs/URL_ACCEPTANCE_CORPUS.md): the live
+  URL corpus behind the release QA (full runs, cap and refusal paths,
+  provider failures, negative cases, the 0.4.1 regressions) for manual
+  regression runs — sites change, CI stays offline.
+
+### Changed
+
+- README documents the memory envelope of a cold run and how to upgrade a
+  hand-written 0.3.x config; TROUBLESHOOTING points at `--version` where
+  it asks which server is actually running.
+
 ## [0.4.0] — 2026-09-05
 
 One theme: **give Talkthrough a public video URL and keep everything else
