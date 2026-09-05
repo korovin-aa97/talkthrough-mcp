@@ -11,8 +11,68 @@ import argparse
 import json
 import logging
 import sys
+from typing import TextIO
 
 from .core.errors import TalkthroughError
+
+logger = logging.getLogger(__name__)
+
+# The HTTP client stack logs every request line at INFO with the full URL
+# (httpx: ``HTTP Request: GET https://host/path?signed-query "HTTP/1.1 200 OK"``,
+# one line per hop, redirect targets included). A signed CDN query must not
+# land in stderr, which MCP clients keep as log files.
+_HTTP_CLIENT_LOGGERS = ("httpx", "httpcore")
+_OWN_LOGGER = "talkthrough_mcp"
+
+
+class _RedactUrls(logging.Filter):
+    """Keep URL-shaped tokens out of the log records other libraries emit.
+
+    The privacy contract says a raw URL — its query and userinfo above all —
+    never reaches a log line. Talkthrough's own loggers already pass their text
+    through ``url_ingest.redact`` or use a safe label such as ``https://host/…``
+    that must survive, so only foreign records are rewritten; a traceback is
+    scrubbed whoever logs it (exception messages quote URLs freely).
+    """
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        from .core.url_ingest import redact
+
+        own = record.name == _OWN_LOGGER or record.name.startswith(_OWN_LOGGER + ".")
+        if not own:
+            message = record.getMessage()
+            redacted = redact(message)
+            if redacted != message:
+                record.msg = redacted
+                record.args = ()
+        if record.exc_info and record.exc_info[0] is not None:
+            record.exc_text = redact(logging.Formatter().formatException(record.exc_info))
+            record.exc_info = None
+        return True
+
+
+def _privacy_handler(stream: TextIO) -> logging.Handler:
+    """The stderr handler: the 0.4.0 line format plus the URL filter."""
+    handler = logging.StreamHandler(stream)
+    handler.setFormatter(logging.Formatter("%(asctime)s %(name)s %(levelname)s %(message)s"))
+    handler.addFilter(_RedactUrls())
+    return handler
+
+
+def _configure_logging() -> None:
+    """Root INFO to stderr, with the URL privacy contract applied to every record.
+
+    ``basicConfig`` is a no-op when something configured the root logger
+    first (an embedding, pytest); the filter is then attached to the handlers
+    that exist, and the HTTP client loggers are held at WARNING either way —
+    their INFO request lines are noise for a user and a leak for the contract.
+    """
+    logging.basicConfig(level=logging.INFO, handlers=[_privacy_handler(sys.stderr)])
+    for handler in logging.getLogger().handlers:
+        if not any(isinstance(existing, _RedactUrls) for existing in handler.filters):
+            handler.addFilter(_RedactUrls())
+    for name in _HTTP_CLIENT_LOGGERS:
+        logging.getLogger(name).setLevel(logging.WARNING)
 
 
 def _build_parser() -> argparse.ArgumentParser:
@@ -234,11 +294,7 @@ def _cmd_gc(args: argparse.Namespace) -> int:
 
 
 def main(argv: list[str] | None = None) -> None:
-    logging.basicConfig(
-        stream=sys.stderr,
-        level=logging.INFO,
-        format="%(asctime)s %(name)s %(levelname)s %(message)s",
-    )
+    _configure_logging()
     args = _build_parser().parse_args(argv)
     try:
         if args.command == "process":

@@ -4,6 +4,8 @@ contract — a canary token in the URL never reaches an error or a file."""
 
 from __future__ import annotations
 
+import io
+import logging
 import sys
 import types
 from collections.abc import Callable
@@ -181,6 +183,51 @@ def test_direct_download_follows_and_revalidates_redirects(
     assert downloaded.downloaded_bytes == len(MEDIA)
     assert resolved == ["cdn.example.com", "cdn.example.com", "media.example.net"]
     assert handler_requests == []  # the relay transport replaced the first handler
+
+
+def test_direct_download_keeps_the_url_out_of_every_log_line(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, pinned: None,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """httpx logs each request line at INFO with the full URL; 0.4.0 let the
+    query of the input URL and the signed redirect target through to stderr.
+    The CLI's logging setup holds those loggers at WARNING and, should anyone
+    raise them again, redacts what still reaches the handler."""
+    from talkthrough_mcp import cli
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/clip.mp4":
+            return httpx.Response(
+                302,
+                headers={
+                    "location": "https://cdn.example.net/signed/clip.mp4?Signature=CDN-SECRET-9999"
+                },
+            )
+        return _media(MEDIA, **{"content-type": "video/mp4"})
+
+    _serve(monkeypatch, handler)
+    source = classify_url(f"https://cdn.example.com/clip.mp4?{CANARY}")
+    httpx_logger = logging.getLogger("httpx")
+    previous_level = httpx_logger.level
+    stream = io.StringIO()
+    privacy = cli._privacy_handler(stream)
+    httpx_logger.addHandler(privacy)
+    try:
+        cli._configure_logging()
+        with caplog.at_level(logging.INFO):
+            download_direct(source, tmp_path, max_bytes=10_000, report=lambda *a: None)
+        assert "HTTP Request" not in caplog.text and stream.getvalue() == ""
+        assert CANARY not in caplog.text and "CDN-SECRET" not in caplog.text
+
+        httpx_logger.setLevel(logging.INFO)  # a chatty httpx still yields redacted lines only
+        download_direct(source, tmp_path, max_bytes=10_000, report=lambda *a: None)
+    finally:
+        httpx_logger.removeHandler(privacy)
+        httpx_logger.setLevel(previous_level)
+    text = stream.getvalue()
+    assert 'HTTP Request: GET <url> "HTTP/1.1 302 Found"' in text
+    assert 'HTTP Request: GET <url> "HTTP/1.1 200 OK"' in text
+    assert CANARY not in text and "CDN-SECRET" not in text and "203.0.113.10" not in text
 
 
 @pytest.mark.parametrize(
