@@ -99,6 +99,8 @@ select = ["E", "F", "W", "I", "UP", "B", "SIM", "RUF"]
 "src/talkthrough_mcp/core/manifest.py" = ["RUF001", "RUF002"]
 "src/talkthrough_mcp/core/stt.py" = ["RUF001", "RUF002"]
 "tests/unit/test_manifest.py" = ["RUF001", "RUF003"]
+# RU/DE/ES/FR name plates and UI chrome are the corpus under test
+"tests/unit/test_findings_032_names.py" = ["RUF001"]
 "tests/unit/test_stt_echo.py" = ["RUF001", "RUF002"]
 "tests/integration/fixture_facts.py" = ["RUF003"]
 "tests/integration/test_pipeline_integration.py" = ["RUF001", "RUF002"]

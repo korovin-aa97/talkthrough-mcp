@@ -197,6 +197,30 @@ def _validate_caps(info: MediaInfo, out_root: Path, *, reserved_bytes: int = 0) 
         raise ValidationError(detail + " — free up space and retry")
 
 
+def _identity_force_refusal(previous: Manifest) -> str:
+    """Name what a rebuild without diarization would discard, by kind and count."""
+    diarization = previous.transcript.diarization
+    active = len((diarization.speaker_names if diarization is not None else None) or {})
+    pending = len(
+        (diarization.speaker_names_pending_review if diarization is not None else None) or {}
+    )
+    parts: list[str] = []
+    if active:
+        parts.append(f"{active} saved")
+    if pending:
+        parts.append(f"{pending} pending-review")
+    if parts:
+        noun = "speaker identity" if active + pending == 1 else "speaker identities"
+        what = f"{' and '.join(parts)} {noun}"
+    else:  # evidence/context without names: only reachable via a hand-edited manifest
+        what = "saved speaker identity data"
+    return (
+        f"full reprocessing a job with {what} requires force=true, diarize=true so "
+        "they can be preserved for review; otherwise remove them explicitly first with "
+        'label_speakers(labels={"Sx": null}) — a null patch clears saved and '
+        "pending-review entries alike"
+    )
+
 
 def _tool_versions() -> dict[str, str]:
     import importlib.metadata
@@ -793,11 +817,7 @@ def process_media(
             and jobs.has_identity_state(previous)
             and not diarize_request.run
         ):
-            raise ValidationError(
-                "full reprocessing a job with saved speaker identities requires "
-                "force=true, diarize=true so the old identities can be preserved for "
-                "review; otherwise remove them explicitly with label_speakers first"
-            )
+            raise ValidationError(_identity_force_refusal(previous))
 
         report("probing media", 0.05)
         info = probe_media(media)
@@ -860,6 +880,7 @@ def process_media(
 
 
 SUMMARY_ROSTER_CAP = 12
+PENDING_HIDDEN_LABELS_CAP = 100
 SUBSTANTIAL_TALK_MS = 30_000
 NAME_CANDIDATE_WINDOW_MS = 30_000
 NAME_CANDIDATE_FRAME_LIMIT = 3
@@ -890,35 +911,105 @@ _NAME_PARTICLES = frozenset(
         "zu",
     }
 )
+# Vocabulary of on-screen chrome: meeting-app controls and states, recorder
+# and IDE/OS/browser menus, roles, and their Russian (plus a few DE/ES/FR)
+# equivalents. A phrase made entirely of these words, or mostly of them, is
+# UI text, not a name plate. Deliberately absent: anything that is also a
+# common given name or surname in any script (Grace, Mark, Will, Hope, Post,
+# Vera, Roman and their Cyrillic spellings) — the filter must lose a rare
+# "Hand" before it loses people.
 _UI_CHROME_WORDS = frozenset(
     {
-        "build",
-        "chat",
-        "code",
-        "dashboard",
-        "edit",
-        "error",
-        "failed",
-        "file",
-        "help",
-        "leave",
-        "login",
-        "mute",
-        "navigate",
-        "page",
-        "participants",
-        "people",
-        "recording",
-        "refactor",
-        "run",
-        "scene",
-        "settings",
-        "share",
-        "tools",
-        "unmute",
-        "vcs",
-        "view",
-        "window",
+        # meeting apps: controls, panels, states
+        "screen", "sharing", "share", "shared", "breakout", "room", "rooms", "lobby",
+        "raise", "hand", "hands", "lower", "mute", "muted", "unmute", "unmuted", "all",
+        "participants", "participant", "panel", "gallery", "view", "views", "speaker",
+        "speakers", "live", "captions", "caption", "subtitles", "transcript", "notes",
+        "note", "recording", "record", "recorded", "stopped", "stop", "start", "started",
+        "pause", "paused", "resume", "leave", "leaving", "end", "ended", "meeting",
+        "meetings", "call", "calls", "join", "joined", "joining", "invite", "invited",
+        "chat", "reactions", "reaction", "apps", "whiteboard", "host", "hosts", "cohost",
+        "waiting", "everyone", "unknown", "caller", "guest", "guests", "presenting",
+        "presenter", "presentation", "present", "camera", "video", "audio",
+        "microphone", "mic", "sound", "volume", "layout", "grid", "spotlight", "pin",
+        "pinned", "unpin", "hide", "hidden", "show", "more", "options", "option", "menu",
+        "settings", "setting", "preferences", "help", "about", "feedback", "support",
+        "admin", "owner", "member", "members", "viewer", "viewers", "attendee",
+        "attendees", "organizer", "moderator", "people", "you", "me", "your", "my",
+        "this", "is", "are", "in", "progress", "now", "today", "tomorrow", "yesterday",
+        "minutes", "seconds", "hours", "ago", "connected", "connecting",
+        "disconnected", "reconnecting", "offline", "online", "away", "busy",
+        "available", "status", "loading", "buffering", "processing", "uploading",
+        "downloading", "saving", "syncing", "updating", "installing", "error",
+        "errors", "warning", "failed", "failure", "success", "successful", "done",
+        "ok", "okay", "cancel", "close", "closed", "open", "opened", "new", "save",
+        "saved", "delete", "deleted", "remove", "removed", "copy", "copied", "paste",
+        "cut", "undo", "redo", "select", "selected", "selection",
+        # IDE / OS / browser chrome
+        "tab", "tabs", "window", "windows", "file", "files", "edit", "tools",
+        "terminal", "console", "output", "debug", "run", "running", "build",
+        "building", "deploy", "commit", "push", "pull", "merge", "branch", "code",
+        "refactor", "navigate", "vcs", "search", "find", "replace", "filter", "sort",
+        "zoom", "fit", "full", "fullscreen", "exit", "quit", "restart", "reload",
+        "refresh", "retry", "skip", "continue", "next", "previous", "back", "forward",
+        "submit", "send", "sent", "reply", "message", "messages", "inbox", "draft",
+        "drafts", "trash", "spam", "archive", "folder", "folders", "documents",
+        "downloads", "desktop", "browser", "dashboard", "page", "pages", "login",
+        "logout", "sign", "signin", "signout", "password", "username", "email",
+        "phone", "welcome", "hello", "thanks", "please", "wait", "click", "here",
+        "button", "toolbar", "sidebar", "statusbar", "home", "profile", "account",
+        "accounts", "billing", "subscription", "notifications", "notification",
+        "privacy", "security", "general", "advanced", "terms", "policy", "scene",
+        "rec", "co", "out", "self", "turn", "ask", "admit", "id", "meet", "google",
+        "microsoft", "teams", "webex", "skype", "slack", "discord", "obs", "loom",
+        "everywhere", "recent", "untitled", "bookmarks", "history", "incognito",
+        "forgot", "remember", "something", "went", "wrong", "try", "again", "apply",
+        "finish", "good", "morning", "overview", "analytics", "actual", "vs",
+        "marketing", "executive", "software", "tests", "passed", "succeeded", "git",
+        "request", "log", "there",
+        # English function words: never part of a name, always part of UI copy
+        "on", "off", "to", "for", "with", "as", "and", "or", "the", "a", "an", "of",
+        "by", "from", "at",
+        # business dashboards and roles
+        "report", "reports", "sales", "revenue", "profit", "loss", "budget", "plan",
+        "project", "projects", "task", "tasks", "issue", "issues", "bug", "bugs",
+        "feature", "release", "version", "update", "upgrade", "download", "upload",
+        "import", "export", "print", "preview", "total", "count", "list", "table",
+        "chart", "product", "manager", "engineer", "director", "head", "chief",
+        "officer", "developer", "designer", "analyst", "consultant", "intern",
+        "ceo", "cto", "cfo", "vp", "senior", "junior", "principal", "staff", "team",
+        "department",
+        # Russian UI vocabulary
+        "экран", "демонстрация", "показать", "скрыть", "участники", "участник",
+        "участников", "чат", "поделиться", "выйти", "покинуть", "выход", "микрофон",
+        "камера", "звук", "видео", "настройки", "настройка", "ещё", "еще", "реакции",
+        "поднять", "руку", "рука", "опустить", "запись", "записи", "записать",
+        "остановить", "остановлено", "начать", "старт", "стоп", "пауза", "продолжить",
+        "ожидание", "ожидания", "зал", "зала", "залы", "комната", "комнаты",
+        "сессионные", "загрузка", "загружается", "ошибка", "ошибки", "готово",
+        "отмена", "отменить", "сохранить", "сохранено", "открыть", "закрыть",
+        "удалить", "копировать", "вставить", "вырезать", "повторить", "файл", "файлы",
+        "правка", "вид", "справка", "окно", "окна", "инструменты", "поиск", "найти",
+        "отчет", "отчёт", "отчеты", "отчёты", "продажи", "выручка", "прибыль", "итого",
+        "всего", "сегодня", "вчера", "завтра", "войти", "пароль", "добро",
+        "пожаловать", "организатор", "ведущий", "гость", "гости", "все", "вы", "я",
+        "ты", "звонок", "встреча", "встречи", "конференция", "присоединиться",
+        "пригласить", "приглашение", "завершить", "завершено", "идет", "идёт",
+        "подключение", "подключено", "отключено", "соединение", "сеть", "статус",
+        "меню", "панель", "галерея", "докладчик", "спикер", "субтитры", "заметки",
+        "доска", "приложения", "неизвестный", "абонент", "включить", "выключить",
+        "громкость", "отправить", "ответить", "сообщение", "сообщения", "входящие",
+        "черновик", "корзина", "папка", "документы", "загрузки", "рабочий", "стол",
+        "браузер", "страница", "главная", "профиль", "аккаунт", "уведомления",
+        "помощь", "поддержка", "версия", "обновить", "обновление", "скачать",
+        "загрузить", "печать", "просмотр", "дальше", "далее", "назад", "вперед",
+        "вперёд", "отправка", "готов", "ок", "да", "нет", "экрана", "экраном",
+        "встречу", "камеру", "по", "продажам",
+        # a few DE / ES / FR meeting-app terms
+        "teilnehmer", "freigeben", "bildschirm", "stumm", "verlassen", "aufnahme",
+        "beenden", "einstellungen", "compartir", "pantalla", "silenciar", "salir",
+        "grabación", "participantes", "configuración", "partager", "écran",
+        "quitter", "enregistrement", "paramètres",
     }
 )
 _URL_OR_PATH = re.compile(
@@ -995,6 +1086,11 @@ def pending_review_payload(diarization: Diarization) -> dict[str, Any]:
     )
     served_labels = ordered_labels[:SUMMARY_ROSTER_CAP]
     hidden = len(ordered_labels) - len(served_labels)
+    # The labels beyond the cap stay removable (validation reads the full
+    # stored map), so an agent must be able to see WHICH labels are hidden
+    # without guessing (0.3.2 external finding F5). Labels only — names and
+    # evidence stay capped.
+    hidden_labels = ordered_labels[len(served_labels) :][:PENDING_HIDDEN_LABELS_CAP]
     evidence = diarization.speaker_name_evidence_pending_review or {}
     context = diarization.speaker_names_pending_review_context or {}
     stale_labels = [label for label in served_labels if label not in current_labels]
@@ -1043,7 +1139,14 @@ def pending_review_payload(diarization: Diarization) -> dict[str, Any]:
             else {}
         ),
         "speaker_names_pending_review_total": len(ordered_labels),
-        **({"speaker_names_pending_review_truncated": hidden} if hidden else {}),
+        **(
+            {
+                "speaker_names_pending_review_truncated": hidden,
+                "speaker_names_pending_review_hidden_labels": hidden_labels,
+            }
+            if hidden
+            else {}
+        ),
         "speaker_names_pending_review_note": note,
     }
 
@@ -1218,7 +1321,11 @@ def _name_candidate_rejection_reason(line: str) -> str | None:
         return "ui_phrase"
     key_words = key.split()
     chrome_count = sum(word in _UI_CHROME_WORDS for word in key_words)
-    if chrome_count == len(key_words) or chrome_count >= 2:
+    # Every word is chrome ("Raise Hand", "Recording Stopped"), or chrome words
+    # outnumber the rest ("You are presenting"). A name plate that merely
+    # carries a role ("Vera Smith Product Manager") keeps its majority of
+    # non-chrome words and survives as a hint.
+    if chrome_count == len(key_words) or (chrome_count >= 2 and 2 * chrome_count > len(key_words)):
         return "ui_chrome"
 
     cased_words = [
