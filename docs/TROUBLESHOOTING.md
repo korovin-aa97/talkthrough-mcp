@@ -178,7 +178,9 @@ the OLD version until the session/client restarts. Restart the session (or the
 client) after updating; headless and CI runs pick up the new version on
 their next launch because they spawn a fresh server every time. To verify
 what is actually running, check `tool_versions` in any `process_media`
-summary or manifest. Note the split (0.2.6+): `tool_versions` names what
+summary or manifest, or run `talkthrough-mcp --version` in the environment
+the client uses (0.4.1+; the server also logs that line to stderr at every
+start, so the client's MCP log shows it). Note the split (0.2.6+): `tool_versions` names what
 *transcribed* the job and is deliberately never re-stamped by a diarization
 amend; `diarization.produced_by` names the version that wrote the *current
 speaker labels* — after an amend the two can legitimately differ.
@@ -370,6 +372,15 @@ server command (JSON configs: `"args": ["--python", ">=3.11,<3.14",
 "talkthrough-mcp[diarization,url]"]`), restart the client, retry. The
 generated configs and the Claude plugin already carry both extras. Direct
 `https://` links to media files work without the extra.
+
+A config written by hand before 0.4.0 (the minimal launcher without
+`[url]`, or a pin without it) keeps launching the minimal server after an
+upgrade: the new
+`process_url` tool is listed, direct links work, YouTube and video pages
+answer with this error. `talkthrough-mcp --version` (0.4.1+) names the
+extras an environment has — `url extra: not installed (direct https://
+media links only)` is this case — and the server logs the same line at
+every start.
 
 ## `process_url` on a video page (Instagram, TikTok, Wikimedia Commons, …)
 
