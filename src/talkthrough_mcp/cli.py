@@ -1,4 +1,4 @@
-"""CLI entry point: ``serve`` (default) | ``process <file>`` | ``gc``.
+"""CLI entry point: ``serve`` (default) | ``process <file>`` | ``process-url <url>`` | ``gc``.
 
 ``process`` is the debug/batch path: it runs the same pipeline the MCP tool
 uses and prints the summary, so long recordings can be pre-processed outside
@@ -44,6 +44,42 @@ def _build_parser() -> argparse.ArgumentParser:
         help="label who said what (S1/S2/…); needs the [diarization] extra",
     )
     process.add_argument(
+        "--num-speakers",
+        type=int,
+        default=None,
+        metavar="N",
+        help="exact speaker count when known — the single best quality lever",
+    )
+
+    process_url = sub.add_parser(
+        "process-url",
+        help="download one public video/audio URL once, run the pipeline, print a summary",
+    )
+    process_url.add_argument("url", help="public https:// media URL or one YouTube video URL")
+    process_url.add_argument("--json", action="store_true", help="print the summary as JSON")
+    process_url.add_argument(
+        "--refresh",
+        action="store_true",
+        help="download again even if this URL was ingested before",
+    )
+    process_url.add_argument("--recorded-at", default=None, help="ISO 8601 wall-clock override")
+    process_url.add_argument(
+        "--language", default=None, help="transcription language (default auto)"
+    )
+    process_url.add_argument(
+        "--vocabulary", default=None, help="domain terms to bias transcription toward"
+    )
+    process_url.add_argument(
+        "--model",
+        default=None,
+        help="whisper model for this run (e.g. large-v3-turbo); default from env/small",
+    )
+    process_url.add_argument(
+        "--diarize",
+        action="store_true",
+        help="label who said what (S1/S2/…); needs the [diarization] extra",
+    )
+    process_url.add_argument(
         "--num-speakers",
         type=int,
         default=None,
@@ -136,6 +172,40 @@ def _cmd_process(args: argparse.Namespace) -> int:
     return 0
 
 
+def _cmd_process_url(args: argparse.Namespace) -> int:
+    from .core import pipeline, url_ingest
+
+    def on_progress(stage: str, fraction: float) -> None:
+        # progress goes to stderr; stdout stays machine-readable for --json
+        print(f"[{fraction * 100:5.1f}%] {stage}", file=sys.stderr)
+
+    ingested = url_ingest.process_url(
+        args.url,
+        refresh=args.refresh,
+        recorded_at=args.recorded_at,
+        vocabulary=args.vocabulary,
+        language=args.language,
+        model=args.model,
+        diarize_speakers=True if args.diarize else None,
+        num_speakers=args.num_speakers,
+        progress=on_progress,
+    )
+    summary = pipeline.summarize(ingested.result)
+    origin_block = dict(summary.get("origin") or {})
+    origin_block["reused_url_mapping"] = ingested.reused_url_mapping
+    origin_block["refreshed"] = ingested.refreshed
+    summary["origin"] = origin_block
+    if args.json:
+        print(json.dumps(summary, ensure_ascii=False, indent=2))
+    else:
+        _print_human_summary(summary)
+        origin = summary["origin"]
+        label = origin.get("provider_id") or origin.get("host") or origin.get("provider")
+        reused = "  (reused stored job, no network)" if ingested.reused_url_mapping else ""
+        print(f"origin     : {origin['kind']} {label}{reused}")
+    return 0
+
+
 def _cmd_gc(args: argparse.Namespace) -> int:
     from .core import jobs
 
@@ -167,6 +237,8 @@ def main(argv: list[str] | None = None) -> None:
     try:
         if args.command == "process":
             code = _cmd_process(args)
+        elif args.command == "process-url":
+            code = _cmd_process_url(args)
         elif args.command == "gc":
             code = _cmd_gc(args)
         else:  # "serve" or no subcommand

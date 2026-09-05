@@ -31,7 +31,7 @@ Returns a compact summary (job_id, media info, wall_clock, transcript preview, s
 roster when diarized) — full data stays on disk and is served lazily by the other tools. \
 Idempotent by content hash: re-calling on an already-processed file returns instantly. For MULTI-PERSON recordings (meetings, interviews, calls) diarize=true is part of a proper analysis — pass it even when the user only asks for a summary. num_speakers is a target the clusterer may not reach, not a constraint — the payload says when a re-run changed nothing (labels_changed). If an amend changes the labels, verified names become pending-review evidence rather than active identities, with old-roster anchors for re-checking. Current pending labels can be confirmed/replaced/removed; stale labels can only be removed with an explicit null patch. Full force reprocessing of a job with saved or pending identities requires diarize=true and preserves every old identity as pending review against the rebuilt roster; without diarization it refuses before changing the stored job.
 When NOT to use: to re-fetch data you already processed (use the retrieval tools), or for \
-URLs — local file paths only.
+URLs — local file paths only; a public video/audio URL goes to process_url.
 Examples:
 - process_media(path="/Users/sam/Desktop/bug-repro.mov") — narrated screencast, defaults are right
 - meetings: model="large-v3-turbo" + vocabulary=<attendees, terms> + num_speakers=N — turbo's extra cost is trivial
@@ -48,6 +48,36 @@ Examples:
 - after success, do NOT dump everything — continue with get_transcript / get_moment / search on the job_id
 - anti-example: frames from an already-processed job → get_frames(job_id=...), never process_media again
 - named job + force=true → include diarize=true; old identities return as pending review, never silently vanish
+""",
+    "process_url": """\
+Download ONE public video/audio URL once (this is the only tool that uses the network), then run \
+the same LOCAL pipeline as process_media: transcript, keyframes, OCR, wall-clock, optional \
+diarization. Supported: direct https:// links to a media file (mp4/mov/webm/mkv/m4a/mp3/wav/ogg/\
+flac) and one public YouTube video (watch, youtu.be, shorts, a completed live). Not supported: \
+playlists, channels, active live streams, private/members-only/age-restricted/DRM videos, \
+cookies/logins, other sites. The downloaded source is kept inside the job, so extract_frame \
+works later without network; the raw URL is never stored (only a hash, the provider id/host and \
+a bounded title). A repeat call on the same URL serves the stored job without touching the \
+network unless refresh=true. Job ids stay content hashes: the same video from two URLs is one job. \
+YouTube needs the optional [url] extra. The provider's upload date is NOT the recording start: \
+wall_clock stays null unless recorded_at is passed.
+When NOT to use: for local files (process_media), or to re-fetch data you already processed \
+(use the retrieval tools).
+Examples:
+- process_url(url="https://youtu.be/nHfGfEiVdE8") — one public YouTube video, defaults are right
+- process_url(url="https://www.youtube.com/watch?v=ID&list=PL...") — the playlist part is ignored: ONE video
+- process_url(url="https://cdn.example.com/recordings/standup.mp4") — direct https link to a media file
+- meeting from a link: process_url(url=..., diarize=true, num_speakers=3, vocabulary="Vera, Tom, OKR")
+- non-English narration: process_url(url=..., model="large-v3-turbo", language="ru")
+- known recording start: process_url(url=..., recorded_at="2026-09-05T14:00:00+02:00") — enables t_wall
+- second call, same URL → origin.reused_url_mapping=true, no network, same job_id
+- the video changed on the provider → process_url(url=..., refresh=true): new download, maybe a new job_id
+- error mentions [url] → run uvx --python ">=3.11,<3.14" "talkthrough-mcp[diarization,url]" and restart
+- playlist / channel / live / private URL → clear error; pass a single public video URL instead
+- origin.published_at is the provider's upload time, not when the recording was made — never use it as t_wall
+- after success continue with get_transcript / search / get_moment on the job_id — never re-download
+- anti-example: a file on disk → process_media(path=...); process_url is only for https URLs
+- anti-example: "just download it" → still process_url; there is no download-only mode, the source stays in the job
 """,
     "get_transcript": """\
 Retrieve the transcript of a processed job, lazily and paginated. Formats: "segments" \
@@ -179,7 +209,7 @@ Re-extract ONE frame at an exact timestamp from the ORIGINAL source video at nat
 resolution, with an optional crop {x, y, w, h} in source pixels. Use when the stored \
 keyframes miss the instant (they capture scene changes + a 1 fps floor) or when you need \
 full-resolution detail. Slower than get_frames — it decodes the source file, which must \
-still exist at its recorded path.
+still exist at its recorded path (URL jobs keep their downloaded source inside the job, no network).
 When NOT to use: normal browsing — get_frames serves stored keyframes instantly without \
 touching the source.
 Examples:
@@ -210,7 +240,8 @@ Examples:
 - after CLI batch pre-processing (`talkthrough-mcp process big.mov`) the job shows up here — query it
 - two jobs with the same filename → the newer created one is usually the re-recording
 - diarized jobs show "speakers": N — "the 4-person meeting from Tuesday" is findable at a glance
-- empty list → nothing processed on this machine yet; ask the user for a file path
+- URL jobs carry "origin" (provider, provider_id, title) — "the YouTube video from yesterday" is findable
+- empty list → nothing processed on this machine yet; ask the user for a file path or a public URL
 - job disappeared → likely `talkthrough-mcp gc` cleaned it; re-run process_media on the file (same id)
 - anti-example: checking whether a NEW file is processed → just call process_media, it is idempotent+instant
 """,

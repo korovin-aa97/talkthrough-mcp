@@ -16,7 +16,7 @@ turns narrated screen recordings / audio files into queryable structured data
 ## Server command (stdio)
 
 ```
-uvx --python ">=3.11,<3.14" "talkthrough-mcp[diarization]"
+uvx --python ">=3.11,<3.14" "talkthrough-mcp[diarization,url]"
 ```
 
 This is the batteries-included form (adds local who-said-what speaker
@@ -24,7 +24,7 @@ labeling; ~20 MB extra wheels, models download only on first use). The
 minimal server without the diarization engine is
 `uvx --python ">=3.11,<3.14" talkthrough-mcp`.
 (Latest unreleased main instead: `uvx --python ">=3.11,<3.14" --from
-"talkthrough-mcp[diarization] @ git+https://github.com/korovin-aa97/talkthrough-mcp"
+"talkthrough-mcp[diarization,url] @ git+https://github.com/korovin-aa97/talkthrough-mcp"
 talkthrough-mcp`.)
 
 ## Client configuration
@@ -32,7 +32,7 @@ talkthrough-mcp`.)
 ### Claude Code
 
 ```bash
-claude mcp add -s user talkthrough -- uvx --python ">=3.11,<3.14" "talkthrough-mcp[diarization]"
+claude mcp add -s user talkthrough -- uvx --python ">=3.11,<3.14" "talkthrough-mcp[diarization,url]"
 ```
 
 ### Claude Desktop / Cursor / Cline / any JSON-config client
@@ -45,7 +45,7 @@ Add to the client's MCP servers config (`claude_desktop_config.json`,
   "mcpServers": {
     "talkthrough": {
       "command": "uvx",
-      "args": ["--python", ">=3.11,<3.14", "talkthrough-mcp[diarization]"]
+      "args": ["--python", ">=3.11,<3.14", "talkthrough-mcp[diarization,url]"]
     }
   }
 }
@@ -55,11 +55,13 @@ Optional env vars (add an `"env"` object next to `"args"` if the user needs
 them): `TALKTHROUGH_WHISPER_MODEL` (default `small`; use `large-v3-turbo`
 for non-English narration — the `process_media` tool also accepts a per-call
 `model` parameter), `TALKTHROUGH_OCR` (`off` to disable),
-`TALKTHROUGH_HOME` (job store root, default `~/.talkthrough`).
+`TALKTHROUGH_HOME` (job store root, default `~/.talkthrough`),
+`TALKTHROUGH_MAX_DOWNLOAD_BYTES` (cap for one `process_url` download,
+default 2 GiB).
 
 ## Speaker diarization (who said what) — already included above
 
-The configs on this page carry the `[diarization]` extra, so
+The configs on this page carry the `[diarization,url]` extras, so
 `process_media(path=..., diarize=true, num_speakers=<count>)` labels
 segments `S1`/`S2`/… out of the box. Pass `num_speakers` whenever the
 participant count is known — it is the main accuracy lever. Calling
@@ -71,9 +73,9 @@ will answer with the one-line reinstall hint — relay it verbatim.
 
 ## Verify the installation
 
-1. The client should list 8 tools: `process_media`, `get_transcript`,
-   `get_frames`, `get_moment`, `search`, `label_speakers`, `extract_frame`,
-   `list_jobs`, and 6 prompts (`bug`, `triage-recording`, `spec-from-workshop`,
+1. The client should list 9 tools: `process_media`, `process_url`,
+   `get_transcript`, `get_frames`, `get_moment`, `search`, `label_speakers`,
+   `extract_frame`, `list_jobs`, and 6 prompts (`bug`, `triage-recording`, `spec-from-workshop`,
    `backlog-from-demo`, `meeting-actions`, `correlate-with-logs`).
 2. Smoke test: call `list_jobs()` — an empty result is a healthy first run.
 3. Full test (optional): `process_media(path="<any short local .mp4/.mov/.m4a>")`

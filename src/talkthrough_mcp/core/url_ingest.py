@@ -695,3 +695,159 @@ def attach_managed_source(job_id: str, managed_source: str, origin: MediaOrigin)
         )
         save_manifest(manifest, jobs.job_dir(job_id))
 
+
+# --- orchestration ----------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class UrlProcessResult:
+    """A processed URL: the pipeline result plus what the network step did."""
+
+    result: Any  # pipeline.ProcessResult (kept untyped to avoid an import cycle)
+    source: UrlSource
+    origin: MediaOrigin | None
+    reused_url_mapping: bool
+    refreshed: bool
+    downloaded_bytes: int | None
+
+
+def process_url(
+    url: str,
+    *,
+    refresh: bool = False,
+    recorded_at: str | None = None,
+    vocabulary: str | None = None,
+    language: str | None = None,
+    model: str | None = None,
+    diarize_speakers: bool | None = None,
+    num_speakers: int | None = None,
+    progress: Any = None,
+) -> UrlProcessResult:
+    """Download one public URL once, then run the local pipeline on the file.
+
+    The download owns the first 15% of the progress range; the pipeline's own
+    stages are renormalized onto 15-100%. ``refresh=False`` serves a stored
+    job for a known URL without any network; ``refresh=True`` downloads
+    again and may land on a different job when the bytes changed.
+    """
+    from . import pipeline, url_download
+    from .probe import probe_media
+
+    def report(stage: str, fraction: float) -> None:
+        if progress is not None:
+            progress(stage, max(0.0, min(1.0, fraction)))
+
+    def pipeline_report(stage: str, fraction: float) -> None:
+        report(stage, 0.15 + 0.85 * fraction)
+
+    report("validating URL", 0.01)
+    source = classify_url(url)
+    analysis: dict[str, Any] = {
+        "recorded_at": recorded_at,
+        "vocabulary": vocabulary,
+        "language": language,
+        "model": model,
+        "diarize_speakers": diarize_speakers,
+        "num_speakers": num_speakers,
+    }
+    with url_lock(source.mapping_key):
+        if not refresh:
+            mapping = load_mapping(source.mapping_key)
+            if mapping is not None:
+                stored, _unreadable = jobs.load_previous_job(mapping.job_id)
+                if stored is not None:
+                    path = source_path(
+                        stored.media.path, mapping.job_id, stored.media.managed_source
+                    )
+                    if path.is_file():
+                        logger.info(
+                            "%s already ingested as job %s — no network",
+                            source.safe_label(),
+                            mapping.job_id,
+                        )
+                        result = pipeline.process_media(
+                            str(path), **analysis, progress=pipeline_report
+                        )
+                        return UrlProcessResult(
+                            result=result,
+                            source=source,
+                            origin=result.manifest.media.origin,
+                            reused_url_mapping=True,
+                            refreshed=False,
+                            downloaded_bytes=None,
+                        )
+                    logger.warning(
+                        "managed source of job %s is gone — downloading %s again",
+                        mapping.job_id,
+                        source.safe_label(),
+                    )
+        report("resolving provider", 0.02)
+        max_bytes = max_download_bytes()
+        max_seconds = pipeline.max_seconds_cap()
+        with download_workspace() as staging:
+            if source.kind == KIND_YOUTUBE:
+                downloaded = url_download.download_youtube(
+                    source, staging, max_bytes=max_bytes, max_seconds=max_seconds, report=report
+                )
+            else:
+                downloaded = url_download.download_direct(
+                    source, staging, max_bytes=max_bytes, report=report
+                )
+            report("verifying media", 0.14)
+            info = probe_media(downloaded.path)
+            if info.duration_s <= 0:
+                raise UnsupportedUrlError(
+                    "the downloaded file is not playable media (no duration) — pass a direct "
+                    "link to a media file or a YouTube video URL"
+                )
+            if info.duration_s > max_seconds:
+                raise ValidationError(
+                    f"duration {info.duration_s:.0f}s exceeds the {max_seconds}s cap "
+                    "(override with TALKTHROUGH_MAX_SECONDS)"
+                )
+            job_id = jobs.compute_job_id(downloaded.path)
+            name = managed_source_name(source, downloaded.extension)
+            relative = managed_source_relative(name)
+            origin = build_origin(
+                source,
+                downloader=downloaded.downloader,
+                downloaded_bytes=downloaded.downloaded_bytes,
+                title=downloaded.title,
+                published_at=downloaded.published_at,
+            )
+            managed = install_managed_source(job_id, downloaded.path, name)
+        result = pipeline.process_media(
+            str(managed),
+            **analysis,
+            progress=pipeline_report,
+            origin=origin,
+            managed_source=relative,
+        )
+        if result.reused and (
+            result.manifest.media.managed_source != relative
+            or result.manifest.media.origin is None
+        ):
+            # Same bytes as a job processed earlier (a local file, or another
+            # URL): keep that job, but remember the managed copy and origin.
+            attach_managed_source(job_id, relative, origin)
+            from dataclasses import replace
+
+            result = replace(result, manifest=jobs.load_job(job_id))
+        save_mapping(
+            source.mapping_key,
+            UrlMapping(
+                job_id=job_id,
+                provider=source.provider,
+                created_at=datetime.now(UTC).isoformat(timespec="seconds"),
+                provider_id=source.provider_id,
+                validators=downloaded.validators,
+            ),
+        )
+        return UrlProcessResult(
+            result=result,
+            source=source,
+            origin=result.manifest.media.origin or origin,
+            reused_url_mapping=False,
+            refreshed=refresh,
+            downloaded_bytes=downloaded.downloaded_bytes,
+        )

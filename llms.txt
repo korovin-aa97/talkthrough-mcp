@@ -20,5 +20,5 @@
   wiring, language/OCR/wall-clock fixes, data removal
 - [Design](docs/DESIGN.md): pipeline, manifest schema, token-budget rules
 - [Findings contract](examples/output-contract.schema.json): triage output JSON Schema
-- [Workflow prompts](examples/prompts/): the 5 server prompts as plain files
+- [Workflow prompts](examples/prompts/): the 6 server prompts as plain files
 - [Contributing](CONTRIBUTING.md): dev setup and gates

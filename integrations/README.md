@@ -3,7 +3,7 @@
 The talkthrough MCP server is engine-agnostic (stdio MCP). Server command:
 
 ```
-uvx --python ">=3.11,<3.14" "talkthrough-mcp[diarization]"
+uvx --python ">=3.11,<3.14" "talkthrough-mcp[diarization,url]"
 ```
 
 One folder per engine with the exact config to paste:

@@ -1,4 +1,4 @@
-"""MCP server: 8 local tools + 6 workflow prompts, stdio transport.
+"""MCP server: 8 local tools + 1 network tool (process_url) + 6 workflow prompts, stdio.
 
 Design rule: ``process_media`` returns a compact summary, never the full
 payload; everything else is lazy and capped. Image responses are MCP image
@@ -14,7 +14,6 @@ import json
 from collections.abc import Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass
-from pathlib import Path
 from typing import Any, Literal
 
 from mcp.server.mcpserver import Context, Image, MCPServer
@@ -22,7 +21,7 @@ from mcp.server.mcpserver.exceptions import ToolError
 from mcp.types import ToolAnnotations
 
 from . import __version__, guidance
-from .core import jobs, pipeline
+from .core import jobs, pipeline, url_ingest
 from .core.diarize import Diarization, speakers_in_range
 from .core.errors import AudioOnlyJobError, TalkthroughError, ValidationError
 from .core.frames import Frame, extract_exact_frame
@@ -64,13 +63,24 @@ LOCAL_WRITE_TOOL = ToolAnnotations(
     idempotent_hint=True,
     open_world_hint=False,
 )
+# The one tool that reaches beyond the machine: it downloads the given public
+# source once. Not idempotent against the world (a URL may start serving
+# different bytes); local re-use is governed by refresh=false.
+NETWORK_WRITE_TOOL = ToolAnnotations(
+    read_only_hint=False,
+    destructive_hint=False,
+    idempotent_hint=False,
+    open_world_hint=True,
+)
 
 mcp = MCPServer(
     "talkthrough",
     version=__version__,
     instructions=(
         "Local-first recording analysis. Workflow: process_media(path) once per file "
-        "(idempotent, content-addressed), then query lazily by job_id — get_transcript "
+        "(idempotent, content-addressed) — or process_url(url) for one public video/audio "
+        "URL (downloads the source once, then everything stays local) — then query lazily "
+        "by job_id — get_transcript "
         "(paginated), search (transcript + on-screen OCR text), get_moment (transcript "
         "slice + frames + OCR for one remark), get_frames (keyframe images), "
         "label_speakers (persist verified S<n>-to-name mappings), extract_frame "
@@ -168,19 +178,10 @@ class _ProgressState:
     fraction: float = 0.0
 
 
-@mcp.tool(description=guidance.TOOL_DESCRIPTIONS["process_media"], annotations=LOCAL_WRITE_TOOL)
-async def process_media(
-    path: str,
-    ctx: Context,
-    recorded_at: str | None = None,
-    vocabulary: str | None = None,
-    language: str | None = None,
-    model: str | None = None,
-    diarize: bool | None = None,
-    num_speakers: int | None = None,
-    force: bool = False,
-) -> dict[str, Any]:
-    initial_message = f"processing {path} (local pipeline: ffprobe → whisper → frames → OCR)"
+async def _run_with_progress(
+    ctx: Context, initial_message: str, func: Any, /, *args: Any, **kwargs: Any
+) -> Any:
+    """Run a long pipeline call in a thread, relaying its stages as MCP progress."""
     state = _ProgressState(stage=initial_message)
     done = asyncio.Event()
 
@@ -204,23 +205,87 @@ async def process_media(
     ticker_task = asyncio.create_task(ticker())
     try:
         with _tool_errors():
-            result = await asyncio.to_thread(
-                pipeline.process_media,
-                path,
-                recorded_at=recorded_at,
-                vocabulary=vocabulary,
-                language=language,
-                model=model,
-                diarize_speakers=diarize,
-                num_speakers=num_speakers,
-                force=force,
-                progress=on_progress,
-            )
+            result = await asyncio.to_thread(func, *args, progress=on_progress, **kwargs)
     finally:
         done.set()
         await ticker_task
     await ctx.report_progress(progress=1.0, total=1.0, message="done")
+    return result
+
+
+@mcp.tool(description=guidance.TOOL_DESCRIPTIONS["process_media"], annotations=LOCAL_WRITE_TOOL)
+async def process_media(
+    path: str,
+    ctx: Context,
+    recorded_at: str | None = None,
+    vocabulary: str | None = None,
+    language: str | None = None,
+    model: str | None = None,
+    diarize: bool | None = None,
+    num_speakers: int | None = None,
+    force: bool = False,
+) -> dict[str, Any]:
+    result = await _run_with_progress(
+        ctx,
+        f"processing {path} (local pipeline: ffprobe → whisper → frames → OCR)",
+        pipeline.process_media,
+        path,
+        recorded_at=recorded_at,
+        vocabulary=vocabulary,
+        language=language,
+        model=model,
+        diarize_speakers=diarize,
+        num_speakers=num_speakers,
+        force=force,
+    )
     return pipeline.summarize(result)
+
+
+@mcp.tool(description=guidance.TOOL_DESCRIPTIONS["process_url"], annotations=NETWORK_WRITE_TOOL)
+async def process_url(
+    url: str,
+    ctx: Context,
+    recorded_at: str | None = None,
+    vocabulary: str | None = None,
+    language: str | None = None,
+    model: str | None = None,
+    diarize: bool | None = None,
+    num_speakers: int | None = None,
+    refresh: bool = False,
+) -> dict[str, Any]:
+    # The initial message names the network step honestly and never echoes
+    # the URL (query strings may carry signed tokens).
+    ingested = await _run_with_progress(
+        ctx,
+        "ingesting a URL: downloading the source once (network), then the local pipeline",
+        url_ingest.process_url,
+        url,
+        refresh=refresh,
+        recorded_at=recorded_at,
+        vocabulary=vocabulary,
+        language=language,
+        model=model,
+        diarize_speakers=diarize,
+        num_speakers=num_speakers,
+    )
+    summary = pipeline.summarize(ingested.result)
+    origin_block = dict(summary.get("origin") or {})
+    origin_block["reused_url_mapping"] = ingested.reused_url_mapping
+    origin_block["refreshed"] = ingested.refreshed
+    if ingested.downloaded_bytes is None:
+        origin_block["network"] = "none — the stored job for this URL was served"
+    else:
+        origin_block["network"] = (
+            f"downloaded {ingested.downloaded_bytes} bytes from {ingested.source.provider}; "
+            "everything after the download ran locally"
+        )
+    summary["origin"] = origin_block
+    if summary.get("wall_clock") is None:
+        summary["wall_clock_note"] = (
+            "no recording start could be resolved for a downloaded source (upload dates and "
+            "download times are not recording times) — pass recorded_at=... to anchor t_wall"
+        )
+    return summary
 
 
 @mcp.tool(description=guidance.TOOL_DESCRIPTIONS["get_transcript"], annotations=READONLY_TOOL)
@@ -708,13 +773,16 @@ def extract_frame(
     out_dir.mkdir(parents=True, exist_ok=True)
     suffix = f"-crop{'x'.join(str(v) for v in crop_tuple)}" if crop_tuple else ""
     out_path = out_dir / f"extract-t{at_ms:08d}{suffix}.jpg"
+    # A source Talkthrough downloaded itself lives inside the job and wins
+    # over the recorded path; local-file jobs keep decoding the original.
+    source = url_ingest.source_path(manifest.media.path, job_id, manifest.media.managed_source)
     with _tool_errors():
-        extract_exact_frame(Path(manifest.media.path), at_ms, out_path, crop=crop_tuple)
+        extract_exact_frame(source, at_ms, out_path, crop=crop_tuple)
     meta = {
         "job_id": job_id,
         "t_ms": at_ms,
         "t_wall": manifest.t_wall_iso(at_ms),
-        "source": manifest.media.path,
+        "source": str(source),
         "crop": crop,
         "path": str(out_path.resolve()),  # issue #13: agents copy it with their own file tools
         "note": "full source resolution (stored keyframes are capped at 1568px wide)",
@@ -763,6 +831,26 @@ def list_jobs() -> dict[str, Any]:
                     _job_speakers(manifest.transcript.diarization)
                     if manifest.transcript.diarization is not None
                     and manifest.transcript.diarization.available
+                    else {}
+                ),
+                **(
+                    {
+                        "origin": {
+                            "kind": manifest.media.origin.kind,
+                            "provider": manifest.media.origin.provider,
+                            **(
+                                {"provider_id": manifest.media.origin.provider_id}
+                                if manifest.media.origin.provider_id
+                                else {}
+                            ),
+                            **(
+                                {"title": manifest.media.origin.title}
+                                if manifest.media.origin.title
+                                else {}
+                            ),
+                        }
+                    }
+                    if manifest.media.origin is not None
                     else {}
                 ),
             }

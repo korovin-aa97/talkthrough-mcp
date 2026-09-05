@@ -19,13 +19,17 @@ never ask for more than the moment you are analyzing.
 
 The `talkthrough` MCP server must be connected (tools like
 `process_media` / `get_transcript` are visible). If not, tell the user to
-install it: `claude mcp add -s user talkthrough -- uvx --python ">=3.11,<3.14" "talkthrough-mcp[diarization]"`
+install it: `claude mcp add -s user talkthrough -- uvx --python ">=3.11,<3.14" "talkthrough-mcp[diarization,url]"`
 (see the repository README for other clients).
 
 ## Core workflow
 
 1. **Ingest once**: `process_media(path)` — idempotent by content hash;
-   re-calls on the same file return instantly. Long videos take minutes and
+   re-calls on the same file return instantly. Given a public video/audio
+   URL instead of a file, call `process_url(url)`: the source is downloaded
+   once (the only network step; YouTube needs the `[url]` extra) and kept
+   inside the job, then everything below is identical and local — never
+   download twice; a repeat call serves the stored job. Long videos take minutes and
    stream progress. The summary gives you `job_id`, counts, wall-clock, and
    a transcript preview — do NOT dump anything else eagerly. Multi-person
    recording (meeting/interview)? Add `diarize=true` — even when the ask is

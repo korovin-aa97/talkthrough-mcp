@@ -41,6 +41,12 @@
           "description": "Job store root. Default: ~/.talkthrough",
           "isRequired": false,
           "isSecret": false
+        },
+        {
+          "name": "TALKTHROUGH_MAX_DOWNLOAD_BYTES",
+          "description": "Hard cap for one process_url download. Default: 2147483648 (2 GiB).",
+          "isRequired": false,
+          "isSecret": false
         }
       ]
     }
