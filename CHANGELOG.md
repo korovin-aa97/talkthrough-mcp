@@ -39,7 +39,11 @@ unchanged: 9 tools, 6 prompts.
   URLs grew the index directory forever. `gc` unlinks every lock without a
   mapping while holding it and reports them as `urls/<key>.lock`;
   `url_lock` re-checks the inode after acquiring, so a waiter never ends up
-  holding a lock on a file the sweep removed.
+  holding a lock on a file the sweep removed. Completed calls no longer leave
+  their per-URL thread locks in an unbounded process-global registry.
+- **A failed local pipeline leaves no URL index entry.** The mapping is now
+  published after the manifest is committed; a failure after downloading and
+  installing the managed source cleans both the partial job and its mapping.
 - **Page-reader crashes say what to do.** An exception the extractor stack
   raised past yt-dlp's own error class (yt-dlp's TED extractor on a changed
   page: a bare `TypeError`) now reads `the page reader failed on
@@ -57,7 +61,8 @@ unchanged: 9 tools, 6 prompts.
   answered — a hand-written `uvx talkthrough-mcp` config upgrades in place
   and lists `process_url` without being able to read YouTube or video
   pages. CI runs it in the version matrix and on the clean-installed wheel.
-- **`--json` on failure** leaves one JSON document on stdout,
+- **`--json` on failure** leaves one JSON document on stdout, including for
+  command-line usage errors such as a missing URL or an unknown option,
   `{"error": {"type": "UnsupportedUrlError", "message": "…"}}`, next to the
   unchanged exit code 2 and the human `error:` line on stderr, so
   automation parses one format on both outcomes.

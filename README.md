@@ -604,8 +604,9 @@ talkthrough-mcp serve                               # stdio MCP server (default)
 talkthrough-mcp --version                           # package version + which extras this environment has
 ```
 
-`--json` keeps stdout machine-readable on failure too (0.4.1): the process
-exits with code 2, stderr carries the human `error: …` line, and stdout
+`--json` keeps stdout machine-readable on failure too (0.4.1), including a
+missing argument or unknown option: the process exits with code 2, stderr
+carries the human `error: …` line, and stdout
 carries one JSON document, `{"error": {"type": "UnsupportedUrlError",
 "message": "…"}}`. `--version` also says which optional extras the
 environment has — the quickest check when a hand-written config launches

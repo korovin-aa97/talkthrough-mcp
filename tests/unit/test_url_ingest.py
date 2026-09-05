@@ -291,6 +291,17 @@ def test_url_lock_serializes_same_key_and_is_reentrant_across_keys(isolated_home
         assert url_ingest.mapping_path("youtube:a").with_suffix(".lock").exists()
 
 
+def test_url_lock_registry_does_not_retain_finished_keys(isolated_home: Path) -> None:
+    import gc
+
+    keys = {f"site:example:{index}" for index in range(25)}
+    for key in keys:
+        with url_ingest.url_lock(key):
+            assert key in url_ingest._URL_LOCKS
+    gc.collect()
+    assert keys.isdisjoint(url_ingest._URL_LOCKS)
+
+
 # --- managed source ---------------------------------------------------------------
 
 

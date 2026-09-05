@@ -185,6 +185,55 @@ def test_json_flag_turns_a_failure_into_an_error_document(
     assert info.value.code == 2 and capsys.readouterr().out == ""
 
 
+@pytest.mark.parametrize(
+    ("argv", "message"),
+    [
+        (["process-url", "--json"], "the following arguments are required: url"),
+        (
+            ["process-url", "https://cdn.example.com/x.mp4", "--unknown", "--json"],
+            "unrecognized arguments: --unknown",
+        ),
+    ],
+)
+def test_json_flag_covers_command_line_usage_errors(
+    argv: list[str], message: str, capsys: pytest.CaptureFixture[str]
+) -> None:
+    with pytest.raises(SystemExit) as info:
+        cli.main(argv)
+    assert info.value.code == 2
+    captured = capsys.readouterr()
+    assert json.loads(captured.out) == {
+        "error": {"type": "UsageError", "message": message}
+    }
+    assert "usage:" in captured.err and f"error: {message}" in captured.err
+
+
+def test_usage_error_redacts_an_unrecognized_url(
+    capsys: pytest.CaptureFixture[str], isolated_home: Path
+) -> None:
+    del isolated_home
+    secret_url = f"https://cdn.example.com/extra.mp4?{CANARY}"
+    with pytest.raises(SystemExit) as info:
+        cli.main(
+            ["process-url", "https://cdn.example.com/x.mp4", secret_url, "--json"]
+        )
+    assert info.value.code == 2
+    captured = capsys.readouterr()
+    assert CANARY not in captured.out and CANARY not in captured.err
+    assert json.loads(captured.out)["error"]["message"] == "unrecognized arguments: <url>"
+
+
+def test_usage_error_without_json_keeps_stdout_empty(
+    capsys: pytest.CaptureFixture[str], isolated_home: Path
+) -> None:
+    del isolated_home
+    with pytest.raises(SystemExit) as info:
+        cli.main(["process-url"])
+    assert info.value.code == 2
+    captured = capsys.readouterr()
+    assert captured.out == "" and "the following arguments are required: url" in captured.err
+
+
 def test_serve_logs_its_version_and_extras_at_startup(
     monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture, restore_http_loggers: None
 ) -> None:
