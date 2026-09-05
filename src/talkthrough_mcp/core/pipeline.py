@@ -38,6 +38,7 @@ from .manifest import (
     FrameIndex,
     Manifest,
     MediaMeta,
+    MediaOrigin,
     Transcript,
     save_manifest,
 )
@@ -569,12 +570,21 @@ def _build_manifest(
     model_name: str,
     previous: Manifest | None,
     report: ProgressFn,
+    origin: MediaOrigin | None = None,
+    managed_source: str | None = None,
 ) -> tuple[Manifest, int, dict[str, str], bool]:
     """Build one complete manifest and its artifacts inside ``directory``."""
+    if origin is None and previous is not None and previous.media.origin is not None:
+        # A forced rebuild of a URL job (e.g. through process_media on the
+        # managed file) keeps where the bytes came from.
+        origin = previous.media.origin
+        managed_source = managed_source or previous.media.managed_source
     wall_clock = resolve_wall_clock(
         recorded_at=recorded_at,
         format_tags=info.format_tags,
-        mtime_epoch=info.mtime_epoch,
+        # A downloaded file's mtime is the download time, not a recording
+        # start: the mtime rung is disabled for every URL-origin job.
+        mtime_epoch=None if origin is not None else info.mtime_epoch,
         duration_s=info.duration_s,
     )
     tool_timeout = max(600, int(info.duration_s * 4) + 120)
@@ -676,6 +686,8 @@ def _build_manifest(
             video_codec=info.video_codec,
             has_audio=info.has_audio,
             has_video=info.has_video,
+            origin=origin,
+            managed_source=managed_source,
         ),
         wall_clock=wall_clock,
         transcript=transcript,
@@ -707,6 +719,8 @@ def process_media(
     num_speakers: int | None = None,
     force: bool = False,
     progress: ProgressFn | None = None,
+    origin: MediaOrigin | None = None,
+    managed_source: str | None = None,
 ) -> ProcessResult:
     """Run the full pipeline; instantly returns the existing manifest when reprocessing.
 
@@ -714,6 +728,10 @@ def process_media(
     env default, an explicit True/False wins over it (the tool layer exposes
     it as the ``diarize`` parameter; the core name avoids shadowing the
     ``diarize`` module).
+
+    ``origin`` / ``managed_source`` are set only by URL ingestion for a file
+    Talkthrough downloaded itself; they are stored additively and switch the
+    wall-clock ladder off its mtime rung.
     """
     started = time.monotonic()
     model_name = resolve_whisper_model(model)
@@ -841,6 +859,8 @@ def process_media(
                 model_name=model_name,
                 previous=None,
                 report=report,
+                origin=origin,
+                managed_source=managed_source,
             )
         else:
             if unreadable_reason is not None:
@@ -861,6 +881,8 @@ def process_media(
                     model_name=model_name,
                     previous=previous,
                     report=report,
+                    origin=origin,
+                    managed_source=managed_source,
                 )
                 manifest = jobs.commit_reprocessed_job(
                     job_id, staging, damaged_manifest_backup=damaged_backup
@@ -1584,6 +1606,27 @@ def integrity_notes(result: ProcessResult) -> dict[str, str]:
     return notes
 
 
+def origin_payload(manifest: Manifest) -> dict[str, Any]:
+    """The bounded provider block for URL-origin jobs (no raw URL, ever)."""
+    origin = manifest.media.origin
+    if origin is None:
+        return {}
+    payload: dict[str, Any] = {"kind": origin.kind, "provider": origin.provider}
+    for key in ("provider_id", "host", "title", "published_at", "downloaded_bytes",
+                "downloaded_at", "downloader"):
+        value = getattr(origin, key)
+        if value is not None:
+            payload[key] = value
+    if manifest.media.managed_source:
+        payload["managed_source"] = manifest.media.managed_source
+    if origin.published_at is not None:
+        payload["published_at_note"] = (
+            "published_at is the provider's upload/publication time, NOT the recording "
+            "start; t_wall stays unanchored unless recorded_at is passed"
+        )
+    return {"origin": payload}
+
+
 def summarize(result: ProcessResult) -> dict[str, Any]:
     """Compact, context-friendly summary — never the full payload."""
     manifest = result.manifest
@@ -1639,6 +1682,7 @@ def summarize(result: ProcessResult) -> dict[str, Any]:
             "height": manifest.media.height,
         },
         "wall_clock": manifest.wall_clock.to_dict() if manifest.wall_clock else None,
+        **origin_payload(manifest),
         "transcript": {
             "available": manifest.transcript.available,
             "reason": manifest.transcript.reason or None,

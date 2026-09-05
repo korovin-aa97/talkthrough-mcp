@@ -18,7 +18,7 @@
       "args": [
         "--python",
         ">=3.11,<3.14",
-        "talkthrough-mcp[diarization]"
+        "talkthrough-mcp[diarization,url]"
       ],
       "env": {
         "TALKTHROUGH_WHISPER_MODEL": "${user_config.whisper_model}"

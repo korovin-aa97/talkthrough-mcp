@@ -13,7 +13,7 @@ workflow. Everything runs locally: recordings never leave the machine.
 Add the MCP server:
 
 ```bash
-openclaw mcp add talkthrough --command uvx --arg --python --arg ">=3.11,<3.14" --arg "talkthrough-mcp[diarization]"
+openclaw mcp add talkthrough --command uvx --arg --python --arg ">=3.11,<3.14" --arg "talkthrough-mcp[diarization,url]"
 ```
 
 Requires `uv` (https://astral.sh/uv). First processing downloads a whisper
@@ -22,7 +22,9 @@ model once (~460 MB for the default `small`).
 ## Workflow
 
 1. `process_media(path)` — idempotent by content hash; returns a compact
-   summary with job_id (re-calls on the same file are instant).
+   summary with job_id (re-calls on the same file are instant). For one
+   public video/audio URL use `process_url(url)`: the source is downloaded
+   once (the only network step), then everything below is local.
 2. `get_transcript(job_id)` / `search(job_id, "<word>")` — orient; search
    covers speech AND on-screen OCR text.
 3. `get_moment(job_id, t0-2000, t1+2000)` — evidence bundle per remark:

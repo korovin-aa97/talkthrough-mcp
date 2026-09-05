@@ -56,7 +56,7 @@ def test_every_tool_description_has_enough_short_examples(tool_name: str) -> Non
 
 def test_registered_tools_match_guidance_exactly() -> None:
     tools = asyncio.run(mcp.list_tools())
-    assert len(tools) == 8
+    assert len(tools) == 9
     assert sorted(tool.name for tool in tools) == sorted(guidance.TOOL_NAMES)
     for tool in tools:
         assert tool.description == guidance.TOOL_DESCRIPTIONS[tool.name], (
@@ -73,16 +73,27 @@ def test_search_guidance_documents_both_match_modes() -> None:
 
 def test_every_tool_carries_honest_annotations() -> None:
     """Non-interactive clients (codex exec) silently cancel un-annotated tool
-    calls — every tool must ship hints, and they must stay truthful."""
-    writers = {"process_media", "label_speakers", "extract_frame"}
+    calls — every tool must ship hints, and they must stay truthful. Exactly
+    one tool reaches the network: process_url is open-world and, because a
+    URL may start serving different bytes, not idempotent."""
+    writers = {"process_media", "process_url", "label_speakers", "extract_frame"}
     tools = asyncio.run(mcp.list_tools())
     for tool in tools:
         ann = tool.annotations
         assert ann is not None, f"{tool.name}: missing ToolAnnotations"
         assert ann.destructive_hint is False
-        assert ann.idempotent_hint is True
-        assert ann.open_world_hint is False
+        network = tool.name == "process_url"
+        assert ann.idempotent_hint is (not network), tool.name
+        assert ann.open_world_hint is network, tool.name
         assert ann.read_only_hint is (tool.name not in writers), tool.name
+
+
+def test_process_url_guidance_states_the_network_boundary_and_limits() -> None:
+    description = guidance.TOOL_DESCRIPTIONS["process_url"]
+    for fact in ("only tool that uses the network", "refresh=true", "[url]", "playlists",
+                 "raw URL is never stored", "NOT the recording start"):
+        assert fact in description
+    assert "process_url" in guidance.TOOL_DESCRIPTIONS["process_media"]
 
 
 def test_exactly_six_prompts_registered() -> None:
@@ -157,7 +168,7 @@ def test_install_buttons_encode_the_batteries_included_command() -> None:
     )
 
     assert UVX_PYTHON_ARGS == ["--python", PROJECT_REQUIRES_PYTHON]
-    assert [*UVX_PYTHON_ARGS, "talkthrough-mcp[diarization]"] == UVX_ARGS
+    assert [*UVX_PYTHON_ARGS, "talkthrough-mcp[diarization,url]"] == UVX_ARGS
     block = _install_buttons(UVX_ARGS)
     cursor = re.search(r"cursor\.com/en/install-mcp\?name=talkthrough&config=([^)]+)\)", block)
     assert cursor is not None
@@ -197,11 +208,11 @@ def test_claude_plugin_server_is_pinned_to_its_generated_pack_version() -> None:
         UVX_PYTHON_ARGS,
     )
 
-    assert [*UVX_PYTHON_ARGS, "talkthrough-mcp[diarization]"] == UVX_ARGS
+    assert [*UVX_PYTHON_ARGS, "talkthrough-mcp[diarization,url]"] == UVX_ARGS
     assert [
         "--python",
         PROJECT_REQUIRES_PYTHON,
-        f"talkthrough-mcp[diarization]=={PROJECT_VERSION}",
+        f"talkthrough-mcp[diarization,url]=={PROJECT_VERSION}",
     ] == CLAUDE_PLUGIN_UVX_ARGS
     plugin_config = json.loads(
         (REPO_ROOT / "integrations" / "claude-code" / ".mcp.json").read_text(
