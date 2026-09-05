@@ -41,6 +41,11 @@ REPROCESS_FAILED_FRAMES = "failed-new-frames"
 DAMAGED_MANIFEST_SUFFIX = ".damaged-"
 _PROCESS_LOCKS_GUARD = threading.Lock()
 _PROCESS_LOCKS: dict[str, threading.RLock] = {}
+# Per-thread re-entrancy: a caller that already holds a job's lock (URL
+# ingestion installing a source and then running the pipeline) must not take
+# a second flock on the same file — flock conflicts across descriptors even
+# inside one process.
+_HELD = threading.local()
 
 
 def talkthrough_home() -> Path:
@@ -91,7 +96,16 @@ def load_previous_job(job_id: str) -> tuple[Manifest | None, str | None]:
         return None, None
     try:
         return load_manifest(job_dir(job_id)), None
-    except Exception as exc:  # json.JSONDecodeError, KeyError, ValueError, ...
+    except OSError as exc:
+        # A transient read failure (EMFILE, EIO, a flaky external drive) is
+        # not damage: treating it as such would quarantine an intact manifest
+        # and rebuild without its identities. Fail the call instead.
+        raise ToolFailureError(
+            f"could not read manifest.json for job {job_id!r}: {exc} — retry; the stored "
+            "job was left untouched"
+        ) from exc
+    except (ValueError, KeyError, TypeError, AttributeError) as exc:
+        # json.JSONDecodeError is a ValueError; UnicodeDecodeError too.
         reason = f"{type(exc).__name__}: {exc}"
         return None, reason[:200]
 
@@ -291,6 +305,21 @@ def _frames_present(manifest: Manifest, frames_directory: Path) -> bool:
     return all(frame.file in present for frame in manifest.frames.items)
 
 
+def _quarantine_unreadable_live_manifest(job_id: str, live_manifest: Path) -> None:
+    """Never overwrite the only copy of an unreadable manifest while rolling
+    forward: a damaged file may still hold hand-saved identities."""
+    if not live_manifest.is_file():
+        return
+    try:
+        load_manifest(live_manifest.parent)
+    except OSError:
+        raise
+    except Exception:
+        backup = damaged_manifest_backup_path(job_id)
+        os.replace(live_manifest, backup)
+        logger.warning("quarantined unreadable manifest of job %s as %s", job_id, backup.name)
+
+
 def _recover_one_staging(job_id: str, staging: Path) -> str | None:
     """Finish or undo one commit that a hard kill interrupted mid-sequence.
 
@@ -324,6 +353,7 @@ def _recover_one_staging(job_id: str, staging: Path) -> str | None:
     if staged is not None:
         if _frames_present(staged, live_frames):
             # Steps 1 and 2 completed; only the manifest publication is missing.
+            _quarantine_unreadable_live_manifest(job_id, live_manifest)
             os.replace(staged_manifest, live_manifest)
             shutil.rmtree(staging, ignore_errors=True)
             return "rolled_forward"
@@ -334,6 +364,7 @@ def _recover_one_staging(job_id: str, staging: Path) -> str | None:
         ):
             # Step 1 completed, step 2 did not: finish the sequence.
             os.replace(staged_frames, live_frames)
+            _quarantine_unreadable_live_manifest(job_id, live_manifest)
             os.replace(staged_manifest, live_manifest)
             shutil.rmtree(staging, ignore_errors=True)
             return "rolled_forward"
@@ -387,6 +418,15 @@ def job_lock(job_id: str, *, wait_seconds: int = 600) -> Iterator[None]:
     The process-local layer also gives Windows callers real thread safety;
     POSIX then adds ``flock`` for separate server/CLI processes.
     """
+    held: dict[str, int] = getattr(_HELD, "jobs", None) or {}
+    _HELD.jobs = held
+    if held.get(job_id, 0) > 0:
+        held[job_id] += 1
+        try:
+            yield
+        finally:
+            held[job_id] -= 1
+        return
     with _PROCESS_LOCKS_GUARD:
         process_lock = _PROCESS_LOCKS.setdefault(job_id, threading.RLock())
     if not process_lock.acquire(timeout=max(0, wait_seconds)):
@@ -396,7 +436,11 @@ def job_lock(job_id: str, *, wait_seconds: int = 600) -> Iterator[None]:
         )
     try:
         with _file_job_lock(job_id, wait_seconds=wait_seconds):
-            yield
+            held[job_id] = 1
+            try:
+                yield
+            finally:
+                held.pop(job_id, None)
     finally:
         process_lock.release()
 
