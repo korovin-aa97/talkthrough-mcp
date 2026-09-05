@@ -101,6 +101,13 @@ class ProcessResult:
     # Response-only explanation for a successful full rebuild that moved
     # durable identities to pending review.
     reprocessed_identity_review: bool = False
+    # Response-only integrity facts (0.3.2 external findings F1/F2): where an
+    # unreadable manifest was quarantined, which interrupted rebuilds were
+    # repaired on lock acquisition, and how many indexed keyframe files are
+    # missing from disk right now.
+    damaged_manifest_backup: str | None = None
+    reprocess_recovered: tuple[str, ...] = ()
+    missing_frame_files: int = 0
 
 
 def _env_int(name: str, default: int) -> int:
@@ -145,7 +152,32 @@ def _validate_extension(media: Path) -> None:
         )
 
 
-def _validate_caps(info: MediaInfo, out_root: Path) -> None:
+def _directory_bytes(path: Path) -> int:
+    """Total size of the regular files directly inside ``path`` (0 if absent)."""
+    total = 0
+    try:
+        with os.scandir(path) as entries:
+            for entry in entries:
+                try:
+                    if entry.is_file(follow_symlinks=False):
+                        total += entry.stat(follow_symlinks=False).st_size
+                except OSError:
+                    continue
+    except FileNotFoundError:
+        return 0
+    return total
+
+
+def _validate_caps(info: MediaInfo, out_root: Path, *, reserved_bytes: int = 0) -> None:
+    """Duration cap plus a disk preflight.
+
+    ``reserved_bytes`` is what a forced rebuild keeps alive until its commit:
+    the existing keyframes stay on disk (moved, not copied) while the staged
+    set is written next to them, so peak usage inside the job directory is
+    roughly twice the frames directory (0.3.2 external finding F8). Checking
+    it up front turns a mid-rebuild copy failure into an early, actionable
+    refusal.
+    """
     if info.duration_s <= 0:
         raise ValidationError(f"could not determine duration of {info.filename!r}")
     cap_seconds = max_seconds_cap()
@@ -155,11 +187,15 @@ def _validate_caps(info: MediaInfo, out_root: Path) -> None:
             "(override with TALKTHROUGH_MAX_SECONDS)"
         )
     free = shutil.disk_usage(str(out_root)).free
-    if free < 2 * info.size_bytes:
-        raise ValidationError(
-            f"free disk {free} bytes < 2x media size {info.size_bytes} bytes — "
-            "free up space and retry"
-        )
+    if free < 2 * info.size_bytes + reserved_bytes:
+        detail = f"free disk {free} bytes < 2x media size {info.size_bytes} bytes"
+        if reserved_bytes:
+            detail += (
+                f" + {reserved_bytes} bytes of existing keyframes that a rebuild keeps "
+                "until it commits"
+            )
+        raise ValidationError(detail + " — free up space and retry")
+
 
 
 def _tool_versions() -> dict[str, str]:
@@ -676,10 +712,19 @@ def process_media(
         """Reuse unless forced — or unless an EXPLICIT per-call model differs
         from the stored transcript's model (silently returning the old model's
         text would betray the caller's intent). A changed env default
-        deliberately does NOT invalidate the store."""
+        deliberately does NOT invalidate the store. An UNREADABLE manifest is
+        not a cache hit either: the locked path quarantines it and rebuilds
+        (0.3.2 external finding F1) instead of raising a bare decoder error."""
         if force or not jobs.job_exists(job_id):
             return None
-        manifest = jobs.load_job(job_id)
+        manifest, unreadable = jobs.load_previous_job(job_id)
+        if manifest is None:
+            logger.warning(
+                "job %s has an unreadable manifest (%s) — rebuilding from the source",
+                job_id,
+                unreadable,
+            )
+            return None
         if model is not None and manifest.transcript.model != model_name:
             logger.info(
                 "job %s exists with model %s but %s was explicitly requested — reprocessing",
@@ -689,13 +734,27 @@ def process_media(
         return manifest
 
     manifest_hit = reusable()
-    if manifest_hit is not None and not _needs_diarize_amend(manifest_hit, diarize_request):
+    if (
+        manifest_hit is not None
+        and not _needs_diarize_amend(manifest_hit, diarize_request)
+        # Indexed frames missing on disk → take the lock: an interrupted
+        # rebuild may be repairable there (F2); otherwise the served result
+        # must say what is missing instead of reading as a clean cache hit.
+        and not jobs.missing_frame_files(manifest_hit)
+    ):
         logger.info("job %s already processed — returning existing manifest", job_id)
         return ProcessResult(
             manifest=manifest_hit, reused=True, elapsed_s=time.monotonic() - started
         )
 
     with jobs.job_lock(job_id), jobs.partial_job_cleanup(job_id):
+        # A commit that a hard kill interrupted (between the frame swap and
+        # the manifest publication) is finished or undone first, so whatever
+        # is served or rebuilt below starts from a consistent job.
+        recovered = tuple(
+            f"{item.staging} ({item.action})"
+            for item in jobs.recover_interrupted_reprocess(job_id)
+        )
         # Re-check under the lock: a concurrent call may have just finished it.
         manifest_hit = reusable()
         if manifest_hit is not None:
@@ -716,13 +775,19 @@ def process_media(
                     # an ``available=false`` replacement.
                     amended=diarization is not None and diarization.available,
                     speaker_names_pending_review_dropped=dropped or None,
+                    reprocess_recovered=recovered,
+                    missing_frame_files=len(jobs.missing_frame_files(amended)),
                 )
             return ProcessResult(
-                manifest=manifest_hit, reused=True, elapsed_s=time.monotonic() - started
+                manifest=manifest_hit,
+                reused=True,
+                elapsed_s=time.monotonic() - started,
+                reprocess_recovered=recovered,
+                missing_frame_files=len(jobs.missing_frame_files(manifest_hit)),
             )
 
         directory = jobs.job_dir(job_id)
-        previous = jobs.load_job(job_id) if jobs.job_exists(job_id) else None
+        previous, unreadable_reason = jobs.load_previous_job(job_id)
         if (
             previous is not None
             and jobs.has_identity_state(previous)
@@ -736,8 +801,14 @@ def process_media(
 
         report("probing media", 0.05)
         info = probe_media(media)
-        _validate_caps(info, directory)
-        if previous is None:
+        rebuild = previous is not None or unreadable_reason is not None
+        _validate_caps(
+            info,
+            directory,
+            reserved_bytes=_directory_bytes(directory / FRAMES_DIR_NAME) if rebuild else 0,
+        )
+        damaged_backup: Path | None = None
+        if not rebuild:
             manifest, echo_trimmed, dropped, identities_preserved = _build_manifest(
                 media,
                 job_id,
@@ -752,6 +823,11 @@ def process_media(
                 report=report,
             )
         else:
+            if unreadable_reason is not None:
+                # Nothing readable to preserve — but the unreadable file may
+                # still hold hand-saved identities, so it is quarantined
+                # beside the rebuilt manifest instead of being overwritten.
+                damaged_backup = jobs.damaged_manifest_backup_path(job_id)
             with jobs.reprocess_workspace(job_id) as staging:
                 manifest, echo_trimmed, dropped, identities_preserved = _build_manifest(
                     media,
@@ -766,7 +842,9 @@ def process_media(
                     previous=previous,
                     report=report,
                 )
-                manifest = jobs.commit_reprocessed_job(job_id, staging)
+                manifest = jobs.commit_reprocessed_job(
+                    job_id, staging, damaged_manifest_backup=damaged_backup
+                )
 
     report("done", 1.0)
     return ProcessResult(
@@ -776,6 +854,8 @@ def process_media(
         vocabulary_echo_trimmed=echo_trimmed,
         speaker_names_pending_review_dropped=dropped or None,
         reprocessed_identity_review=identities_preserved,
+        damaged_manifest_backup=str(damaged_backup) if damaged_backup is not None else None,
+        reprocess_recovered=recovered,
     )
 
 
@@ -1359,6 +1439,44 @@ def _summarize_frames(manifest: Manifest) -> dict[str, Any]:
     return payload
 
 
+def missing_frames_note(manifest: Manifest, missing: int) -> str:
+    """One text for every surface that serves a job whose frame files are gone."""
+    remedy = "process_media(path, force=true"
+    if jobs.has_identity_state(manifest):
+        remedy += ", diarize=true"
+    remedy += ")"
+    return (
+        f"{missing} indexed keyframe file(s) are missing from the job directory (an "
+        "interrupted rebuild or a manual deletion); get_frames and get_moment skip "
+        f"them — re-run {remedy} to rebuild the job"
+    )
+
+
+def integrity_notes(result: ProcessResult) -> dict[str, str]:
+    """Response-only notes for repaired, quarantined, or inconsistent jobs."""
+    notes: dict[str, str] = {}
+    if result.reprocess_recovered:
+        notes["recovery_note"] = (
+            "an interrupted forced rebuild of this job was repaired before serving it: "
+            + "; ".join(result.reprocess_recovered)
+            + " (rolled_forward = the finished rebuild was published; rolled_back = "
+            "the previous frames were restored)"
+        )
+    if result.damaged_manifest_backup:
+        notes["manifest_recovery_note"] = (
+            "the stored manifest.json was unreadable and could not be reused; it was kept "
+            f"as {Path(result.damaged_manifest_backup).name} inside the job directory and "
+            "the job was rebuilt from the source file. Speaker identities saved in the "
+            "unreadable manifest were NOT carried over — inspect the backup file if they "
+            "matter, then re-save them with label_speakers"
+        )
+    if result.missing_frame_files:
+        notes["integrity_note"] = missing_frames_note(
+            result.manifest, result.missing_frame_files
+        )
+    return notes
+
+
 def summarize(result: ProcessResult) -> dict[str, Any]:
     """Compact, context-friendly summary — never the full payload."""
     manifest = result.manifest
@@ -1397,10 +1515,14 @@ def summarize(result: ProcessResult) -> dict[str, Any]:
                 "not as an active identity; re-check the new roster before confirming "
                 "current labels or removing stale ones."
             )
+    frames_summary = _summarize_frames(manifest)
+    if result.missing_frame_files:
+        frames_summary["missing_files"] = result.missing_frame_files
     return {
         "job_id": manifest.job_id,
         "reused": result.reused,
         **({"diarization_amended": True} if result.amended else {}),
+        **integrity_notes(result),
         "elapsed_s": round(result.elapsed_s, 2),
         "media": {
             "filename": manifest.media.filename,
@@ -1428,7 +1550,7 @@ def summarize(result: ProcessResult) -> dict[str, Any]:
             "preview_truncated": len(segments) > len(preview),
         },
         **({"diarization": diarization_summary} if diarization_summary else {}),
-        "frames": _summarize_frames(manifest),
+        "frames": frames_summary,
         "ocr": {"enabled": manifest.caps.ocr, "unique_frames_with_text": frames_with_text},
         "next_steps": (
             "use get_transcript / get_moment / get_frames / search with this job_id; "
