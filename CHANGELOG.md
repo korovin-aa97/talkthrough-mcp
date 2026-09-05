@@ -25,9 +25,9 @@ unchanged: 9 tools, 6 prompts.
 - **A multi-video page is refused, not silently truncated.** The page probe
   asked yt-dlp for playlist item 1 only, so the entry count it checked was
   always 1: a Loom folder or an Instagram carousel was ingested as its first
-  video. The probe now reads a flat entry list, counts, and refuses with
-  `the page contains N videos — pass a link to one video` before any
-  download instance exists.
+  video. The probe now reads at most two flat entries and refuses with
+  `the page contains more than one video — pass a link to one video` before
+  any download instance exists, without enumerating an entire channel.
 - **`refresh=true` replaces the stored provider metadata.** When the
   refreshed bytes were unchanged the job was served with its old
   `media.origin`: the summary said `refreshed: true` next to a stale title
