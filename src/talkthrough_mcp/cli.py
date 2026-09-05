@@ -11,7 +11,8 @@ import argparse
 import json
 import logging
 import sys
-from typing import TextIO
+from collections.abc import Sequence
+from typing import Any, TextIO
 
 from .core.errors import TalkthroughError
 
@@ -75,10 +76,60 @@ def _configure_logging() -> None:
         logging.getLogger(name).setLevel(logging.WARNING)
 
 
+def _extra_status(extra: str, distribution: str, when_missing: str) -> str:
+    from importlib.metadata import PackageNotFoundError, version
+
+    try:
+        return f"{extra} extra: {distribution} {version(distribution)}"
+    except PackageNotFoundError:
+        return f"{extra} extra: not installed{when_missing}"
+
+
+def version_line() -> str:
+    """``talkthrough-mcp <version> (python <x.y.z>; url extra: …; diarization extra: …)``.
+
+    The extras decide what ``process_url`` and ``diarize`` can do, and a
+    hand-written ``uvx talkthrough-mcp`` config upgrades the server without
+    them — so the line says which ones this environment actually has.
+    """
+    from . import __version__
+
+    python = ".".join(str(part) for part in sys.version_info[:3])
+    url = _extra_status("url", "yt-dlp", " (direct https:// media links only)")
+    diarization = _extra_status("diarization", "sherpa-onnx", "")
+    return f"talkthrough-mcp {__version__} (python {python}; {url}; {diarization})"
+
+
+class _VersionAction(argparse.Action):
+    """``--version``: the package version plus the state of the optional extras."""
+
+    def __init__(
+        self, option_strings: Sequence[str], dest: str, help: str | None = None, **_: Any
+    ) -> None:
+        super().__init__(
+            option_strings, dest=argparse.SUPPRESS, default=argparse.SUPPRESS, nargs=0, help=help
+        )
+
+    def __call__(
+        self,
+        parser: argparse.ArgumentParser,
+        namespace: argparse.Namespace,
+        values: str | Sequence[Any] | None,
+        option_string: str | None = None,
+    ) -> None:
+        print(version_line())
+        parser.exit()
+
+
 def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="talkthrough-mcp",
         description="Local-first MCP server for narrated screen recordings.",
+    )
+    parser.add_argument(
+        "--version",
+        action=_VersionAction,
+        help="print the package version and which optional extras this environment has",
     )
     sub = parser.add_subparsers(dest="command")
 
@@ -161,6 +212,9 @@ def _build_parser() -> argparse.ArgumentParser:
 def _cmd_serve() -> int:
     from .server import mcp
 
+    # One line per start in the client's MCP log: which server, which extras
+    # (a config that launches the minimal server still advertises process_url).
+    logger.info("%s", version_line())
     mcp.run()
     return 0
 
@@ -307,5 +361,10 @@ def main(argv: list[str] | None = None) -> None:
             code = _cmd_serve()
     except TalkthroughError as exc:
         print(f"error: {exc}", file=sys.stderr)
+        if getattr(args, "json", False):
+            # the machine-readable contract holds on failure too: exit 2, the
+            # human line on stderr, one JSON document on stdout
+            document = {"error": {"type": type(exc).__name__, "message": str(exc)}}
+            print(json.dumps(document, ensure_ascii=False, indent=2))
         code = 2
     raise SystemExit(code)
