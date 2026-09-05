@@ -588,7 +588,17 @@ talkthrough-mcp process sync.m4a --diarize --num-speakers 3   # who said what
 talkthrough-mcp process-url "https://youtu.be/nHfGfEiVdE8"    # one public URL, downloaded once
 talkthrough-mcp gc --keep-days 30                   # clean the job store (sources go with their jobs)
 talkthrough-mcp serve                               # stdio MCP server (default)
+talkthrough-mcp --version                           # package version + which extras this environment has
 ```
+
+`--json` keeps stdout machine-readable on failure too (0.4.1): the process
+exits with code 2, stderr carries the human `error: …` line, and stdout
+carries one JSON document, `{"error": {"type": "UnsupportedUrlError",
+"message": "…"}}`. `--version` also says which optional extras the
+environment has — the quickest check when a hand-written config launches
+the minimal server (`uvx talkthrough-mcp`) that advertises `process_url`
+but can only read direct media links; the server logs the same line to
+stderr at every start.
 
 First run notes: missing system ffmpeg triggers a one-time `static-ffmpeg`
 download; the first transcription downloads the whisper model (~460 MB for

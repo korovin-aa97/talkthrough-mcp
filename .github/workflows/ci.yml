@@ -69,6 +69,7 @@ jobs:
       - run: uv run --python ${{ matrix.python-version }} pytest tests/unit -q
       - run: uv run --python ${{ matrix.python-version }} python -c "import talkthrough_mcp, sherpa_onnx; print(talkthrough_mcp.__version__)"
       - run: uv run --python ${{ matrix.python-version }} talkthrough-mcp --help
+      - run: uv run --python ${{ matrix.python-version }} talkthrough-mcp --version
       - run: uv run --python ${{ matrix.python-version }} python scripts/check_mcp_inventory.py
       - name: Real CLI fixture smoke on Python 3.13
         if: matrix.python-version == '3.13'
@@ -107,6 +108,12 @@ jobs:
         shell: bash
         run: |
           uv run --no-project --python clean-venv python -c "import yt_dlp, deno, sherpa_onnx; print('yt-dlp', yt_dlp.version.__version__, 'deno', deno.find_deno_bin())"
+      - name: --version names the extras the wheel installed
+        shell: bash
+        run: |
+          uv run --no-project --python clean-venv talkthrough-mcp --version | tee version.txt
+          grep -q "url extra: yt-dlp " version.txt
+          grep -q "diarization extra: sherpa-onnx " version.txt
       - name: Inventory over stdio is 9 tools / 6 prompts
         shell: bash
         run: uv run --no-project --python clean-venv python scripts/check_mcp_inventory.py
@@ -121,6 +128,15 @@ jobs:
           test "$code" -eq 2
           grep -q "playlist" err.txt
           test ! -s out.txt
+      - name: process-url --json reports the refusal as one JSON document
+        shell: bash
+        run: |
+          set +e
+          uv run --no-project --python clean-venv talkthrough-mcp process-url "https://www.youtube.com/playlist?list=PLxyz" --json > out.json 2> err.txt
+          code=$?
+          set -e
+          test "$code" -eq 2
+          uv run --no-project --python clean-venv python -c "import json; d = json.load(open('out.json')); assert d['error']['type'] == 'UnsupportedUrlError', d; print(d['error']['message'])"
 
   macos:
     runs-on: macos-latest

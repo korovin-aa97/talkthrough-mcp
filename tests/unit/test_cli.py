@@ -4,9 +4,11 @@ the ``--json`` error document. The pipeline itself is covered elsewhere."""
 from __future__ import annotations
 
 import io
+import json
 import logging
 import sys
 from collections.abc import Iterator
+from pathlib import Path
 
 import pytest
 
@@ -105,3 +107,78 @@ def test_main_configures_logging_before_dispatching(
     assert info.value.code == 0
     assert "nothing to remove" in capsys.readouterr().out
     assert logging.getLogger("httpx").level == logging.WARNING
+
+
+# --- --version and the --json error document (0.4.1) -------------------------------
+
+
+def test_version_flag_names_the_package_python_and_extras(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    from talkthrough_mcp import __version__
+
+    with pytest.raises(SystemExit) as info:
+        cli.main(["--version"])
+    assert info.value.code == 0
+    out = capsys.readouterr().out
+    assert out.startswith(f"talkthrough-mcp {__version__} (python 3.")
+    assert "url extra: yt-dlp " in out and "diarization extra: sherpa-onnx " in out
+    assert out == cli.version_line() + "\n"
+
+
+def test_version_line_says_which_extra_is_missing(monkeypatch: pytest.MonkeyPatch) -> None:
+    import importlib.metadata as metadata
+
+    real = metadata.version
+
+    def without_yt_dlp(name: str) -> str:
+        if name == "yt-dlp":
+            raise metadata.PackageNotFoundError(name)
+        return real(name)
+
+    monkeypatch.setattr(metadata, "version", without_yt_dlp)
+    line = cli.version_line()
+    assert "url extra: not installed (direct https:// media links only)" in line
+    assert "diarization extra: sherpa-onnx " in line
+
+
+def test_json_flag_turns_a_failure_into_an_error_document(
+    isolated_home: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    playlist = "https://www.youtube.com/playlist?list=PLxyz"
+    with pytest.raises(SystemExit) as info:
+        cli.main(["process-url", playlist, "--json"])
+    assert info.value.code == 2
+    captured = capsys.readouterr()
+    document = json.loads(captured.out)
+    assert set(document) == {"error"} and set(document["error"]) == {"type", "message"}
+    assert document["error"]["type"] == "UnsupportedUrlError"
+    assert "playlist" in document["error"]["message"]
+    error_lines = [line for line in captured.err.splitlines() if line.startswith("error: ")]
+    assert len(error_lines) == 1 and "playlist" in error_lines[0]
+
+    with pytest.raises(SystemExit) as info:
+        cli.main(["process", str(isolated_home / "missing.mp4"), "--json"])
+    assert info.value.code == 2
+    document = json.loads(capsys.readouterr().out)
+    assert document["error"]["type"] == "ValidationError"
+    assert "file not found" in document["error"]["message"]
+
+    with pytest.raises(SystemExit) as info:
+        cli.main(["process-url", playlist])  # without --json stdout stays empty
+    assert info.value.code == 2 and capsys.readouterr().out == ""
+
+
+def test_serve_logs_its_version_and_extras_at_startup(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture, restore_http_loggers: None
+) -> None:
+    from talkthrough_mcp import server
+
+    monkeypatch.setattr(server.mcp, "run", lambda: None)
+    with (
+        caplog.at_level(logging.INFO, logger="talkthrough_mcp.cli"),
+        pytest.raises(SystemExit) as info,
+    ):
+        cli.main(["serve"])
+    assert info.value.code == 0
+    assert cli.version_line() in caplog.text
