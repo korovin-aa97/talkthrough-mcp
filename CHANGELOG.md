@@ -13,26 +13,38 @@ frames, OCR, search and every later question stay on the machine.
 ### Added
 
 - **`process_url` is the ninth MCP tool and the server's only network
-  tool.** It accepts a direct `https://` link to a media file or one public
+  tool.** It accepts a direct `https://` link to a media file, one public
   YouTube video (`watch`, `youtu.be`, `shorts`, `live`, `embed`; playlist
-  parameters are dropped), downloads it once into a private workspace under
-  hard caps, verifies the bytes with ffprobe, installs the file inside the
-  job as a Talkthrough-named managed source and runs the same local pipeline
-  `process_media` runs. Tool annotations say so: `open_world_hint=true`,
-  `idempotent_hint=false`. The CLI gains `talkthrough-mcp process-url <url>
-  [--refresh] [--json]`.
-- **URL index without URLs.** A hashed key (`youtube:<id>` or the SHA-256 of
-  the exact direct URL) maps to the job id, so a repeat call on the same URL
-  serves the stored job with no network unless `refresh=true`. Job ids stay
-  content hashes: the same bytes reached through two URLs, or processed
-  earlier from a local file, converge on one job. Concurrent calls on one URL
-  download once.
+  parameters are dropped), or any public video page yt-dlp can read
+  (verified on release day: public Instagram reels, TikTok, Wikimedia
+  Commons file pages; yt-dlp's other extractors and generic HTML5/HLS
+  player detection are used as-is — no cookies or logins, ever, so a site
+  that demands a sign-in for anonymous clients, as Vimeo does with this
+  yt-dlp, is refused with the reason). It downloads the source
+  once into a private workspace under hard caps, verifies the bytes with
+  ffprobe, installs the file inside the job as a Talkthrough-named managed
+  source (`youtube-<id>`, `<provider>-<id>` or `direct-<hash>`) and runs the
+  same local pipeline `process_media` runs. Tool annotations say so:
+  `open_world_hint=true`, `idempotent_hint=false`. `force=true` rebuilds a
+  stored URL job from its kept source (re-anchor `recorded_at`, change the
+  model) without a download. The CLI gains `talkthrough-mcp process-url
+  <url> [--refresh] [--force] [--json]`.
+- **URL index without URLs.** A hashed key (`youtube:<id>`, the SHA-256 of
+  the exact URL, and for page videos `site:<extractor>:<id>`) maps to the
+  job id, so a repeat call on the same URL — or another URL form of the same
+  page video — serves the stored job with no download unless
+  `refresh=true`. Job ids stay content hashes: the same bytes reached through
+  two URLs, or processed earlier from a local file, converge on one job.
+  Concurrent calls on one URL download once, and two URLs with the same
+  bytes never destroy each other's download.
 - **A destination gate for every hop.** Only `https://` on port 443, no
   credentials in the URL, and every DNS answer must be a public address
   (private, loopback, link-local/cloud-metadata, multicast, reserved, shared
   address space and IPv4-mapped forms are refused). The direct downloader
-  pins the connection to the checked address (SNI and `Host` carry the name)
-  and re-validates each of at most five redirects.
+  pins the connection to the checked address (SNI and `Host` carry the name),
+  tries every validated address on a connect failure, and re-validates each
+  of at most five redirects. For video pages the named host is gated before
+  yt-dlp's own client follows embedded players — a documented residual.
 - **Caps enforced before and during the transfer.** Bytes
   (`TALKTHROUGH_MAX_DOWNLOAD_BYTES`, default 2 GiB, checked per chunk even
   without `Content-Length`), duration (`TALKTHROUGH_MAX_SECONDS` against
@@ -41,12 +53,15 @@ frames, OCR, search and every later question stay on the machine.
   no index entry.
 - **Optional `[url]` extra.** `yt-dlp[default,deno]` brings yt-dlp, its
   bundled JavaScript components and a PyPI-distributed Deno runtime, so one
-  install command covers YouTube. yt-dlp runs with an allowlisted option set:
-  no user configuration, no plugins, no cookies or logins, no remote
-  JavaScript components, one video, no live streams, Talkthrough-owned
-  output names, the resolved ffmpeg. Direct HTTPS links need no extra.
-  Generated client configs and the Claude plugin install
+  install command covers YouTube and every other video page. yt-dlp runs with
+  an allowlisted option set: no user configuration, no plugins, no cookies or
+  logins, no remote JavaScript components, one video (carousels and
+  playlists refused), no live streams, Talkthrough-owned output names, a
+  deterministic merge, the resolved ffmpeg. Direct HTTPS links need no
+  extra. Generated client configs and the Claude plugin install
   `[diarization,url]`; `uvx talkthrough-mcp` remains the minimal server.
+  Non-interactive Codex cancels the open-world tool by default; the Codex
+  integration page documents the per-tool approval override.
 - **Provider facts, not secrets, in the manifest.** `media.origin` stores the
   provider, public video id or host, a one-way URL hash, a bounded title,
   the provider's publication time, the downloader and the byte count;

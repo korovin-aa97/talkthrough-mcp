@@ -359,6 +359,30 @@ server command (JSON configs: `"args": ["--python", ">=3.11,<3.14",
 generated configs and the Claude plugin already carry both extras. Direct
 `https://` links to media files work without the extra.
 
+## `process_url` on a video page (Instagram, TikTok, Wikimedia Commons, …)
+
+A URL that is not a media file is handed to yt-dlp's page reader (its site
+extractors plus generic HTML5/HLS player detection), always without cookies
+or logins. What to expect:
+
+- **TikTok, Wikimedia Commons file pages, pages with a plain player** —
+  verified on release day; other sites work as far as their yt-dlp
+  extractor works anonymously. `origin.provider` names the extractor that
+  handled the page and `origin.provider_id` its public id.
+- **Vimeo** — with yt-dlp 2026.08 the Vimeo extractor only works logged-in
+  ("The web client only works when logged-in"), so public Vimeo pages are
+  refused with that reason; there is no anonymous path to offer.
+- **Instagram** — anonymous access works for some public posts and is
+  rate-limited quickly; a "bot check" / "sign-in" refusal means the site
+  blocked anonymous access, and there is no workaround here (cookies are
+  not supported). Download the post yourself and use `process_media`.
+- **"the page contains N videos"** — carousels and playlists are refused;
+  pass a link to one video.
+- **"no video could be found"** — yt-dlp has no extractor for the site and
+  found no player on the page; find the actual video URL.
+- Sites change; a page that worked last week may need a newer yt-dlp
+  (`uvx --refresh …`).
+
 ## `process_url` refuses the URL
 
 The error names the reason; the common ones:

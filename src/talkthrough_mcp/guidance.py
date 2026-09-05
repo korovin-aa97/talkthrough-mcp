@@ -52,33 +52,35 @@ Examples:
     "process_url": """\
 Download ONE public video/audio URL once (this is the only tool that uses the network), then run \
 the same LOCAL pipeline as process_media: transcript, keyframes, OCR, wall-clock, optional \
-diarization. Supported: direct https:// links to a media file (mp4/mov/webm/mkv/m4a/mp3/wav/ogg/\
-flac) and one public YouTube video (watch, youtu.be, shorts, a completed live). Not supported: \
-playlists, channels, active live streams, private/members-only/age-restricted/DRM videos, \
-cookies/logins, other sites. The downloaded source is kept inside the job, so extract_frame \
-works later without network; the raw URL is never stored (only a hash, the provider id/host and \
-a bounded title). A repeat call on the same URL serves the stored job without touching the \
-network unless refresh=true. Job ids stay content hashes: the same video from two URLs is one job. \
-YouTube needs the optional [url] extra. The provider's upload date is NOT the recording start: \
-wall_clock stays null unless recorded_at is passed.
+diarization. Supported: direct https:// links to a media file (mp4/mov/webm/mkv/ogv/m4a/mp3/wav/ogg/\
+flac), one public YouTube video (watch, youtu.be, shorts, a completed live), and any public \
+video PAGE yt-dlp can read — Instagram (public reels/posts), TikTok, Wikimedia Commons, pages with \
+an HTML5/HLS player, other sites as far as their yt-dlp extractor works anonymously (Vimeo does not). Not supported: playlists, channels, active live streams, \
+private/members-only/age-restricted/DRM videos, cookies/logins; sites that hide a video behind a \
+login or a bot wall fail with a clear reason. The downloaded source is kept inside the job, so \
+extract_frame works later without network; the raw URL is never stored (only a hash, the provider \
+id/host and a bounded title). A repeat call on the same URL serves the stored job without touching \
+the network unless refresh=true. Job ids stay content hashes: the same video from two URLs is one \
+job. YouTube and other pages need the optional [url] extra. The provider's upload date is NOT the \
+recording start: wall_clock stays null unless recorded_at is passed.
 When NOT to use: for local files (process_media), or to re-fetch data you already processed \
 (use the retrieval tools).
 Examples:
 - process_url(url="https://youtu.be/nHfGfEiVdE8") — one public YouTube video, defaults are right
 - process_url(url="https://www.youtube.com/watch?v=ID&list=PL...") — the playlist part is ignored: ONE video
 - process_url(url="https://cdn.example.com/recordings/standup.mp4") — direct https link to a media file
+- process_url(url="https://www.tiktok.com/@nasa/video/7…") — a public video page; origin.provider names the site
 - meeting from a link: process_url(url=..., diarize=true, num_speakers=3, vocabulary="Vera, Tom, OKR")
 - non-English narration: process_url(url=..., model="large-v3-turbo", language="ru")
 - known recording start: process_url(url=..., recorded_at="2026-09-05T14:00:00+02:00") — enables t_wall
-- second call, same URL → origin.reused_url_mapping=true, no network, same job_id
 - the video changed on the provider → process_url(url=..., refresh=true): new download, maybe a new job_id
 - re-anchor or change the model on a stored URL job → process_url(url=..., recorded_at=..., force=true), no download
 - error mentions [url] → run uvx --python ">=3.11,<3.14" "talkthrough-mcp[diarization,url]" and restart
 - playlist / channel / live / private URL → clear error; pass a single public video URL instead
+- "bot check"/"sign-in" refusal on Instagram/TikTok → the site blocked anonymous access; report it, no workaround
 - origin.published_at is the provider's upload time, not when the recording was made — never use it as t_wall
 - after success continue with get_transcript / search / get_moment on the job_id — never re-download
 - anti-example: a file on disk → process_media(path=...); process_url is only for https URLs
-- anti-example: "just download it" → still process_url; there is no download-only mode, the source stays in the job
 """,
     "get_transcript": """\
 Retrieve the transcript of a processed job, lazily and paginated. Formats: "segments" \

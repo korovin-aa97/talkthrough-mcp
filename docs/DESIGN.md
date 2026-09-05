@@ -101,8 +101,12 @@ exception is deliberate and isolated in two modules:
 
 ```
 process_url(url)
-  → classify (one YouTube video | one https:// media file; playlists,
+  → classify (one YouTube video | any other https:// URL; playlists,
     channels, credentials, non-443 ports, http://, file:// refused)
+  → a non-YouTube URL is tried as a media file first (our gated, pinned
+    downloader); a page or an HTTP error hands it to the page reader
+    (yt-dlp: ~1800 site extractors + generic HTML5/HLS player detection,
+    no cookies); known page hosts skip the media attempt
   → URL index hit and refresh=false → the stored job, zero network
   → destination gate: every DNS answer must be a public address
   → download into ~/.talkthrough/downloads/.dl-*/ under caps:
@@ -119,13 +123,19 @@ process_url(url)
 
 Design rules: job ids stay content hashes (two URLs with the same bytes, or
 a local file processed earlier, converge on one job — the manifest gains
-`media.origin` and `media.managed_source` additively); the raw URL, its
-query and userinfo never reach a manifest, the index, a log line, a progress
-message or an error (`url_ingest.redact` is the single choke point and a
-canary test pins it); `extract_frame` decodes the kept source, so URL jobs
-never need the network again; `gc` deletes the source with its job and
-drops index entries whose job is gone. Same-URL calls serialize on a URL
-lock so a second caller finds the mapping instead of downloading twice.
+`media.origin` and `media.managed_source` additively); a page video is
+also indexed by provider identity (`site:<extractor>:<id>`), so two URL
+forms of one Instagram/TikTok video converge before a second download; the
+raw URL, its query and userinfo never reach a manifest, the index, a log
+line, a progress message or an error (`url_ingest.redact` is the single
+choke point and a canary test pins it); `extract_frame` decodes the kept
+source, so URL jobs never need the network again; `gc` deletes the source
+with its job and drops index entries whose job is gone. Same-URL calls
+serialize on a URL lock, and the install + pipeline run under the job lock,
+so a second caller finds the mapping instead of downloading twice and a
+failing call can never remove a source another call just installed.
+Residual, documented in SECURITY: the page reader follows embedded players
+and redirects with yt-dlp's own client; only the named host is gated.
 
 ## Manifest schema (`talkthrough-manifest/v1`)
 

@@ -42,6 +42,12 @@ Things this project treats as security-relevant:
   filename, and the downloader dependency (`yt-dlp`, `deno`) being driven
   with anything other than the allowlisted option set (no user config, no
   plugins, no cookies, no remote JavaScript components).
+- Known residual, by design: for a video *page* (any site yt-dlp can read)
+  Talkthrough gates the host the user named; the embedded players and
+  redirects that yt-dlp then follows use yt-dlp's own client and are not
+  re-checked against the private-address gate. Direct media links and
+  YouTube do not have this gap. A report that shows a page steering the
+  page reader to a private address is in scope.
 
 Out of scope: prompt-injection of the *calling* agent via transcript/OCR
 content (inherent to the domain — mitigations and docs welcome, but it is

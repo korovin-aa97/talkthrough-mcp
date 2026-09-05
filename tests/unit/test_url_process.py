@@ -508,3 +508,136 @@ def test_list_jobs_notes_the_missing_wall_clock_of_url_jobs(
     process_url(URL, force=True, recorded_at="2026-09-05T14:00:00+02:00")
     (entry,) = list_jobs()["jobs"]
     assert "wall_clock_note" not in entry
+
+
+# --- any-site fallback (2026-09-05) --------------------------------------------------
+
+
+def _site_download(calls: dict[str, Any]) -> Any:
+    def fake_site(source: Any, dest_dir: Path, *, max_bytes: int, max_seconds: int, report: Any,
+                  known_job: Any = None) -> Downloaded:
+        calls["site"] = calls.get("site", 0) + 1
+        if known_job is not None:
+            existing = known_job("vimeo", "987654321")
+            if existing is not None:
+                raise url_download.ReuseExistingJob(existing, "vimeo", "987654321")
+        path = dest_dir / "vimeo-987654321.m4a"
+        path.write_bytes(calls["media"])
+        return Downloaded(
+            path=path, extension=".m4a", downloaded_bytes=len(calls["media"]),
+            downloader="stub yt-dlp", title="Sintel", published_at="2010-05-12",
+            kind="site", provider="vimeo", provider_id="987654321",
+        )
+
+    return fake_site
+
+
+def test_a_page_falls_back_to_the_site_reader_and_gets_a_provider_named_job(
+    stubbed: dict[str, Any], isolated_home: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    def not_media(source: Any, dest_dir: Path, *, max_bytes: int, report: Any) -> Downloaded:
+        stubbed["downloads"] += 1
+        (dest_dir / "download.part").write_bytes(b"leftover")
+        raise url_download.NotMediaResponse("text/html")
+
+    monkeypatch.setattr(url_download, "download_direct", not_media)
+    monkeypatch.setattr(url_download, "download_site", _site_download(stubbed))
+    page = "https://videos.example.org/watch/987654321?utm=1"
+    ingested = process_url(page)
+    manifest = ingested.result.manifest
+    assert stubbed["downloads"] == 1 and stubbed["site"] == 1
+    assert manifest.media.origin is not None
+    assert manifest.media.origin.kind == "site"
+    assert manifest.media.origin.provider == "vimeo"
+    assert manifest.media.origin.provider_id == "987654321"
+    assert manifest.media.origin.title == "Sintel"
+    assert manifest.media.managed_source == "source/vimeo-987654321.m4a"
+    assert url_ingest.load_mapping(url_ingest.site_mapping_key("vimeo", "987654321")) is not None
+    assert url_ingest.load_mapping(ingested.source.mapping_key) is not None
+    assert not any(url_ingest.downloads_root().iterdir())
+
+    # another URL form of the same video: resolved by the provider key, no download
+    other = process_url("https://player.example.org/embed/987654321")
+    assert stubbed["site"] == 2 and stubbed["downloads"] == 2
+    assert other.reused_url_mapping is True
+    assert other.result.manifest.job_id == manifest.job_id
+    assert url_ingest.load_mapping(other.source.mapping_key) is not None
+
+
+def test_page_hosts_skip_the_direct_attempt(
+    stubbed: dict[str, Any], isolated_home: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(url_ingest, "resolve_public_host", lambda host: ["203.0.113.10"])
+    monkeypatch.setattr(url_download, "download_site", _site_download(stubbed))
+    process_url("https://vimeo.com/987654321")
+    assert stubbed["downloads"] == 0 and stubbed["site"] == 1
+
+
+def test_http_errors_fall_back_but_security_refusals_do_not(
+    stubbed: dict[str, Any], isolated_home: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from talkthrough_mcp.core.url_ingest import UnsafeUrlError
+
+    def forbidden(source: Any, dest_dir: Path, *, max_bytes: int, report: Any) -> Downloaded:
+        raise url_download.HttpStatusError(403, source.safe_label())
+
+    monkeypatch.setattr(url_download, "download_direct", forbidden)
+    monkeypatch.setattr(url_download, "download_site", _site_download(stubbed))
+    assert process_url("https://videos.example.org/watch/1").result.manifest.media.origin
+    assert stubbed["site"] == 1
+
+    def unsafe(source: Any, dest_dir: Path, *, max_bytes: int, report: Any) -> Downloaded:
+        raise UnsafeUrlError("a redirect left https:// — refusing to follow it")
+
+    monkeypatch.setattr(url_download, "download_direct", unsafe)
+    with pytest.raises(UnsafeUrlError):
+        process_url("https://videos.example.org/watch/2")
+    assert stubbed["site"] == 1
+
+
+def test_when_both_attempts_fail_the_error_names_both(
+    stubbed: dict[str, Any], isolated_home: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from talkthrough_mcp.core.url_ingest import UnsupportedUrlError
+
+    def not_media(source: Any, dest_dir: Path, *, max_bytes: int, report: Any) -> Downloaded:
+        raise url_download.NotMediaResponse("text/html")
+
+    def no_video(source: Any, dest_dir: Path, **kwargs: Any) -> Downloaded:
+        raise UnsupportedUrlError(
+            "no video could be found on https://example.org/…: Unsupported URL"
+        )
+
+    monkeypatch.setattr(url_download, "download_direct", not_media)
+    monkeypatch.setattr(url_download, "download_site", no_video)
+    with pytest.raises(UnsupportedUrlError, match="not a media file either") as info:
+        process_url("https://example.org/about")
+    assert "no video could be found" in str(info.value)
+    assert not jobs.jobs_root().exists() or not any(jobs.jobs_root().iterdir())
+
+    def http_404(source: Any, dest_dir: Path, *, max_bytes: int, report: Any) -> Downloaded:
+        raise url_download.HttpStatusError(404, source.safe_label())
+
+    monkeypatch.setattr(url_download, "download_direct", http_404)
+    with pytest.raises(DownloadError, match="HTTP 404"):
+        process_url("https://cdn.example.org/missing.mp4")
+
+
+def test_refresh_bypasses_the_provider_index_and_downloads_again(
+    stubbed: dict[str, Any], isolated_home: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    def not_media(source: Any, dest_dir: Path, *, max_bytes: int, report: Any) -> Downloaded:
+        raise url_download.NotMediaResponse("text/html")
+
+    monkeypatch.setattr(url_download, "download_direct", not_media)
+    monkeypatch.setattr(url_download, "download_site", _site_download(stubbed))
+    first = process_url("https://videos.example.org/watch/987654321")
+    assert stubbed["site"] == 1
+    # Another URL form of the same video with refresh=True: the provider
+    # index must not short-circuit the download the caller asked for.
+    again = process_url("https://player.example.org/embed/987654321", refresh=True)
+    assert stubbed["site"] == 2
+    assert again.refreshed is True
+    assert again.reused_url_mapping is False
+    assert again.result.manifest.job_id == first.result.manifest.job_id
+    assert again.downloaded_bytes == len(stubbed["media"])
