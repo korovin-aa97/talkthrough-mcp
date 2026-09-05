@@ -12,6 +12,15 @@ args = ["--python", ">=3.11,<3.14", "talkthrough-mcp[diarization,url]"]
 
 Skills: this repo ships the talkthrough skill at `.agents/skills/talkthrough/` — Codex discovers it automatically inside a checkout; for global use copy it to `~/.agents/skills/` and invoke with `$talkthrough`.
 
+`process_url` is annotated as an open-world (network) tool, so an interactive Codex session asks before calling it and a non-interactive `codex exec` run cancels it ("user cancelled MCP tool call"). To let unattended runs download public URLs, approve that one tool in the same config:
+
+```toml
+[mcp_servers.talkthrough.tools.process_url]
+approval_mode = "approve"
+```
+
+Every other tool stays local and needs no approval.
+
 Optional env vars: TALKTHROUGH_WHISPER_MODEL (default `small`; use `large-v3-turbo` for non-English narration — agents can also pass `model=` per call), TALKTHROUGH_OCR (`off` to disable), TALKTHROUGH_OCR_LANG (on-screen-text script, e.g. `ru`, `ja`, `ko`), TALKTHROUGH_HOME (job store root, default `~/.talkthrough`), TALKTHROUGH_MAX_DOWNLOAD_BYTES (cap for `process_url` downloads, default 2 GiB). Speaker diarization is included but off per call — agents pass `diarize=true` (plus `num_speakers` when known). URL ingestion is the only tool that uses the network: `process_url(url)` downloads one public video/audio URL once (YouTube needs the `[url]` extra carried by this config); the minimal server without the diarization engine and without YouTube support is `uvx --python ">=3.11,<3.14" talkthrough-mcp`.
 
 Verify: the client should list 9 tools (process_media, process_url, get_transcript, get_frames, get_moment, search, label_speakers, extract_frame, list_jobs). A `list_jobs` call returning an empty list is a healthy first run.
