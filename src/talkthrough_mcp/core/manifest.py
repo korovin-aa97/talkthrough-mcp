@@ -27,6 +27,48 @@ FRAMES_DIR_NAME = "frames"
 
 
 @dataclass(frozen=True)
+class MediaOrigin:
+    """Where a managed source came from — bounded, secret-free provider facts.
+
+    The raw URL is never stored: only a one-way hash of the exact input
+    (``url_sha256``, for the URL index), the public provider id or host, and
+    provider publication time kept deliberately apart from ``wall_clock``
+    (an upload date is not a recording start).
+    """
+
+    kind: str  # "youtube" | "direct_url"
+    provider: str  # "youtube" | the direct host
+    url_sha256: str
+    provider_id: str | None = None
+    host: str | None = None
+    title: str | None = None
+    published_at: str | None = None
+    downloader: str | None = None
+    downloaded_bytes: int | None = None
+    downloaded_at: str | None = None
+
+    def to_dict(self) -> dict[str, Any]:
+        return {key: value for key, value in asdict(self).items() if value is not None}
+
+    @staticmethod
+    def from_dict(payload: object) -> MediaOrigin | None:
+        if not isinstance(payload, dict):
+            return None
+        known = known_fields(MediaOrigin, payload)
+        if not isinstance(known.get("kind"), str) or not isinstance(known.get("provider"), str):
+            return None
+        if not isinstance(known.get("url_sha256"), str):
+            return None
+        for key in ("provider_id", "host", "title", "published_at", "downloader", "downloaded_at"):
+            if key in known and known[key] is not None and not isinstance(known[key], str):
+                known[key] = str(known[key])
+        size = known.get("downloaded_bytes")
+        if size is not None and (isinstance(size, bool) or not isinstance(size, int) or size < 0):
+            known["downloaded_bytes"] = None
+        return MediaOrigin(**known)
+
+
+@dataclass(frozen=True)
 class MediaMeta:
     path: str
     filename: str
@@ -38,6 +80,12 @@ class MediaMeta:
     video_codec: str
     has_audio: bool
     has_video: bool
+    # Additive (0.4.0): a source Talkthrough downloaded itself lives inside the
+    # job directory at ``managed_source`` (relative path) and carries its
+    # ``origin``; both stay absent on local-file jobs so older manifests and
+    # non-URL jobs serialize byte-identically.
+    origin: MediaOrigin | None = None
+    managed_source: str | None = None
 
 
 @dataclass
@@ -92,8 +140,15 @@ class Manifest:
     def to_dict(self) -> dict[str, Any]:
         payload = asdict(self)
         payload["wall_clock"] = self.wall_clock.to_dict() if self.wall_clock else None
-        # Additive diarization fields never serialize as null: non-diarized
-        # manifests stay byte-identical to the ones 0.1.x wrote.
+        # Additive media/diarization fields never serialize as null: local-file
+        # and non-diarized manifests stay byte-identical to the ones 0.1.x wrote.
+        media_payload = payload["media"]
+        if self.media.origin is None:
+            del media_payload["origin"]
+        else:
+            media_payload["origin"] = self.media.origin.to_dict()
+        if self.media.managed_source is None:
+            del media_payload["managed_source"]
         transcript_payload = payload["transcript"]
         for segment_payload in transcript_payload["segments"]:
             if segment_payload.get("speaker") is None:
@@ -116,7 +171,11 @@ class Manifest:
     def from_dict(payload: dict[str, Any]) -> Manifest:
         # known_fields() everywhere: unknown keys from NEWER package versions
         # are ignored instead of raising TypeError (additive-schema tolerance).
-        media = MediaMeta(**known_fields(MediaMeta, payload["media"]))
+        media_raw = known_fields(MediaMeta, payload["media"])
+        media_raw["origin"] = MediaOrigin.from_dict(media_raw.get("origin"))
+        managed = media_raw.get("managed_source")
+        media_raw["managed_source"] = managed if isinstance(managed, str) and managed else None
+        media = MediaMeta(**media_raw)
         transcript_raw = dict(payload["transcript"])
         transcript_raw["segments"] = [
             SttSegment(**known_fields(SttSegment, segment))
