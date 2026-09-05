@@ -297,9 +297,48 @@ diarization run. Correct the environment and retry the amend.
 The same atomic contract covers a full `force=true` rebuild. If the stored job
 has active or pending speaker identities, the rebuild must explicitly resolve
 `diarize=true`; omitting or disabling diarization is rejected before probing or
-staging. On success every previous identity becomes pending-review evidence
+staging (the refusal counts the saved and pending-review identities it
+protects). On success every previous identity becomes pending-review evidence
 against the fresh roster. A transcription, diarization, frame/OCR, validation,
 or commit failure leaves the previous manifest and frames readable.
+
+## A rebuild was interrupted (kill, power loss) and frames look wrong
+
+A rebuild publishes in three renames — previous keyframes aside, new
+keyframes in, new manifest in. A hard kill between the last two leaves the
+old manifest indexing keyframes that are no longer on disk. Since 0.4.0 that
+state is repaired automatically the next time the job is locked: the next
+`process_media` call on the file, `label_speakers` on the job, or
+`talkthrough-mcp gc` finishes the publication when the staged rebuild is
+intact (`rolled_forward`) or restores the previous keyframes otherwise
+(`rolled_back`), and the response says so in `recovery_note`. Nothing
+needs to be deleted by hand, and `gc` never treats such a workspace as
+litter.
+
+Keyframe files that went missing for any other reason (a manual deletion,
+a sync client) are reported instead of hidden: `process_media` answers with
+`integrity_note` and `frames.missing_files`, and `get_frames` / `get_moment`
+skip the missing files and carry `missing_frame_count`. Re-run
+`process_media(path, force=true)` (plus `diarize=true` when the job has
+speaker identities) to rebuild.
+
+## `manifest.json` is unreadable (hand edit, sync conflict, corruption)
+
+Since 0.4.0 `process_media` on that file — with or without `force=true` —
+rebuilds the job from the source and keeps the unreadable file as
+`manifest.json.damaged-<timestamp>` inside the job directory; the response
+carries `manifest_recovery_note`. Identities saved in the damaged file are
+not carried over automatically: inspect the backup and re-save them with
+`label_speakers`. Deleting the job directory is never required.
+
+## A forced rebuild fails the disk preflight
+
+A forced rebuild of a video job keeps the previous keyframes on disk until
+the new manifest is published, so the job directory temporarily peaks at
+roughly twice the size of its `frames/` directory (plus the temporary
+audio WAV). The preflight refuses up front when free space is below twice
+the media size plus the current `frames/` size, instead of failing halfway
+through the copy; free up space and retry.
 
 ## A legacy video has no OCR name candidates
 
@@ -333,7 +372,8 @@ Everything lives under `~/.talkthrough` (override with `TALKTHROUGH_HOME`):
   bare `uv cache clean` clears the entire uv cache. Both can force package or
   tool-environment downloads again, so use them only for deliberate repair.
 - `talkthrough-mcp gc --keep-days 30` cleans Talkthrough jobs and abandoned
-  job staging; it does not clean uv environments, Python installs, or models.
+  job staging (and first repairs any interrupted rebuild it finds); it does
+  not clean uv environments, Python installs, or models.
 
 Nothing is written anywhere else, and there is no telemetry to opt out of.
 
