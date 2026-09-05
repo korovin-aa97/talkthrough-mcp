@@ -31,6 +31,16 @@ environments. Set `SSL_CERT_FILE` before either uv setup or the first media
 processing on a TLS-inspecting corporate network: managed Python, package,
 static-ffmpeg, and model downloads all need the trusted CA.
 
+Stage 1 can outlast the MCP client's start-up timeout: Claude Code waits
+30 s for a server to answer, and a cold `[diarization,url]` environment
+(onnxruntime, opencv, Deno, yt-dlp, …) took 77 s to assemble on a fast
+connection in our release runs. The client then lists the server as
+*failed* although nothing is broken — uv keeps everything it already
+fetched, so reconnect (`/mcp` → reconnect, or restart the client) and the
+second start is immediate. To avoid the false start entirely, warm the
+environment once from a shell with the exact launcher the config uses,
+e.g. `uvx --python ">=3.11,<3.14" "talkthrough-mcp[diarization,url]==0.4.0" --help`.
+
 A second run in the same warm environment does not redownload dependencies.
 Warm processing is network-free and reuses model caches; re-processing the
 same file returns instantly from the content-addressed job store. On an
