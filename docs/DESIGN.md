@@ -38,10 +38,12 @@ exact instants.
 
 | Module | Responsibility |
 |---|---|
-| `server.py` | MCPServer app: 8 tools, 6 prompts, progress, MCP error mapping |
+| `server.py` | MCPServer app: 9 tools (8 local + `process_url`), 6 prompts, progress, MCP error mapping |
 | `guidance.py` | Tool descriptions (10-15 examples each) + prompt templates; unit-gated |
-| `cli.py` | `serve` (default) / `process` / `gc` |
+| `cli.py` | `serve` (default) / `process` / `process-url` / `gc` |
 | `core/pipeline.py` | Orchestrates stages, caps, progress callbacks, summary |
+| `core/url_ingest.py` | The network boundary's control plane: URL classification, redaction, the destination gate (public addresses only), the URL index, managed-source install, `process_url` orchestration |
+| `core/url_download.py` | The two downloaders: direct HTTPS via httpx pinned to the checked address; YouTube via `yt-dlp` with an allowlisted option set (`[url]` extra) |
 | `core/ffmpeg.py` | Binary ladder: system ffmpeg → `static-ffmpeg` auto-download |
 | `core/probe.py` | ffprobe → `MediaInfo` (streams, duration, container tags) |
 | `core/wallclock.py` | The resolver ladder + `t_wall` rendering |
@@ -58,13 +60,16 @@ exact instants.
 
 ```
 ~/.talkthrough/                  (TALKTHROUGH_HOME overrides)
-└── jobs/<sha256(file)[:16]>/
-    ├── manifest.json
-    ├── manifest.json.damaged-<ts>   (an unreadable manifest a rebuild set aside)
-    ├── frames/t<ms 8-digit>.jpg
-    ├── extracts/…               (extract_frame outputs)
-    ├── .reprocess-<id>/         (hidden rebuild workspace, gone after commit)
-    └── job.lock
+├── jobs/<sha256(file)[:16]>/
+│   ├── manifest.json
+│   ├── manifest.json.damaged-<ts>   (an unreadable manifest a rebuild set aside)
+│   ├── frames/t<ms 8-digit>.jpg
+│   ├── source/<youtube-<id>|direct-<hash12>>.<ext>   (URL jobs: the kept download)
+│   ├── extracts/…               (extract_frame outputs)
+│   ├── .reprocess-<id>/         (hidden rebuild workspace, gone after commit)
+│   └── job.lock
+├── urls/<sha256(key)[:32]>.json (URL index: key → job_id; no raw URL)
+└── downloads/.dl-<random>/      (private download staging, gone after install)
 ```
 
 Content addressing makes renames/moves free and `process_media` idempotent:
@@ -89,6 +94,39 @@ rebuild keeps it as `manifest.json.damaged-<ts>` and says so in
 current `frames/` size on top of twice the media size, because the previous
 keyframes stay on disk until the commit.
 
+## Network boundary (`process_url`, 0.4.0)
+
+Everything above is network-free after one-time model downloads. The one
+exception is deliberate and isolated in two modules:
+
+```
+process_url(url)
+  → classify (one YouTube video | one https:// media file; playlists,
+    channels, credentials, non-443 ports, http://, file:// refused)
+  → URL index hit and refresh=false → the stored job, zero network
+  → destination gate: every DNS answer must be a public address
+  → download into ~/.talkthrough/downloads/.dl-*/ under caps:
+      bytes (TALKTHROUGH_MAX_DOWNLOAD_BYTES), duration (provider metadata,
+      then ffprobe), free disk, redirects (≤5, each hop re-validated),
+      wall time — direct: httpx pinned to the checked address (SNI + Host
+      carry the name); YouTube: yt-dlp with an allowlisted option set
+  → ffprobe verification → sha256 → jobs/<id>/source/<talkthrough name>
+  → the ordinary pipeline (mtime wall-clock rung disabled: a download time
+    is not a recording time; the provider's publication time is stored
+    apart from wall_clock)
+  → URL index entry (hashed key → job_id) → the ordinary retrieval tools
+```
+
+Design rules: job ids stay content hashes (two URLs with the same bytes, or
+a local file processed earlier, converge on one job — the manifest gains
+`media.origin` and `media.managed_source` additively); the raw URL, its
+query and userinfo never reach a manifest, the index, a log line, a progress
+message or an error (`url_ingest.redact` is the single choke point and a
+canary test pins it); `extract_frame` decodes the kept source, so URL jobs
+never need the network again; `gc` deletes the source with its job and
+drops index entries whose job is gone. Same-URL calls serialize on a URL
+lock so a second caller finds the mapping instead of downloading twice.
+
 ## Manifest schema (`talkthrough-manifest/v1`)
 
 ```jsonc
@@ -98,7 +136,12 @@ keyframes stay on disk until the commit.
   "created_at": "2026-07-10T19:32:11+00:00",
   "media": { "path", "filename", "kind": "video|audio", "duration_s",
              "size_bytes", "width", "height", "video_codec",
-             "has_audio", "has_video" },
+             "has_audio", "has_video",
+             "origin"?: { "kind": "youtube|direct_url", "provider",
+                          "url_sha256", "provider_id"?, "host"?, "title"?,
+                          "published_at"?, "downloader"?,
+                          "downloaded_bytes"?, "downloaded_at"? },
+             "managed_source"?: "source/youtube-<id>.mp4" },
   "wall_clock": { "start_utc", "tz_offset_min", "source", "confidence" } | null,
   "transcript": { "available", "reason", "language", "model",
                   "segments": [{ "seq", "t0_ms", "t1_ms", "text", "speaker"?,
@@ -209,7 +252,11 @@ Models use tools far better when the server ships usage guidance:
   ladder (incl. captured ffprobe JSON), dHash pairs, manifest round-trip,
   SRT, job hashing/gc, the guidance quality gate, diarization attribution
   math + model-cache resolver (faked downloads) + the diarize request
-  matrix.
+  matrix; URL ingestion without a network — the classification matrix, the
+  destination gate against a fake resolver, redirect/cap/redaction cases
+  over an `httpx.MockTransport`, a stub `yt_dlp` module, and the whole
+  `process_url` flow (index reuse, refresh, content convergence, concurrent
+  calls, failure cleanup) with a stub downloader on the real pipeline.
 - **integration** — real ffmpeg + whisper `tiny` + RapidOCR over committed
   synthetic fixtures (3-scene screencast with known `creation_time`;
   audio-only meeting; two-voice meeting for diarization — always with an
