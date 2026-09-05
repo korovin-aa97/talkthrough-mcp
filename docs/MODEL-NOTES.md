@@ -1,7 +1,52 @@
-# Model compatibility notes — talkthrough-mcp v0.3.0
+# Model compatibility notes — talkthrough-mcp
 
-*Snapshot: August 2026. This is a reproducible local corpus cut, not a
-leaderboard; provider models can drift after the snapshot.*
+*Snapshots: v0.4.0 behaviour cells (September 2026) and the v0.3.0 full
+grid (August 2026). Reproducible local corpus cuts, not a leaderboard;
+provider models can drift after a snapshot.*
+
+## v0.4.0 behaviour cells (2026-09-05)
+
+Same six runner configurations, eleven mechanical cells, 61 runner×cell
+pairs (Opus ran the six network/recovery cells). Every latest attempt
+passes; direct spend $3.24 of the $60 cap. Wall time is the whole agent
+run including the download and the local pipeline.
+
+| cell | haiku | sonnet | opus | gpt-5.5 medium | gpt-5.5 high | gpt-5.4-mini |
+|---|---|---|---|---|---|---|
+| URL-DEMO — YouTube link, quote with timestamps, name the tool | ✅ 80 s | ✅ 73 s | ✅ 79 s | ✅ 74 s | ✅ 100 s | ✅ 76 s |
+| URL-REUSE — same video by another URL form, say it was not re-downloaded | ✅ 21 s | ✅ 26 s | — | ✅ 23 s | ✅ 37 s | ✅ 22 s |
+| URL-PLAYLIST — playlist refused, explain what to pass instead | ✅ 10 s | ✅ 14 s | — | ✅ 24 s | ✅ 28 s | ✅ 13 s |
+| URL-LOCALPATH — local path stays with process_media | ✅ 24 s | ✅ 32 s | — | ✅ 37 s | ✅ 36 s | ✅ 23 s |
+| URL-WALLCLOCK — URL job has no wall clock; ask for recorded_at | ✅ 17 s | ✅ 16 s | ✅ 30 s | ✅ 23 s | ✅ 34 s | ✅ 26 s |
+| URL-EXTRACT — extract_frame from the kept source, no network | ✅ 12 s | ✅ 10 s | — | ✅ 15 s | ✅ 17 s | ✅ 20 s |
+| SITE-TIKTOK — public TikTok page, quotes + origin.provider | ✅ 39 s | ✅ 45 s | ✅ 54 s | ✅ 50 s | ✅ 63 s | ✅ 50 s |
+| SITE-INSTAGRAM — public reel without speech: say so, read the frames | ✅ 78 s | ✅ 98 s | ✅ 147 s | ✅ 101 s | ✅ 109 s | ✅ 92 s |
+| FIX-MISSING-FRAMES — integrity note surfaces, no invented frames | ✅ 17 s | ✅ 9 s | — | ✅ 23 s | ✅ 25 s | ✅ 22 s |
+| FIX-DAMAGED — damaged manifest rebuilt, backup noted honestly | ✅ 55 s | ✅ 59 s | ✅ 67 s | ✅ 55 s | ✅ 60 s | ✅ 61 s |
+| FIX-CHROME — UI chrome never offered as a speaker name | ✅ 23 s | ✅ 32 s | ✅ 41 s | ✅ 36 s | ✅ 46 s | ✅ 23 s |
+
+What the first attempts taught (each fixed, then re-run per the release
+method):
+
+- **Codex cancels open-world tools by default.** `codex exec` with the
+  default approval policy cancelled `process_url` on all three Codex
+  runners — the honest `open_world_hint=true` annotation working as
+  designed. The documented per-tool key
+  (`[mcp_servers.talkthrough.tools.process_url] approval_mode = "approve"`)
+  fixes it; the generated Codex config and TROUBLESHOOTING carry it.
+- **Haiku and Sonnet did not ask for `recorded_at`** on a URL job whose
+  wall clock is unknown; the server now says so itself
+  (`list_jobs.wall_clock_note`, `process_url.wall_clock_note`), after
+  which both pass.
+- **gpt-5.4-mini** described the speechless reel correctly ("транскрипт
+  пустой, речи не распознано") in words the scorer did not expect; the
+  scorer was widened, the run was not repeated.
+
+No old-server (0.3.2) control was needed: every mechanical zero was either
+a client policy artifact or a URL cell that 0.3.2 cannot run, and all
+recovery/name cells passed on the first attempt.
+
+# v0.3.0 full grid (August 2026)
 
 ## Method
 

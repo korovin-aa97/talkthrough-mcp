@@ -707,7 +707,13 @@ mobile screencasts, ops incidents, meetings, any file — with no account, and
 correlates with *server-side* logs via wall-clock time.
 
 **Which agent model do I need to drive this?**
-For v0.3.0 we ran 210 isolated agent cells across 6 model configs (Claude
+For v0.4.0 the six model configs below ran 61 isolated behaviour cells on
+URL ingestion (YouTube, a TikTok page, a speechless Instagram reel,
+playlist refusal, the missing wall clock) and the 0.3.2 integrity fixes;
+every cell passes on every runner after two product fixes the first
+attempts exposed (Codex needs a per-tool approval for the open-world
+`process_url`, and the server now says itself when a URL job has no wall
+clock). For v0.3.0 we ran 210 isolated agent cells across 6 model configs (Claude
 haiku/sonnet/opus, Codex gpt-5.5 at two reasoning efforts, and gpt-5.4-mini)
 and 35 logical scenarios on 5 real recordings plus safety and speaker-label
 fixtures. All 102 LLM-judged full-grid results and every mechanical zero were
