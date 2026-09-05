@@ -76,6 +76,52 @@ jobs:
           TALKTHROUGH_HOME: ${{ github.workspace }}/.talkthrough-py313
         run: uv run --python 3.13 talkthrough-mcp process tests/fixtures/talkthrough-demo.mp4
 
+  # Clean-install proof for the [url] extra (0.4.0): the built wheel installs
+  # with [diarization,url] from PyPI resolution alone on every OS, the
+  # PyPI-distributed Deno runtime is found, the inventory is 9 tools /
+  # 6 prompts, and process-url refuses a playlist without touching the
+  # network. No real download runs in CI.
+  clean-install:
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 25
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    env:
+      PYTHONUTF8: "1"
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
+        with:
+          enable-cache: true
+          python-version: "3.12"
+      - run: uv build
+      - name: Install the wheel with [diarization,url] into a fresh venv
+        shell: bash
+        run: |
+          uv venv clean-venv --python 3.12
+          wheel="$(ls dist/*.whl)"
+          uv pip install --python clean-venv "${wheel}[diarization,url]"
+      - name: Deno and yt-dlp come from PyPI, no system runtime needed
+        shell: bash
+        run: |
+          uv run --no-project --python clean-venv python -c "import yt_dlp, deno, sherpa_onnx; print('yt-dlp', yt_dlp.version.__version__, 'deno', deno.find_deno_bin())"
+      - name: Inventory over stdio is 9 tools / 6 prompts
+        shell: bash
+        run: uv run --no-project --python clean-venv python scripts/check_mcp_inventory.py
+      - name: process-url refuses a playlist URL without network
+        shell: bash
+        run: |
+          set +e
+          uv run --no-project --python clean-venv talkthrough-mcp process-url "https://www.youtube.com/playlist?list=PLxyz" > out.txt 2> err.txt
+          code=$?
+          set -e
+          cat err.txt
+          test "$code" -eq 2
+          grep -q "playlist" err.txt
+          test ! -s out.txt
+
   macos:
     runs-on: macos-latest
     timeout-minutes: 15
