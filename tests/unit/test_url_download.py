@@ -419,7 +419,7 @@ def test_youtube_download_uses_the_allowlisted_options_and_names_the_file(
     assert downloaded.published_at is not None and downloaded.published_at.startswith("2026-0")
     (instance,) = fake_yt_dlp.instances
     options = instance.options
-    assert options["noplaylist"] is True and options["max_downloads"] == 1
+    assert options["noplaylist"] is True and "max_downloads" not in options
     assert options["cookiesfrombrowser"] is None and options["cookiefile"] is None
     assert options["remote_components"] == [] and options["extractor_args"] == {}
     assert options["max_filesize"] == 100_000
