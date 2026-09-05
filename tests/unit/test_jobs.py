@@ -377,3 +377,29 @@ def test_waiter_retakes_the_lock_after_holder_cleans_up(isolated_home: Path) -> 
     for thread in threads:
         thread.join(timeout=30)
     assert order == ["holder-cleaned", "waiter-acquired"]
+
+
+def test_job_lock_is_reentrant_for_the_holding_thread_only(isolated_home: Path) -> None:
+    """URL ingestion installs a source and then runs the pipeline (which takes
+    the same lock) under one acquisition; another thread must still wait."""
+    import threading
+
+    job_id = "c" * 16
+    order: list[str] = []
+    inner_done = threading.Event()
+    with jobs.job_lock(job_id):
+        with jobs.job_lock(job_id):  # re-entry: no second flock, no deadlock
+            order.append("inner")
+        inner_done.set()
+
+        def other() -> None:
+            with jobs.job_lock(job_id, wait_seconds=30):
+                order.append("other")
+
+        thread = threading.Thread(target=other)
+        thread.start()
+        thread.join(timeout=0.5)
+        assert thread.is_alive(), "another thread must block while the lock is held"
+        order.append("release")
+    thread.join(timeout=30)
+    assert order == ["inner", "release", "other"]

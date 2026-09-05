@@ -212,29 +212,33 @@ class Manifest:
         )
 
 
-def save_manifest(manifest: Manifest, job_dir: Path) -> Path:
-    """Atomically replace the durable manifest from a same-directory temp file."""
-    path = job_dir / MANIFEST_NAME
-    job_dir.mkdir(parents=True, exist_ok=True)
-    encoded = _encode_manifest(manifest)
+def atomic_write_text(path: Path, text: str) -> None:
+    """Replace ``path`` atomically from a same-directory temp file (fsynced)."""
+    path.parent.mkdir(parents=True, exist_ok=True)
     temp_path: Path | None = None
     try:
         with tempfile.NamedTemporaryFile(
             mode="w",
             encoding="utf-8",
-            dir=job_dir,
-            prefix=f".{MANIFEST_NAME}.",
+            dir=path.parent,
+            prefix=f".{path.name}.",
             suffix=".tmp",
             delete=False,
         ) as handle:
             temp_path = Path(handle.name)
-            handle.write(encoded)
+            handle.write(text)
             handle.flush()
             os.fsync(handle.fileno())
         os.replace(temp_path, path)
     finally:
         if temp_path is not None:
             temp_path.unlink(missing_ok=True)
+
+
+def save_manifest(manifest: Manifest, job_dir: Path) -> Path:
+    """Atomically replace the durable manifest from a same-directory temp file."""
+    path = job_dir / MANIFEST_NAME
+    atomic_write_text(path, _encode_manifest(manifest))
     return path
 
 
