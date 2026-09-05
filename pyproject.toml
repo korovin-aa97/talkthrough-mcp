@@ -47,6 +47,13 @@ dependencies = [
 # >=1.13.4: 1.13.1 fixed a native SIGSEGV in clustering (k2-fsa/sherpa-onnx#3563),
 # 1.13.4 fixed split-package metadata under uv (#3690) — we install via uvx.
 diarization = ["sherpa-onnx>=1.13.4"]
+# URL ingestion (process_url). yt-dlp's [default] extra carries yt-dlp-ejs,
+# the bundled JavaScript components YouTube extraction needs, and [deno]
+# pulls the Deno runtime from PyPI so one install command is enough — no
+# system JavaScript runtime, no manual downloader install. 2026.8.19 is the
+# release-tested version. Direct HTTPS media URLs need no extra (httpx is
+# already a dependency of the MCP SDK).
+url = ["yt-dlp[default,deno]>=2026.8.19"]
 
 # sherpa-onnx 1.13.4's *sdist* PKG-INFO (Metadata-Version 2.1) omits its
 # sherpa-onnx-core dependency; uv's universal resolution reads the sdist
@@ -120,6 +127,8 @@ module = [
     "rapidocr.*",
     "rapidocr_onnxruntime.*",
     "sherpa_onnx.*",
+    "yt_dlp.*",
+    "deno.*",
 ]
 ignore_missing_imports = true
 
