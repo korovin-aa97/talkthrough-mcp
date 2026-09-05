@@ -476,8 +476,8 @@ def build_mcp_configs() -> dict[str, str]:
                     "talkthrough-dev": {
                         "command": "uv",
                         "args": [
-                            "run", "--extra", "diarization", "--directory", ".",
-                            "talkthrough-mcp",
+                            "run", "--extra", "diarization", "--extra", "url",
+                            "--directory", ".", "talkthrough-mcp",
                         ],
                     }
                 }

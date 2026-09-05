@@ -13,7 +13,7 @@ machine — keep it that way.
 ## Commands
 
 ```bash
-uv sync                        # env (python pinned via .python-version)
+uv sync --extra diarization --extra url   # env (python pinned via .python-version)
 uv run pytest tests/unit -q    # fast suite — run on every change
 uv run pytest -q               # full suite (downloads whisper tiny once)
 uv run ruff check              # lint (must be clean)

@@ -35,7 +35,7 @@ jobs:
           path: ~/.cache/talkthrough-test-models
           # v2: default embedding model switched to nemo_en_titanet_small
           key: ${{ runner.os }}-diarize-models-v2
-      - run: uv sync --frozen --extra diarization
+      - run: uv sync --frozen --extra diarization --extra url
       - run: uv run ruff check
       - run: uv run mypy src
       - run: uv run pytest tests/unit -q

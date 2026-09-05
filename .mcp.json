@@ -6,6 +6,8 @@
         "run",
         "--extra",
         "diarization",
+        "--extra",
+        "url",
         "--directory",
         ".",
         "talkthrough-mcp"
