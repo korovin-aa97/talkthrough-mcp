@@ -947,3 +947,33 @@ def test_provider_ids_are_bounded_and_filename_safe() -> None:
     assert "/" not in weird and " " not in weird and len(weird) <= 60
     assert safe_provider("Vimeo") == "vimeo" and safe_provider("Generic") == "generic"
     assert safe_provider(None) == "site"
+
+
+def test_extractor_stack_crashes_are_explained_and_redacted(
+    fake_yt_dlp: type[_FakeYoutubeDL], tmp_path: Path
+) -> None:
+    """yt-dlp's TED extractor raised a bare TypeError on a changed page (release
+    QA, F-05): the user gets the exception name, its first line, and what to do."""
+    from talkthrough_mcp.core.url_download import download_site
+
+    fake_yt_dlp.fail_with = TypeError(
+        "the JSON object must be str, bytes or bytearray, not NoneType"
+    )
+    with pytest.raises(DownloadError) as info:
+        download_site(
+            classify_url("https://www.ted.com/talks/candace_parker?tok=SECRET-TOKEN-4242"),
+            tmp_path, max_bytes=100_000, max_seconds=7200, report=lambda *a: None,
+        )
+    message = str(info.value)
+    assert message.startswith("the page reader failed on https://www.ted.com/…")
+    assert "TypeError: the JSON object must be str" in message
+    assert "SECRET-TOKEN" not in message and "candace" not in message
+    assert "refresh the tool environment" in message and "direct link" in message
+    assert list(tmp_path.iterdir()) == []
+
+    fake_yt_dlp.fail_with = TypeError("'NoneType' object is not subscriptable")
+    with pytest.raises(DownloadError, match="page reader failed on YouTube video nHfGfEiVdE8"):
+        download_youtube(
+            classify_url("https://youtu.be/nHfGfEiVdE8"), tmp_path, max_bytes=100_000,
+            max_seconds=7200, report=lambda *a: None,
+        )
