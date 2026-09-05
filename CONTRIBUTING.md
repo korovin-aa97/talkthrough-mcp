@@ -8,7 +8,7 @@ agent-friendly — contributions that keep it that way are very welcome.
 ```bash
 git clone https://github.com/korovin-aa97/talkthrough-mcp
 cd talkthrough-mcp
-uv sync                       # creates .venv with pinned deps (py 3.12)
+uv sync --extra diarization --extra url   # creates .venv with pinned deps (py 3.12)
 uv run pytest tests/unit -q   # fast suite, no downloads
 ```
 
