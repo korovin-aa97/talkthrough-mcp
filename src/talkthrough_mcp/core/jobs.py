@@ -17,7 +17,7 @@ import threading
 import time
 from collections.abc import Iterator
 from contextlib import contextmanager
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
@@ -35,6 +35,10 @@ PARTIAL_SWEEP_MIN_AGE_S = 24 * 3600.0
 REPROCESS_PREFIX = ".reprocess-"
 REPROCESS_BACKUP_FRAMES = "previous-frames"
 REPROCESS_FAILED_FRAMES = "failed-new-frames"
+# An unreadable manifest.json is never overwritten in place: a rebuild keeps
+# it beside the fresh one under this suffix so hand-saved identities can still
+# be recovered by a human (0.3.2 external finding F1).
+DAMAGED_MANIFEST_SUFFIX = ".damaged-"
 _PROCESS_LOCKS_GUARD = threading.Lock()
 _PROCESS_LOCKS: dict[str, threading.RLock] = {}
 
@@ -72,6 +76,53 @@ def load_job(job_id: str) -> Manifest:
     if not job_exists(job_id):
         raise UnknownJobError(job_id)
     return load_manifest(job_dir(job_id))
+
+
+def load_previous_job(job_id: str) -> tuple[Manifest | None, str | None]:
+    """Read a stored manifest for a rebuild decision, tolerating damage.
+
+    Returns ``(manifest, None)`` when the file parses, ``(None, reason)`` when
+    a ``manifest.json`` exists but cannot be read (truncated JSON, a hand
+    edit, an empty file), and ``(None, None)`` when no manifest exists. A
+    damaged manifest must neither crash the caller with a bare decoder error
+    nor be mistaken for "no identities to preserve" without saying so.
+    """
+    if not job_exists(job_id):
+        return None, None
+    try:
+        return load_manifest(job_dir(job_id)), None
+    except Exception as exc:  # json.JSONDecodeError, KeyError, ValueError, ...
+        reason = f"{type(exc).__name__}: {exc}"
+        return None, reason[:200]
+
+
+def damaged_manifest_backup_path(job_id: str) -> Path:
+    """A fresh, collision-free name for quarantining an unreadable manifest."""
+    directory = job_dir(job_id)
+    stamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
+    candidate = directory / f"{MANIFEST_NAME}{DAMAGED_MANIFEST_SUFFIX}{stamp}"
+    counter = 1
+    while candidate.exists():
+        candidate = directory / f"{MANIFEST_NAME}{DAMAGED_MANIFEST_SUFFIX}{stamp}-{counter}"
+        counter += 1
+    return candidate
+
+
+def missing_frame_files(manifest: Manifest) -> list[str]:
+    """Indexed keyframe files that are absent from the job's ``frames/`` dir.
+
+    One directory listing per call — cheap enough for the read tools. A
+    non-empty result means the stored index and the files on disk disagree
+    (an interrupted rebuild, a manual deletion) and must be surfaced instead
+    of silently serving fewer frames than the index promises.
+    """
+    if not manifest.frames.items:
+        return []
+    try:
+        present = set(os.listdir(frames_dir(manifest.job_id)))
+    except FileNotFoundError:
+        present = set()
+    return [frame.file for frame in manifest.frames.items if frame.file not in present]
 
 
 def has_identity_state(manifest: Manifest) -> bool:
@@ -155,12 +206,21 @@ def _validate_staged_job(job_id: str, staging: Path) -> Manifest:
     return manifest
 
 
-def commit_reprocessed_job(job_id: str, staging: Path) -> Manifest:
+def commit_reprocessed_job(
+    job_id: str, staging: Path, *, damaged_manifest_backup: Path | None = None
+) -> Manifest:
     """Atomically publish a validated staged rebuild, rolling frames back on error.
 
     The caller must hold :func:`job_lock`. The old manifest remains present
     until the last ``os.replace``; catchable failures before that point restore
     the old frames and leave the old manifest authoritative.
+
+    ``damaged_manifest_backup`` names where an UNREADABLE live manifest is
+    moved right before the new one is published, so a rebuild of a damaged job
+    never destroys the only copy of whatever that file still holds. If the
+    publication then fails, the damaged file is moved back so the job keeps
+    its "has a manifest" shape (which is what protects it from partial-dir
+    cleanup).
     """
     manifest = _validate_staged_job(job_id, staging)
     directory = job_dir(job_id)
@@ -172,6 +232,7 @@ def commit_reprocessed_job(job_id: str, staging: Path) -> Manifest:
     failed_frames = staging / REPROCESS_FAILED_FRAMES
     old_frames_moved = False
     new_frames_moved = False
+    damaged_moved = False
     manifest_replaced = False
     try:
         if live_frames.exists():
@@ -180,11 +241,16 @@ def commit_reprocessed_job(job_id: str, staging: Path) -> Manifest:
         if staged_frames.exists():
             os.replace(staged_frames, live_frames)
             new_frames_moved = True
+        if damaged_manifest_backup is not None and live_manifest.exists():
+            os.replace(live_manifest, damaged_manifest_backup)
+            damaged_moved = True
         os.replace(staged_manifest, live_manifest)
         manifest_replaced = True
     except BaseException as exc:
         if not manifest_replaced:
             try:
+                if damaged_moved and damaged_manifest_backup is not None:
+                    os.replace(damaged_manifest_backup, live_manifest)
                 if new_frames_moved and live_frames.exists():
                     os.replace(live_frames, failed_frames)
                 if old_frames_moved and backup_frames.exists():
@@ -202,6 +268,116 @@ def commit_reprocessed_job(job_id: str, staging: Path) -> Manifest:
             ) from exc
         raise
     return manifest
+
+
+@dataclass(frozen=True)
+class ReprocessRecovery:
+    """One interrupted rebuild that was finished or undone on lock acquisition.
+
+    ``action`` is ``"rolled_forward"`` (the staged rebuild was published),
+    ``"rolled_back"`` (the previous frames were restored) or ``"removed"``
+    (the commit had already completed; only its backup was left behind).
+    """
+
+    staging: str
+    action: str
+
+
+def _frames_present(manifest: Manifest, frames_directory: Path) -> bool:
+    try:
+        present = set(os.listdir(frames_directory))
+    except FileNotFoundError:
+        present = set()
+    return all(frame.file in present for frame in manifest.frames.items)
+
+
+def _recover_one_staging(job_id: str, staging: Path) -> str | None:
+    """Finish or undo one commit that a hard kill interrupted mid-sequence.
+
+    ``commit_reprocessed_job`` renames in three steps — live frames → backup,
+    staged frames → live, staged manifest → live. A backup directory inside
+    the workspace proves the sequence had started, which is the one state the
+    ordinary "abandoned workspace" sweep must never treat as litter: the live
+    job is inconsistent until the sequence is either completed or reversed.
+    Both halves of the answer sit in the workspace (0.3.2 external finding
+    F2). Returns the action taken, or None for a workspace whose commit never
+    began (a plain abandoned build, left for the age-based gc sweep).
+    """
+    directory = job_dir(job_id)
+    live_manifest = directory / MANIFEST_NAME
+    live_frames = directory / FRAMES_DIR_NAME
+    staged_manifest = staging / MANIFEST_NAME
+    staged_frames = staging / FRAMES_DIR_NAME
+    backup_frames = staging / REPROCESS_BACKUP_FRAMES
+    if not backup_frames.is_dir():
+        return None
+    staged: Manifest | None = None
+    if staged_manifest.is_file():
+        try:
+            staged = load_manifest(staging)
+        except Exception as exc:
+            logger.warning("interrupted rebuild %s/%s: staged manifest unreadable: %s",
+                           job_id, staging.name, exc)
+            staged = None
+        if staged is not None and staged.job_id != job_id:
+            staged = None
+    if staged is not None:
+        if _frames_present(staged, live_frames):
+            # Steps 1 and 2 completed; only the manifest publication is missing.
+            os.replace(staged_manifest, live_manifest)
+            shutil.rmtree(staging, ignore_errors=True)
+            return "rolled_forward"
+        if (
+            staged_frames.is_dir()
+            and not live_frames.exists()
+            and _frames_present(staged, staged_frames)
+        ):
+            # Step 1 completed, step 2 did not: finish the sequence.
+            os.replace(staged_frames, live_frames)
+            os.replace(staged_manifest, live_manifest)
+            shutil.rmtree(staging, ignore_errors=True)
+            return "rolled_forward"
+    if not staged_manifest.exists() and not staged_frames.exists() and live_manifest.is_file():
+        # The whole sequence completed; the kill landed before the workspace
+        # was removed. Nothing to restore — the backup is the old frame set.
+        shutil.rmtree(staging, ignore_errors=True)
+        return "removed"
+    # The staged rebuild cannot be published: put the previous frames back so
+    # the (still old) live manifest is consistent again.
+    failed_frames = staging / REPROCESS_FAILED_FRAMES
+    if live_frames.exists():
+        shutil.rmtree(failed_frames, ignore_errors=True)
+        os.replace(live_frames, failed_frames)
+    os.replace(backup_frames, live_frames)
+    shutil.rmtree(staging, ignore_errors=True)
+    return "rolled_back"
+
+
+def recover_interrupted_reprocess(job_id: str) -> list[ReprocessRecovery]:
+    """Repair every interrupted rebuild of one job. Call under :func:`job_lock`.
+
+    Holding the lock guarantees no rebuild is in flight, so any workspace
+    whose commit had started is by definition an interrupted one. Workspaces
+    whose commit never began are left to the age-based gc sweep.
+    """
+    directory = job_dir(job_id)
+    if not directory.is_dir():
+        return []
+    recovered: list[ReprocessRecovery] = []
+    for staging in sorted(directory.glob(f"{REPROCESS_PREFIX}*")):
+        if not staging.is_dir():
+            continue
+        try:
+            action = _recover_one_staging(job_id, staging)
+        except OSError as exc:
+            logger.warning(
+                "could not recover interrupted rebuild %s/%s: %s", job_id, staging.name, exc
+            )
+            continue
+        if action is not None:
+            logger.warning("interrupted rebuild %s/%s: %s", job_id, staging.name, action)
+            recovered.append(ReprocessRecovery(f"{job_id}/{staging.name}", action))
+    return recovered
 
 
 @contextmanager
@@ -374,6 +550,9 @@ class GcResult:
 
     removed: list[str]
     swept: list[str]
+    # Interrupted rebuild commits finished or undone before any sweep — a
+    # workspace holding the previous frames is never plain litter.
+    recovered: list[ReprocessRecovery] = field(default_factory=list)
 
 
 def _sweep_partial_dirs(min_age_s: float = PARTIAL_SWEEP_MIN_AGE_S) -> list[str]:
@@ -414,13 +593,23 @@ def _sweep_partial_dirs(min_age_s: float = PARTIAL_SWEEP_MIN_AGE_S) -> list[str]
     return swept
 
 
-def _sweep_reprocess_dirs(min_age_s: float = PARTIAL_SWEEP_MIN_AGE_S) -> list[str]:
-    """Remove abandoned hidden rebuild workspaces without touching live runs."""
+def _sweep_reprocess_dirs(
+    min_age_s: float = PARTIAL_SWEEP_MIN_AGE_S,
+) -> tuple[list[str], list[ReprocessRecovery]]:
+    """Repair interrupted rebuilds, then remove abandoned workspaces.
+
+    Recovery is age-independent: a workspace holding ``previous-frames`` means
+    a commit was interrupted and the live job is inconsistent right now.
+    Plain abandoned build workspaces keep the age rule — a young one may be a
+    run that just lost the lock race, and the lock probe below skips live
+    runs entirely.
+    """
     root = jobs_root()
     if not root.is_dir():
-        return []
+        return [], []
     now = time.time()
     swept: list[str] = []
+    recovered: list[ReprocessRecovery] = []
     for directory in root.iterdir():
         if not directory.is_dir():
             continue
@@ -428,14 +617,25 @@ def _sweep_reprocess_dirs(min_age_s: float = PARTIAL_SWEEP_MIN_AGE_S) -> list[st
             if not staging.is_dir():
                 continue
             try:
-                if now - staging.stat().st_mtime < min_age_s:
-                    continue
-            except OSError:
-                continue
-            try:
                 with job_lock(directory.name, wait_seconds=0):
                     if not staging.is_dir():
                         continue
+                    if (staging / REPROCESS_BACKUP_FRAMES).is_dir():
+                        try:
+                            action = _recover_one_staging(directory.name, staging)
+                        except OSError as exc:
+                            logger.warning(
+                                "could not recover interrupted rebuild %s/%s: %s",
+                                directory.name,
+                                staging.name,
+                                exc,
+                            )
+                            continue
+                        if action is not None:
+                            recovered.append(
+                                ReprocessRecovery(f"{directory.name}/{staging.name}", action)
+                            )
+                            continue
                     try:
                         if now - staging.stat().st_mtime < min_age_s:
                             continue
@@ -449,7 +649,7 @@ def _sweep_reprocess_dirs(min_age_s: float = PARTIAL_SWEEP_MIN_AGE_S) -> list[st
                     directory.name,
                     staging.name,
                 )
-    return swept
+    return swept, recovered
 
 
 def gc(keep_days: int) -> GcResult:
@@ -469,7 +669,9 @@ def gc(keep_days: int) -> GcResult:
         if created < cutoff:
             delete_job(manifest.job_id)
             removed.append(manifest.job_id)
+    swept_reprocess, recovered = _sweep_reprocess_dirs()
     return GcResult(
         removed=removed,
-        swept=[*_sweep_partial_dirs(), *_sweep_reprocess_dirs()],
+        swept=[*_sweep_partial_dirs(), *swept_reprocess],
+        recovered=recovered,
     )

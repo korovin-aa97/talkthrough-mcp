@@ -96,11 +96,26 @@ mcp = MCPServer(
 
 @contextmanager
 def _tool_errors() -> Iterator[None]:
-    """Translate expected pipeline failures into clean MCP tool errors."""
+    """Translate expected pipeline failures into clean MCP tool errors.
+
+    Unexpected exceptions are wrapped too: the SDK otherwise answers with a
+    bare "Error executing tool …" while the actual reason stays in a stderr
+    the client never reads (0.3.2 external finding F1). The server runs with
+    the user's own privileges on their own files, so the exception text is
+    theirs to see.
+    """
     try:
         yield
     except TalkthroughError as exc:
         raise ToolError(str(exc)) from exc
+    except ToolError:
+        raise
+    except Exception as exc:
+        raise ToolError(
+            f"unexpected {type(exc).__name__}: {exc} — this is an internal error, not "
+            "an input problem; retry once, and if it persists report it with the "
+            "server's stderr log at https://github.com/korovin-aa97/talkthrough-mcp/issues"
+        ) from exc
 
 
 def _load(job_id: str) -> Manifest:
@@ -355,6 +370,8 @@ def get_frames(
             manifest, start_ms, end_ms, count, include_duplicates=include_duplicates
         )
     directory = jobs.frames_dir(job_id)
+    missing = set(jobs.missing_frame_files(manifest))
+    picked = [frame for frame in picked if frame.file not in missing]
     meta = {
         "job_id": job_id,
         "returned": len(picked),
@@ -368,6 +385,10 @@ def get_frames(
     }
     if not picked:
         meta["note"] = "no frames in the requested range — widen it or use at_ms addressing"
+    if missing:
+        # served fewer frames than the index promises → say so, never silently
+        meta["missing_frame_count"] = len(missing)
+        meta["integrity_note"] = pipeline.missing_frames_note(manifest, len(missing))
     content: list[str | Image] = [_json_block(meta)]
     content.extend(Image(path=directory / frame.file) for frame in picked)
     return content
@@ -386,7 +407,9 @@ def get_moment(job_id: str, start_ms: int, end_ms: int) -> list[str | Image]:
     segments = slice_segments(manifest.transcript.segments, start_ms, end_ms)
     picked = []
     fallback_note: str | None = None
+    missing: set[str] = set()
     if manifest.media.has_video:
+        missing = set(jobs.missing_frame_files(manifest))
         picked = frames_in_range(manifest, start_ms, end_ms, MOMENT_MAX_FRAMES)
         if not picked:
             rep = representative_frame(manifest, (start_ms + end_ms) // 2)
@@ -397,6 +420,7 @@ def get_moment(job_id: str, start_ms: int, end_ms: int) -> list[str | Image]:
                     "keyframe representing the on-screen state here (long static "
                     "stretches deduplicate to one keyframe)"
                 )
+        picked = [frame for frame in picked if frame.file not in missing]
     payload: dict[str, Any] = {
         "job_id": job_id,
         "range": {
@@ -431,6 +455,9 @@ def get_moment(job_id: str, start_ms: int, end_ms: int) -> list[str | Image]:
         payload["note"] = "audio-only job: transcript evidence only, no frames exist"
     elif fallback_note:
         payload["note"] = fallback_note
+    if missing:
+        payload["missing_frame_count"] = len(missing)
+        payload["integrity_note"] = pipeline.missing_frames_note(manifest, len(missing))
     directory = jobs.frames_dir(job_id)
     content: list[str | Image] = [_json_block(payload)]
     content.extend(Image(path=directory / frame.file) for frame in picked)
@@ -617,6 +644,9 @@ def label_speakers(
     # authoritative manifest is still re-read only after the lock below.
     _load(job_id)
     with _tool_errors(), jobs.job_lock(job_id), jobs.partial_job_cleanup(job_id):
+        # Holding the lock is the one moment a write path can safely finish
+        # or undo a rebuild commit that a hard kill interrupted.
+        recovered = jobs.recover_interrupted_reprocess(job_id)
         # Re-read only after acquiring the lock: concurrent patches compose
         # instead of overwriting the manifest snapshot seen before the wait.
         manifest = jobs.load_job(job_id)
@@ -630,12 +660,21 @@ def label_speakers(
 
     speakers, hidden = pipeline.roster_payload(diarization, manifest)
     legacy_note = pipeline.legacy_name_candidates_note(manifest)
+    recovery = pipeline.integrity_notes(
+        pipeline.ProcessResult(
+            manifest=manifest,
+            reused=True,
+            elapsed_s=0.0,
+            reprocess_recovered=tuple(f"{item.staging} ({item.action})" for item in recovered),
+        )
+    )
     return {
         "job_id": job_id,
         "mapping_count": len(diarization.speaker_names or {}),
         "speakers": speakers,
         **({"speakers_truncated": hidden} if hidden else {}),
         **({"name_candidates_note": legacy_note} if legacy_note else {}),
+        **recovery,
         **pipeline.pending_review_payload(diarization),
         "note": (
             "names are user/agent-verified labels; raw S<n> identifiers remain canonical "
