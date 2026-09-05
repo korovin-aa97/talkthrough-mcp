@@ -327,9 +327,11 @@ def youtube_options(
     from . import jobs
 
     options: dict[str, Any] = {
+        # One video only. NOT max_downloads: yt-dlp raises MaxDownloadsReached
+        # as a control-flow signal right after the first download, which the
+        # API surfaces as a failure (caught on the real demo, 2026-09-05).
         "noplaylist": True,
         "playlist_items": "1",
-        "max_downloads": 1,
         "quiet": True,
         "no_warnings": False,
         "noprogress": True,
@@ -483,11 +485,16 @@ def download_youtube(
     _disable_yt_dlp_plugins()
     cap_hit: list[str] = []
     started = time.monotonic()
+    # A merged format downloads two files (video, then audio); the cap and
+    # the progress line count bytes across all of them.
+    finished_bytes = 0
 
     def progress_hook(status: dict[str, Any]) -> None:
+        nonlocal finished_bytes
         downloaded = status.get("downloaded_bytes")
         total = status.get("total_bytes") or status.get("total_bytes_estimate")
-        if isinstance(downloaded, (int, float)) and downloaded > max_bytes:
+        current = int(downloaded) if isinstance(downloaded, (int, float)) else 0
+        if finished_bytes + current > max_bytes:
             cap_hit.append("bytes")
             raise DownloadError(
                 f"download exceeded the {max_bytes} byte cap (TALKTHROUGH_MAX_DOWNLOAD_BYTES) "
@@ -496,11 +503,15 @@ def download_youtube(
         if time.monotonic() - started > DOWNLOAD_DEADLINE_S:
             cap_hit.append("time")
             raise DownloadError(f"download exceeded {DOWNLOAD_DEADLINE_S:.0f}s — aborted")
+        if status.get("status") == "finished":
+            finished_bytes += current
+            return
         if status.get("status") == "downloading" and isinstance(downloaded, (int, float)):
             total_int = int(total) if isinstance(total, (int, float)) else None
-            fraction = (downloaded / total_int) if total_int else 0.0
+            fraction = (current / total_int) if total_int else 0.0
             report(
-                f"downloading source: {_mb(int(downloaded))}/{_mb(total_int)} MB",
+                f"downloading source: {_mb(finished_bytes + current)}"
+                f"/{_mb(finished_bytes + total_int if total_int else None)} MB",
                 0.05 + 0.08 * min(1.0, fraction),
             )
 
