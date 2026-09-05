@@ -366,6 +366,19 @@ resolves to this lean form) — an explicit `diarize=true` will then answer
 with the one-line install fix. Details in
 [Speakers](#speakers-optional-diarization).
 
+### Upgrading from 0.3.x
+
+Regenerated configs and the plugin carry `[diarization,url]`. A config you
+wrote by hand for 0.3.x — `uvx --python ">=3.11,<3.14" talkthrough-mcp`, or a
+pin without the `url` extra — upgrades the server in place and lists the new
+`process_url` tool,
+but only direct `https://` media links work until the extra is there:
+YouTube and video pages answer with the one-line install fix. Add `url` to
+your command (`uvx --python ">=3.11,<3.14" "talkthrough-mcp[diarization,url]"`),
+restart the client, and check with `talkthrough-mcp --version` (0.4.1+),
+which names the extras the environment has; the server logs the same line
+to stderr at every start, so your client's MCP log shows it too.
+
 ### Local checkout (development)
 
 ```bash
@@ -596,9 +609,9 @@ exits with code 2, stderr carries the human `error: …` line, and stdout
 carries one JSON document, `{"error": {"type": "UnsupportedUrlError",
 "message": "…"}}`. `--version` also says which optional extras the
 environment has — the quickest check when a hand-written config launches
-the minimal server (`uvx talkthrough-mcp`) that advertises `process_url`
-but can only read direct media links; the server logs the same line to
-stderr at every start.
+the minimal server (a launcher without the `url` extra) that advertises
+`process_url` but can only read direct media links; the server logs the
+same line to stderr at every start.
 
 First run notes: missing system ffmpeg triggers a one-time `static-ffmpeg`
 download; the first transcription downloads the whisper model (~460 MB for
@@ -664,6 +677,12 @@ Honest edges, so you can decide fast:
   reason. Sites change; a page that worked yesterday can need a newer yt-dlp
   tomorrow. A provider's upload date is not a recording time, so URL jobs
   have `wall_clock: null` unless you pass `recorded_at`.
+- **Memory: budget about 2 GB for a cold run.** Whisper, the OCR models and
+  the frame pass live in one process. A 78-second video on `tiny` with OCR
+  peaked at 1.6 GB RSS during the 0.4.0 release QA (download included); the
+  default `small` model needs more, larger models proportionally so. An
+  8 GB laptop copes; on anything tighter keep the model small or run the
+  CLI ahead of the agent session.
 - **Keyframes + transcript, not motion analysis.** A glitch *between* scene
   changes can be invisible in the frame set; `extract_frame` re-checks any
   instant, but frame-by-frame motion reasoning is your multimodal model's job.
@@ -758,6 +777,7 @@ without a human reading docs:
 - [`AGENTS.md`](AGENTS.md) — instructions for coding agents contributing to this repo
 - [`server.json`](server.json) — MCP registry manifest
 - [`integrations/`](integrations/) — per-engine adapters, all generated from one source of truth and drift-tested (incl. the Claude Code plugin under [`integrations/claude-code/`](integrations/claude-code/))
+- [`docs/URL_ACCEPTANCE_CORPUS.md`](docs/URL_ACCEPTANCE_CORPUS.md) — the live URL corpus behind the release QA of `process_url` (manual, needs the network; CI stays offline)
 
 ## Roadmap
 
