@@ -12,7 +12,7 @@ import json
 import logging
 import sys
 from collections.abc import Sequence
-from typing import Any, TextIO
+from typing import Any, NoReturn, TextIO
 
 from .core.errors import TalkthroughError
 
@@ -121,8 +121,21 @@ class _VersionAction(argparse.Action):
         parser.exit()
 
 
+class UsageError(Exception):
+    """An argparse failure that ``main`` can render in human and JSON forms."""
+
+    def __init__(self, parser: argparse.ArgumentParser, message: str) -> None:
+        super().__init__(message)
+        self.parser = parser
+
+
+class _ArgumentParser(argparse.ArgumentParser):
+    def error(self, message: str) -> NoReturn:
+        raise UsageError(self, message)
+
+
 def _build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(
+    parser = _ArgumentParser(
         prog="talkthrough-mcp",
         description="Local-first MCP server for narrated screen recordings.",
     )
@@ -349,7 +362,20 @@ def _cmd_gc(args: argparse.Namespace) -> int:
 
 def main(argv: list[str] | None = None) -> None:
     _configure_logging()
-    args = _build_parser().parse_args(argv)
+    effective_argv = list(sys.argv[1:] if argv is None else argv)
+    parser = _build_parser()
+    try:
+        args = parser.parse_args(effective_argv)
+    except UsageError as exc:
+        from .core.url_ingest import redact
+
+        message = redact(str(exc))
+        exc.parser.print_usage(sys.stderr)
+        print(f"{exc.parser.prog}: error: {message}", file=sys.stderr)
+        if "--json" in effective_argv:
+            document = {"error": {"type": type(exc).__name__, "message": message}}
+            print(json.dumps(document, ensure_ascii=False, indent=2))
+        raise SystemExit(2) from None
     try:
         if args.command == "process":
             code = _cmd_process(args)

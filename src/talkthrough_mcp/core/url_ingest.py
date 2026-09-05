@@ -35,6 +35,7 @@ import socket
 import tempfile
 import threading
 import unicodedata
+import weakref
 from collections.abc import Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass, field
@@ -630,7 +631,7 @@ def sweep_stale_downloads(min_age_s: float = jobs.PARTIAL_SWEEP_MIN_AGE_S) -> li
 
 
 _URL_LOCKS_GUARD = threading.Lock()
-_URL_LOCKS: dict[str, threading.Lock] = {}
+_URL_LOCKS: weakref.WeakValueDictionary[str, threading.Lock] = weakref.WeakValueDictionary()
 
 
 @contextmanager
@@ -1056,15 +1057,12 @@ def process_url(
             # Install and process under ONE job lock (re-entrant for the
             # pipeline's own acquisition): another URL with the same bytes
             # waits here instead of installing into a directory that this
-            # call's failure cleanup could remove from under it. The mapping
-            # is written as soon as the file is in place, so a refusal or a
-            # failure after this point never costs a second download; a
-            # mapping to a job that never got its manifest is dropped lazily.
-            with jobs.job_lock(job_id):
+            # call's failure cleanup could remove from under it. Publish the
+            # mapping only after the manifest exists, so every visible index
+            # entry resolves immediately and a failed pipeline leaves no
+            # partial job or stale mapping.
+            with jobs.job_lock(job_id), jobs.partial_job_cleanup(job_id):
                 managed = install_managed_source(job_id, downloaded.path, name)
-                save_mapping(source.mapping_key, mapping)
-                for key in extra_keys:
-                    save_mapping(key, mapping)
                 result = pipeline.process_media(
                     str(managed),
                     **analysis,
@@ -1086,6 +1084,9 @@ def process_url(
                     from dataclasses import replace
 
                     result = replace(result, manifest=jobs.load_job(job_id))
+                save_mapping(source.mapping_key, mapping)
+                for key in extra_keys:
+                    save_mapping(key, mapping)
         return UrlProcessResult(
             result=result,
             source=source,

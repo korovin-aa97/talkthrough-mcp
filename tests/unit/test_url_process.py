@@ -202,6 +202,23 @@ def test_process_url_failure_leaves_no_job_no_mapping_no_staging(
     assert not any(url_ingest.downloads_root().iterdir())
 
 
+def test_pipeline_failure_after_download_leaves_no_job_mapping_or_staging(
+    stubbed: dict[str, Any], isolated_home: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from talkthrough_mcp.core.errors import ToolFailureError
+
+    def fail_after_install(path: Path) -> MediaInfo:
+        raise ToolFailureError(f"pipeline failed for {Path(path).name}")
+
+    monkeypatch.setattr(pipeline, "probe_media", fail_after_install)
+    source = url_ingest.classify_url(URL)
+    with pytest.raises(ToolFailureError, match="pipeline failed"):
+        process_url(URL)
+    assert not jobs.jobs_root().exists() or not any(jobs.jobs_root().iterdir())
+    assert not url_ingest.mapping_path(source.mapping_key).exists()
+    assert not any(url_ingest.downloads_root().iterdir())
+
+
 def test_process_url_rejects_a_non_media_download_before_the_job_store(
     stubbed: dict[str, Any], isolated_home: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
