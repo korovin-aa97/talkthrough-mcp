@@ -37,7 +37,9 @@ Stage 1 can outlast the MCP client's start-up timeout: Claude Code waits
 connection in our release runs. The client then lists the server as
 *failed* although nothing is broken — uv keeps everything it already
 fetched, so reconnect (`/mcp` → reconnect, or restart the client) and the
-second start is immediate. To avoid the false start entirely, warm the
+second start is immediate. Claude Code remembers a failed server for about
+15 minutes, so a headless `claude -p` retried right away can still report
+it as failed without launching it again. To avoid the false start entirely, warm the
 environment once from a shell with the exact launcher the config uses,
 e.g. `uvx --python ">=3.11,<3.14" "talkthrough-mcp[diarization,url]==0.4.0" --help`.
 
