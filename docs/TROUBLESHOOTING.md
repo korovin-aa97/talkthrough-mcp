@@ -349,11 +349,75 @@ The response-only `name_candidates_note` explains this case. Regenerate only if
 the hints matter, using `force=true, diarize=true`; line-aware OCR is rebuilt and
 all previous identities move to pending review rather than disappearing.
 
+## `process_url` says the `[url]` extra is missing
+
+YouTube ingestion needs `yt-dlp` (plus the bundled JavaScript components and
+a Deno runtime, all from PyPI). Use
+`uvx --python ">=3.11,<3.14" "talkthrough-mcp[diarization,url]"` as the
+server command (JSON configs: `"args": ["--python", ">=3.11,<3.14",
+"talkthrough-mcp[diarization,url]"]`), restart the client, retry. The
+generated configs and the Claude plugin already carry both extras. Direct
+`https://` links to media files work without the extra.
+
+## `process_url` refuses the URL
+
+The error names the reason; the common ones:
+
+- **playlist / channel / search / feed URL** — pass one video URL
+  (`watch?v=…`, `youtu.be/…`, `shorts/…`). A `list=` parameter on a
+  `watch` URL is ignored and only that video is taken.
+- **live stream, upcoming, or "has not finished processing"** — only
+  completed recordings with a known duration are supported; retry later.
+- **private, members-only, age-restricted, DRM, region** — talkthrough sends
+  no cookies, logins or headers and does not bypass restrictions.
+- **credentials in the URL, a non-443 port, plain `http://`, a private or
+  link-local address, more than 5 redirects** — the destination gate refused
+  to connect; only public `https://` hosts are downloaded, and every
+  redirect hop is checked again.
+- **"not supported media"** — the direct link answered with HTML/JSON (a
+  login page, a download landing page) instead of a media file; find the
+  actual file URL.
+- **byte, duration or disk cap** — `TALKTHROUGH_MAX_DOWNLOAD_BYTES` (default
+  2 GiB) and `TALKTHROUGH_MAX_SECONDS` (7200) apply before and during the
+  download; free space is checked up front and while streaming.
+
+Errors never echo the URL (query strings may carry signed tokens); the
+`origin` block of the summary names the provider and the public video id or
+host instead.
+
+## YouTube download fails or picks a poor format
+
+`yt-dlp` needs a JavaScript runtime for some YouTube formats. The `[url]`
+extra installs Deno from PyPI and talkthrough passes its path explicitly, so
+nothing has to be installed by hand; if the runtime is missing anyway the
+download still tries the formats that do not need it and the error says
+which stage failed. Corporate TLS inspection affects this download like any
+other — set `SSL_CERT_FILE` (see above). The chosen format caps video at
+1080p (OCR gains nothing above it) and merges into `.mp4`, `.webm` or
+`.mkv`; ffprobe, not the file name, decides what was actually downloaded.
+Upgrading `yt-dlp` inside the tool environment (a fresh `uvx --refresh …`)
+is the usual fix when YouTube changes something.
+
+## Where does a downloaded source go, and how do I refresh it?
+
+The file is kept as `jobs/<job_id>/source/<youtube-<id>|direct-<hash>>.<ext>`
+inside the job (`extract_frame` decodes it later without network) and is
+deleted with the job by `talkthrough-mcp gc`. The URL index under
+`~/.talkthrough/urls/` maps a hashed key to the job id — no raw URL is
+stored. A repeat `process_url` on the same URL serves the stored job with no
+network; `refresh=true` downloads again, and if the bytes changed you get a
+new job id. The same bytes reached through a local file and through a URL
+are one job.
+
 ## `t_wall` is null or looks wrong
 
 - The recorder wrote no usable metadata — pass
   `recorded_at="2026-07-11T14:30:00+02:00"` (with `force=true` to re-anchor
   an existing job).
+- URL jobs never use the download time or the provider's upload date as a
+  recording start (`origin.published_at` is reported separately), so
+  `wall_clock` is null unless the container carries a creation tag or you
+  pass `recorded_at=`.
 - macOS 26 ⌘⇧5 records via ReplayKit and omits the QuickTime creation-date
   tag; those recordings resolve from the container tag (`confidence:
   medium`, UTC). Pass `recorded_at=` when local-timezone precision matters.

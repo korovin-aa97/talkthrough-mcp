@@ -30,7 +30,18 @@ Things this project treats as security-relevant:
   that lets a crafted *file* (as opposed to the user's own agent) escalate
   is in scope.
 - The privacy promise (no runtime network beyond one-time model/tool
-  downloads, no telemetry) — any violation is treated as a vulnerability.
+  downloads and the one explicit `process_url` download, no telemetry, no
+  upload of media anywhere) — any violation is treated as a vulnerability.
+- `process_url` is the server's only runtime network boundary. In scope:
+  server-side request forgery (a URL, a redirect or a DNS answer that
+  reaches a private, loopback, link-local or cloud-metadata address), the
+  redirect and DNS re-validation on every hop, leakage of the raw URL or its
+  signed query/userinfo into a manifest, the URL index, a log line, a
+  progress message or an error, bypasses of the byte/duration/disk/redirect
+  caps, hostile remote media or metadata reaching ffmpeg/ffprobe or a
+  filename, and the downloader dependency (`yt-dlp`, `deno`) being driven
+  with anything other than the allowlisted option set (no user config, no
+  plugins, no cookies, no remote JavaScript components).
 
 Out of scope: prompt-injection of the *calling* agent via transcript/OCR
 content (inherent to the domain — mitigations and docs welcome, but it is

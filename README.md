@@ -13,10 +13,10 @@
 
 # Don't write a bug report. Record it.
 
-Give Claude Code or Codex a narrated `.mov`/`.mp4` — talkthrough turns it
-into searchable transcript, exact frames, OCR and wall-clock timestamps,
-locally — so your agent writes an evidence-backed issue draft or investigates
-the fix.
+Give Claude Code or Codex a narrated `.mov`/`.mp4` — or a public video link —
+and talkthrough turns it into searchable transcript, exact frames, OCR and
+wall-clock timestamps, locally — so your agent writes an evidence-backed
+issue draft or investigates the fix.
 
 Also works for meetings, workshops, product demos, and production incidents.
 
@@ -383,13 +383,14 @@ Then, in your agent:
 | Tool | What it does |
 |---|---|
 | `process_media(path, recorded_at?, vocabulary?, language?, model?, diarize?, num_speakers?, force?)` | Ingest a video/audio file: local STT, keyframes, OCR, wall-clock, opt-in speaker labels. Returns a compact summary. Idempotent by content hash — re-calls are instant; `diarize=true` on a processed job adds speakers without re-transcribing. |
+| `process_url(url, recorded_at?, vocabulary?, language?, model?, diarize?, num_speakers?, refresh?)` | The one network tool: download one public video/audio URL once (a direct `https://` media link, or one YouTube video with the `[url]` extra), keep the source inside the job, then run the same local pipeline. Same-URL re-calls serve the stored job without network unless `refresh=true`; the raw URL is never stored. |
 | `get_transcript(job_id, start_ms?, end_ms?, format?)` | Paginated transcript as `segments`, `text`, or `srt` (speaker-prefixed when diarized, plus a roster header); truncation returns `next_start_ms`. |
 | `get_frames(job_id, at_ms? \| start_ms?+end_ms?, max_frames?, include_duplicates?)` | Keyframe images nearest a timestamp or evenly thinned across a range (unique frames by default, max 6/call); each frame names its absolute `path`. |
 | `get_moment(job_id, start_ms, end_ms)` | The "one remark" bundle: transcript slice + up to 3 frames + their OCR text + wall-clock range (+ `speakers_in_range` when diarized). |
 | `search(job_id, query, speaker?, match_mode?)` | Substring search over the transcript AND on-screen OCR text. `all_words` remains the default; `any_word` broadens lexical recall. Hits carry `t_ms`/`t_wall`, frame refs, and the speaker when diarized. The optional filter accepts a raw label or saved name. |
 | `label_speakers(job_id, labels, evidence?)` | Atomically persist verified names for anonymous speaker labels. Raw `S1`/`S2` labels remain canonical; blank/null removes a name. |
-| `extract_frame(job_id, at_ms, crop?)` | Exact-timestamp full-resolution re-extract from the source video (optional crop) when keyframes miss the instant; returns the file's absolute `path`. |
-| `list_jobs()` | Recent processed recordings with source paths, durations, wall-clock starts, counts, and speaker counts when diarized. |
+| `extract_frame(job_id, at_ms, crop?)` | Exact-timestamp full-resolution re-extract from the source video (optional crop) when keyframes miss the instant; returns the file's absolute `path`. URL jobs decode their kept source — no network. |
+| `list_jobs()` | Recent processed recordings with source paths, durations, wall-clock starts, counts, speaker counts when diarized, and the provider/id for URL jobs. |
 
 Every tool description ships 10+ usage examples, so agents pick the right tool
 without extra prompting.
@@ -508,13 +509,19 @@ live in [Limitations](#limitations).
 
 Everything runs locally: your recordings never leave your machine, speech is
 transcribed by a local whisper model, OCR and speaker diarization are local
-ONNX inference, and there is no telemetry. The only network access is one-time
-tool/model downloads (ffmpeg build, whisper model, OCR models, diarization
-models — the latter pinned by URL + sha256). Diarization keeps no voiceprint
-database: voice embeddings live only in process memory, and only anonymous
-turn labels (`S1`/`S2`) land on disk. Your agent sees only the payloads the
-MCP tools return (text and selected frames) in your existing session;
-talkthrough itself makes no LLM calls.
+ONNX inference, and there is no telemetry. For local files the only network
+access is one-time tool/model downloads (ffmpeg build, whisper model, OCR
+models, diarization models — the latter pinned by URL + sha256). The one
+deliberate exception is `process_url`: it downloads the public source you
+name from its provider or CDN, once, and nothing else — no media ever goes
+*up*, no cloud STT or LLM is called, and after that download every tool on
+the job is network-free again. The raw URL (which may carry signed tokens)
+is not stored: the job keeps a hash, the public provider id or host and a
+bounded title. Diarization keeps no voiceprint database: voice embeddings
+live only in process memory, and only anonymous turn labels (`S1`/`S2`) land
+on disk. Your agent sees only the payloads the MCP tools return (text and
+selected frames) in your existing session; talkthrough itself makes no LLM
+calls.
 
 ## Languages
 
@@ -563,9 +570,10 @@ model downloads once. Spoken-language support is unaffected either way.
 | `TALKTHROUGH_DIARIZATION_SEG_MODEL` | `pyannote-segmentation-3-0` | segmentation model: allowlist name or a path to a local `.onnx` (offline preseed) |
 | `TALKTHROUGH_DIARIZATION_EMB_MODEL` | `nemo_en_titanet_small` | embedding model: allowlist name (see [Speakers](#speakers-optional-diarization)) or a local `.onnx` path |
 | `TALKTHROUGH_DIARIZATION_THREADS` | `min(4, cpus)` | ONNX threads for both diarization models |
-| `TALKTHROUGH_MAX_SECONDS` | `7200` | max media duration |
+| `TALKTHROUGH_MAX_SECONDS` | `7200` | max media duration (also checked against provider metadata before a `process_url` download) |
 | `TALKTHROUGH_MAX_FRAMES` | `600` | keyframe budget per job, spread across the whole duration (the 1 s selection floor auto-grows to `duration/budget` on long recordings) |
-| `TALKTHROUGH_HOME` | `~/.talkthrough` | job store root |
+| `TALKTHROUGH_MAX_DOWNLOAD_BYTES` | `2147483648` (2 GiB) | hard cap for one `process_url` download, enforced before and during the transfer |
+| `TALKTHROUGH_HOME` | `~/.talkthrough` | job store root (URL jobs keep their downloaded source under `jobs/<id>/source/`) |
 
 ## CLI
 
@@ -577,7 +585,8 @@ same job instantly):
 talkthrough-mcp process ~/Videos/long-session.mov   # prints the summary
 talkthrough-mcp process demo.mov --json             # machine-readable
 talkthrough-mcp process sync.m4a --diarize --num-speakers 3   # who said what
-talkthrough-mcp gc --keep-days 30                   # clean the job store
+talkthrough-mcp process-url "https://youtu.be/nHfGfEiVdE8"    # one public URL, downloaded once
+talkthrough-mcp gc --keep-days 30                   # clean the job store (sources go with their jobs)
 talkthrough-mcp serve                               # stdio MCP server (default)
 ```
 
@@ -603,7 +612,16 @@ If something breaks, please open an issue.
 
 Video: `.mov` `.mp4` `.webm` `.mkv` — audio-only: `.m4a` `.mp3` `.wav` `.ogg`
 `.flac` (transcript tools only; frame tools explain why they're unavailable).
-Local files only.
+
+URLs (via `process_url`, since 0.4.0): a direct `https://` link to one of
+those media files, or one public YouTube video (`watch`, `youtu.be`,
+`shorts`, a completed live — needs the `[url]` extra, which the generated
+configs above already carry). The source is downloaded once, kept inside the
+job, and never re-fetched for later questions. Not supported: playlists,
+channels, active live streams, private, members-only, age-restricted or
+DRM-protected videos, cookies or logins, and other sites. You are
+responsible for having the right to download and process what you point it
+at; talkthrough does not bypass any restriction.
 
 ## Limitations
 
@@ -621,9 +639,12 @@ Honest edges, so you can decide fast:
   speakers; **pass `num_speakers` whenever the headcount is known** — it
   removes the worst failure mode at any size, and it is the way to go for
   large meetings (10+).
-- **Local files only.** No URL/YouTube ingestion
-  ([#5](https://github.com/korovin-aa97/talkthrough-mcp/issues/5)) — download
-  first.
+- **URL ingestion covers one public video at a time.** Direct HTTPS media
+  links and single public YouTube videos only; playlists, channels, live
+  streams, gated or DRM content and other providers are out of scope
+  ([#5](https://github.com/korovin-aa97/talkthrough-mcp/issues/5) tracks
+  what comes next). A YouTube upload date is not a recording time, so URL
+  jobs have `wall_clock: null` unless you pass `recorded_at`.
 - **Keyframes + transcript, not motion analysis.** A glitch *between* scene
   changes can be invisible in the frame set; `extract_frame` re-checks any
   instant, but frame-by-frame motion reasoning is your multimodal model's job.
@@ -642,6 +663,7 @@ Honest edges, so you can decide fast:
 |---|---|---|---|---|
 | Runs fully locally | ✅ | ❌ | ❌ | varies |
 | Any local video/audio file | ✅ | browser/app captures | meetings only | ✅ |
+| Public video URL: downloaded once, kept with the job, analyzed locally | ✅ | n/a | n/a | temp download, often cloud analysis |
 | Wall-clock anchoring (log correlation) | ✅ | ❌ | ❌ | ❌ |
 | Who-said-what speaker labels | ✅ local, opt-in | some | ✅ cloud | ❌ |
 | Ships agent workflows (prompts, skill, findings contract) | ✅ | ❌ | ❌ | ❌ |
@@ -693,10 +715,12 @@ ladder, MCP tools with embedded usage examples, six workflow prompts, and a
 findings contract. One `uvx` command instead of an afternoon of glue.
 
 **Is it really local? What leaves my machine?**
-Nothing at runtime. The network is used only for one-time downloads (ffmpeg
-build, whisper/OCR/diarization models). No telemetry. See [Privacy](#privacy)
-— and [SECURITY.md](SECURITY.md) treats a violation of this promise as a
-vulnerability.
+Nothing goes up, ever. For local files the network is used only for one-time
+downloads (ffmpeg build, whisper/OCR/diarization models). `process_url` is
+the single tool that talks to the network at runtime, and only *down*: it
+fetches the public source you named, once. No telemetry. See
+[Privacy](#privacy) — and [SECURITY.md](SECURITY.md) treats a violation of
+this promise as a vulnerability.
 
 ## For agents & tooling
 
@@ -712,8 +736,8 @@ without a human reading docs:
 
 ## Roadmap
 
-URL/YouTube ingestion · cloud STT · embeddings/semantic search ·
-hosted/remote mode · `.mcpb` bundle · whisper.cpp backend
+more URL providers (Vimeo, Loom, Drive) · cloud STT · embeddings/semantic
+search · hosted/remote mode · `.mcpb` bundle · whisper.cpp backend
 
 ## License
 

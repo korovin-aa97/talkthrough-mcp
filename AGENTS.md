@@ -27,8 +27,11 @@ CI = ruff + mypy + unit + integration + e2e on ubuntu; ruff + unit on macos.
 
 `src/talkthrough_mcp/core/` — deterministic pipeline (no MCP imports):
 probe → wallclock → stt → frames → dedup → ocr → manifest → jobs, orchestrated
-by `core/pipeline.py`. `server.py` — thin MCPServer layer (8 tools, 6 prompts).
-`cli.py` — serve/process/gc. Full map: `docs/DESIGN.md`.
+by `core/pipeline.py`. `core/url_ingest.py` + `core/url_download.py` — the
+one network boundary (`process_url`): classify → destination gate →
+download under caps → verify → install as a managed source → the same
+pipeline. `server.py` — thin MCPServer layer (9 tools, 6 prompts).
+`cli.py` — serve/process/process-url/gc. Full map: `docs/DESIGN.md`.
 
 ## Hard rules
 
@@ -47,8 +50,10 @@ by `core/pipeline.py`. `server.py` — thin MCPServer layer (8 tools, 6 prompts)
    the description — gated by `tests/unit/test_guidance.py`.
 5. Tool responses stay token-budgeted: paginate or cap any new output
    (see "Token-budget rules" in `docs/DESIGN.md`).
-6. Privacy: no runtime network beyond one-time model/tool downloads, no
-   telemetry.
+6. Privacy: no runtime network beyond one-time model/tool downloads and the
+   single explicit `process_url` download, no telemetry, nothing uploaded.
+   Network code lives only in `core/url_ingest.py` / `core/url_download.py`;
+   raw URLs never reach manifests, the URL index, logs, progress or errors.
 7. Tests accompany changes: unit for pure logic; integration when behavior
    needs real ffmpeg/whisper (fixtures are committed; regenerating them is
    macOS-only — `tests/fixtures/make_fixtures.py` — and must update
