@@ -578,6 +578,9 @@ def url_lock(mapping_key: str, *, wait_seconds: int = 3600) -> Iterator[None]:
         try:
             import fcntl
         except ImportError:  # pragma: no cover - Windows best-effort
+            # No flock semantics; keep the on-disk layout identical and rely
+            # on the process-level lock (the job lock degrades the same way).
+            lock_path.touch(exist_ok=True)
             yield
             return
         import time
