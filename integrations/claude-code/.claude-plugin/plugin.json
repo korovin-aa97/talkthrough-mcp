@@ -1,7 +1,7 @@
 {
   "name": "talkthrough",
   "description": "Turn screen recordings into transcript, exact frames, OCR and wall-clock evidence — then into ready-to-file bug drafts, specs, backlogs and meeting actions. Bundles the talkthrough MCP server, six workflow commands, a triage agent, and an agent skill.",
-  "version": "0.3.2",
+  "version": "0.4.0",
   "author": {
     "name": "korovin-aa97",
     "url": "https://github.com/korovin-aa97"

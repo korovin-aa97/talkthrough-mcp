@@ -4,6 +4,128 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions follow
 [SemVer](https://semver.org/).
 
+## [0.4.0] — 2026-09-05
+
+One theme: **give Talkthrough a public video URL and keep everything else
+local**. The source is downloaded once and kept with the job; transcription,
+frames, OCR, search and every later question stay on the machine.
+
+### Added
+
+- **`process_url` is the ninth MCP tool and the server's only network
+  tool.** It accepts a direct `https://` link to a media file or one public
+  YouTube video (`watch`, `youtu.be`, `shorts`, `live`, `embed`; playlist
+  parameters are dropped), downloads it once into a private workspace under
+  hard caps, verifies the bytes with ffprobe, installs the file inside the
+  job as a Talkthrough-named managed source and runs the same local pipeline
+  `process_media` runs. Tool annotations say so: `open_world_hint=true`,
+  `idempotent_hint=false`. The CLI gains `talkthrough-mcp process-url <url>
+  [--refresh] [--json]`.
+- **URL index without URLs.** A hashed key (`youtube:<id>` or the SHA-256 of
+  the exact direct URL) maps to the job id, so a repeat call on the same URL
+  serves the stored job with no network unless `refresh=true`. Job ids stay
+  content hashes: the same bytes reached through two URLs, or processed
+  earlier from a local file, converge on one job. Concurrent calls on one URL
+  download once.
+- **A destination gate for every hop.** Only `https://` on port 443, no
+  credentials in the URL, and every DNS answer must be a public address
+  (private, loopback, link-local/cloud-metadata, multicast, reserved, shared
+  address space and IPv4-mapped forms are refused). The direct downloader
+  pins the connection to the checked address (SNI and `Host` carry the name)
+  and re-validates each of at most five redirects.
+- **Caps enforced before and during the transfer.** Bytes
+  (`TALKTHROUGH_MAX_DOWNLOAD_BYTES`, default 2 GiB, checked per chunk even
+  without `Content-Length`), duration (`TALKTHROUGH_MAX_SECONDS` against
+  provider metadata and again against ffprobe), free disk, redirect count and
+  wall time; a failed or aborted download leaves no `.part` file, no job and
+  no index entry.
+- **Optional `[url]` extra.** `yt-dlp[default,deno]` brings yt-dlp, its
+  bundled JavaScript components and a PyPI-distributed Deno runtime, so one
+  install command covers YouTube. yt-dlp runs with an allowlisted option set:
+  no user configuration, no plugins, no cookies or logins, no remote
+  JavaScript components, one video, no live streams, Talkthrough-owned
+  output names, the resolved ffmpeg. Direct HTTPS links need no extra.
+  Generated client configs and the Claude plugin install
+  `[diarization,url]`; `uvx talkthrough-mcp` remains the minimal server.
+- **Provider facts, not secrets, in the manifest.** `media.origin` stores the
+  provider, public video id or host, a one-way URL hash, a bounded title,
+  the provider's publication time, the downloader and the byte count;
+  `media.managed_source` points at the kept file. The raw URL, its query and
+  userinfo never reach a manifest, the index, a log line, a progress message
+  or an error. `extract_frame` decodes the kept source; `list_jobs` shows
+  the origin.
+- `TALKTHROUGH_MAX_DOWNLOAD_BYTES` is documented in the MCP Registry
+  manifest and every integration adapter.
+
+### Changed
+
+- **A download time is not a recording time.** URL-origin jobs skip the
+  mtime rung of the wall-clock ladder, and the provider's upload date is
+  reported as `origin.published_at`, never as `t_wall`; the summary says to
+  pass `recorded_at` when a real start time is known.
+- `gc` also removes URL index entries whose job is gone and download
+  workspaces a dead process left behind; a managed source is deleted with
+  its job.
+- Guidance, the cross-engine skill, the example agent, prompts, generated
+  integrations, the MCP Registry manifest and the wire-contract tests now
+  agree on **9 tools and 6 prompts**. The MCP Registry manifest moves from
+  the deprecated `2025-09-29` schema to `2025-12-11`.
+- The privacy statement is more precise: nothing is ever uploaded, local
+  files never trigger runtime network access, and `process_url` is the one
+  explicit download.
+
+### Fixed
+
+External findings against 0.3.2, all reproduced first:
+
+- **An interrupted rebuild no longer leaves a job silently inconsistent.** A
+  hard kill between the frame swap and the manifest publication of a forced
+  rebuild left the old manifest indexing keyframes that were no longer on
+  disk; `process_media` reported a clean cache hit, `get_frames` served
+  fewer images than promised and `gc` deleted the backup after 24 h. The job
+  lock now finishes such a commit when the staged rebuild is intact
+  (`rolled_forward`) or restores the previous keyframes (`rolled_back`) — in
+  `process_media`, `label_speakers` and `gc` — and says so in
+  `recovery_note`. Read tools compare the frame index with the directory and
+  report `missing_frame_count` plus an `integrity_note` instead of serving
+  fewer frames silently.
+- **An unreadable `manifest.json` is quarantined, not a crash.** `force=true`
+  (and a plain call) on a job whose manifest had become unreadable answered
+  with a bare "Error executing tool"; the rebuild now keeps the file as
+  `manifest.json.damaged-<timestamp>` beside the fresh one and reports
+  `manifest_recovery_note`. Unexpected exceptions in any tool now reach the
+  agent with their type and message.
+- **The rebuild disk preflight reserves the existing keyframes.** A forced
+  rebuild keeps the previous frames on disk until it commits, so the job
+  directory peaks at roughly twice its `frames/` size; the preflight now
+  accounts for it instead of failing halfway.
+- **The name-candidate filter rejects UI chrome by vocabulary.** It used to
+  reject exactly the twelve strings a review had listed and accept their
+  neighbours (Screen Sharing, Raise Hand, Speaker Notes, …). It now carries
+  a vocabulary of meeting-app, recorder, IDE, browser and dashboard chrome
+  (English, Russian, a few DE/ES/FR terms) and rejects a phrase when every
+  word, or a majority of at least two words, is chrome; a name plate that
+  merely carries a role survives. Common given names and surnames are
+  deliberately absent; a corpus test pins both sides.
+- Pending-review entries beyond the response cap are listed by label in
+  `speaker_names_pending_review_hidden_labels` (capped at 100), so they can
+  be removed without guessing.
+- The force refusal on an identity-bearing job counts saved and
+  pending-review identities separately instead of calling stale pending
+  entries "saved speaker identities".
+- The response-only `speaker_names_pending_review_dropped` report is now
+  documented as reachable only for hand-edited or foreign manifests.
+- Internal Russian planning documents were removed from the public tree.
+
+### Compatibility
+
+- Existing 0.1.x–0.3.2 manifests load in place without migration;
+  `media.origin` and `media.managed_source` are additive and absent on
+  local-file jobs, which serialize byte-identically to before.
+- `process_media` remains local-only. Tool and prompt counts are 9/6.
+- The `[url]` extra is optional; without it, YouTube URLs return an
+  actionable install hint and direct HTTPS links still work.
+
 ## [0.3.2] — 2026-09-03
 
 A data-safety and portability patch from externally reproduced reports. No
