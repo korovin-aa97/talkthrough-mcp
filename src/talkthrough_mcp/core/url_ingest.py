@@ -703,12 +703,17 @@ def build_origin(
     )
 
 
-def attach_managed_source(job_id: str, managed_source: str, origin: MediaOrigin) -> None:
+def attach_managed_source(
+    job_id: str, managed_source: str, origin: MediaOrigin, *, replace_origin: bool = False
+) -> None:
     """Record a managed source on a job that already existed (same bytes).
 
     A local file processed earlier and a URL that downloads the same bytes
     converge on one job: the manifest gains the managed path and, if it had
-    none, the origin — additively, under the job lock.
+    none, the origin — additively, under the job lock. ``replace_origin`` is
+    the ``refresh=true`` case: the caller asked for the provider's current
+    metadata, so the stored block (title, publication time, ``downloaded_at``)
+    is replaced even though the bytes — and therefore the job — are the same.
     """
     from dataclasses import replace
 
@@ -719,7 +724,7 @@ def attach_managed_source(job_id: str, managed_source: str, origin: MediaOrigin)
         manifest = jobs.load_job(job_id)
         manifest.media = replace(
             manifest.media,
-            origin=manifest.media.origin or origin,
+            origin=origin if replace_origin else (manifest.media.origin or origin),
             managed_source=managed_source,
         )
         save_manifest(manifest, jobs.job_dir(job_id))
@@ -993,13 +998,16 @@ def process_url(
                     managed_source=relative,
                 )
                 if result.reused and (
-                    result.manifest.media.managed_source != relative
+                    refresh
+                    or result.manifest.media.managed_source != relative
                     or result.manifest.media.origin is None
                 ):
                     # Same bytes as a job processed earlier (a local file, or
                     # another URL): keep that job, remember the managed copy
-                    # and origin.
-                    attach_managed_source(job_id, relative, origin)
+                    # and origin. A refresh replaces the provider metadata the
+                    # manifest carries — 0.4.0 answered ``refreshed: true``
+                    # while serving the stale title and ``downloaded_at``.
+                    attach_managed_source(job_id, relative, origin, replace_origin=refresh)
                     from dataclasses import replace
 
                     result = replace(result, manifest=jobs.load_job(job_id))

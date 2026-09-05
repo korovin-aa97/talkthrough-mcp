@@ -641,3 +641,45 @@ def test_refresh_bypasses_the_provider_index_and_downloads_again(
     assert again.reused_url_mapping is False
     assert again.result.manifest.job_id == first.result.manifest.job_id
     assert again.downloaded_bytes == len(stubbed["media"])
+
+
+def test_refresh_replaces_stale_provider_metadata_when_the_bytes_are_unchanged(
+    stubbed: dict[str, Any], isolated_home: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A provider can retitle or redate a video while the media bytes stay the
+    same: the job is the same content hash, but refresh=true asked for the
+    provider's current metadata (0.4.0 kept the stale block; release QA, F-03)."""
+    from dataclasses import replace
+
+    from talkthrough_mcp.core.manifest import save_manifest
+
+    def not_media(source: Any, dest_dir: Path, *, max_bytes: int, report: Any) -> Downloaded:
+        raise url_download.NotMediaResponse("text/html")
+
+    monkeypatch.setattr(url_download, "download_direct", not_media)
+    monkeypatch.setattr(url_download, "download_site", _site_download(stubbed))
+    page = "https://videos.example.org/watch/987654321"
+    first = process_url(page)
+    job_id = first.result.manifest.job_id
+    manifest = jobs.load_job(job_id)
+    assert manifest.media.origin is not None and manifest.media.origin.title == "Sintel"
+    stale = replace(
+        manifest.media.origin,
+        title="STALE_TITLE_CANARY",
+        downloaded_at="2020-01-01T00:00:00+00:00",
+    )
+    manifest.media = replace(manifest.media, origin=stale)
+    save_manifest(manifest, jobs.job_dir(job_id))
+
+    served = process_url(page)  # no refresh: the stored job, no network, no change
+    assert served.reused_url_mapping is True and stubbed["site"] == 1
+    assert served.origin is not None and served.origin.title == "STALE_TITLE_CANARY"
+
+    refreshed = process_url(page, refresh=True)
+    assert stubbed["site"] == 2 and refreshed.refreshed is True
+    assert refreshed.result.manifest.job_id == job_id and refreshed.result.reused is True
+    origin = jobs.load_job(job_id).media.origin
+    assert origin is not None and origin.title == "Sintel"
+    assert origin.downloaded_at is not None and origin.downloaded_at > "2020-01-01T00:00:00+00:00"
+    assert refreshed.origin == origin
+    assert jobs.load_job(job_id).media.managed_source == first.result.manifest.media.managed_source
