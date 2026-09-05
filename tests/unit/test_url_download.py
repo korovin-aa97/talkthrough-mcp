@@ -407,7 +407,14 @@ class _FakeYoutubeDL:
     def extract_info(self, url: str, download: bool = False) -> dict[str, Any]:
         if self.fail_with is not None:
             raise self.fail_with
-        return dict(self.info)
+        info = dict(self.info)
+        # Faithful to yt-dlp: playlist_items is applied while the playlist is
+        # processed, so only the requested entries survive, and the full count
+        # is not reported unless the extractor's entry list was exhausted.
+        wanted = self.options.get("playlist_items")
+        if wanted and info.get("_type") in {"playlist", "multi_video"}:
+            info["entries"] = list(info.get("entries") or [])[: int(wanted)]
+        return info
 
     def process_ie_result(self, info: dict[str, Any], download: bool = True) -> None:
         template = self.options["outtmpl"]["default"]
@@ -639,6 +646,21 @@ def test_youtube_options_never_include_user_configuration() -> None:
     assert options["format"] == url_download.YOUTUBE_FORMAT
 
 
+def test_probe_options_see_every_entry_of_a_multi_video_page() -> None:
+    """The page probe must count a carousel's entries, so it asks yt-dlp for a
+    flat entry list and never for playlist item 1 only (0.4.1)."""
+    probe = youtube_options(
+        Path("/tmp/x"), video_id="probe", max_bytes=10, progress_hook=lambda s: None,
+        secrets=(), output_stem="site-probe", probe=True,
+    )
+    assert probe["extract_flat"] == "in_playlist" and "playlist_items" not in probe
+    assert probe["noplaylist"] is True
+    download = youtube_options(
+        Path("/tmp/x"), video_id="abc", max_bytes=10, progress_hook=lambda s: None, secrets=()
+    )
+    assert download["playlist_items"] == "1" and "extract_flat" not in download
+
+
 def test_downloaded_record_is_plain_data() -> None:
     record = Downloaded(path=Path("/x"), extension=".mp4", downloaded_bytes=1, downloader="t")
     assert record.validators == {} and record.title is None
@@ -847,6 +869,31 @@ def test_site_download_resolves_a_single_entry_page_and_refuses_many(
             classify_url("https://www.instagram.com/p/carousel/"), tmp_path,
             max_bytes=100_000, max_seconds=7200, report=lambda *a: None,
         )
+
+
+def test_site_download_refuses_a_folder_page_before_any_download(
+    fake_yt_dlp: type[_FakeYoutubeDL], tmp_path: Path
+) -> None:
+    """A Loom folder or an Instagram carousel: 0.4.0's probe asked yt-dlp for
+    playlist item 1 only, so the count it checked was always 1 and the first
+    video was ingested silently (release QA, F-02)."""
+    from talkthrough_mcp.core.url_download import download_site
+
+    fake_yt_dlp.info = {
+        "_type": "playlist",
+        "id": "997db4db046f43e5912f10dc5f817b5c",
+        "extractor_key": "LoomFolder",
+        "entries": [{"_type": "url", "url": stub} for stub in ("a", "b", "c")],
+    }
+    with pytest.raises(UnsupportedUrlError, match="contains 3 videos") as info:
+        download_site(
+            classify_url("https://www.loom.com/share/folder/997db4db046f43e5912f10dc5f817b5c"),
+            tmp_path, max_bytes=100_000, max_seconds=7200, report=lambda *a: None,
+        )
+    assert "pass a link to one video" in str(info.value)
+    (probe,) = fake_yt_dlp.instances  # no download instance was ever built
+    assert probe.options["extract_flat"] == "in_playlist"
+    assert list(tmp_path.iterdir()) == []
 
 
 def test_site_download_reuses_a_known_job_before_downloading(

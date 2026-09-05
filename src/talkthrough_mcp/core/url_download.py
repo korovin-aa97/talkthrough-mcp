@@ -446,11 +446,14 @@ def youtube_options(
     progress_hook: Callable[[dict[str, Any]], None],
     secrets: tuple[str, ...],
     output_stem: str | None = None,
+    probe: bool = False,
 ) -> dict[str, Any]:
     """The allowlisted YoutubeDL option set — nothing else is ever passed.
 
     ``output_stem`` names the file for site downloads; the default is the
     YouTube stem. Both are Talkthrough-owned templates (never the title).
+    ``probe`` builds the metadata-only instance for a page: it must see every
+    entry of a multi-video page (flat, unresolved) so the caller can refuse.
     """
     from . import jobs
 
@@ -460,7 +463,6 @@ def youtube_options(
         # as a control-flow signal right after the first download, which the
         # API surfaces as a failure (caught on the real demo, 2026-09-05).
         "noplaylist": True,
-        "playlist_items": "1",
         "quiet": True,
         "no_warnings": False,
         "noprogress": True,
@@ -503,6 +505,20 @@ def youtube_options(
     deno = _deno_path()
     if deno is not None:
         options["js_runtimes"] = {"deno": {"path": deno}}
+    if probe:
+        # Metadata pass for a page: a multi-video page (a carousel, a folder)
+        # must come back with ALL its entries, as cheap url stubs, so the
+        # caller can count them and refuse before any download. playlist_items
+        # would slice the list to one entry before we ever see it — yt-dlp
+        # reports the full count only when the entry list happened to be
+        # exhausted (0.4.0 ingested the first video of a Loom folder silently)
+        # — and resolving every entry just to count them would fetch each
+        # video's page.
+        options["extract_flat"] = "in_playlist"
+    else:
+        # One video only; a resolved single-video info dict carries no
+        # playlist, so for the download instance this is belt and braces.
+        options["playlist_items"] = "1"
     return options
 
 
@@ -837,6 +853,7 @@ def download_site(
         progress_hook=progress_hook,
         secrets=secrets,
         output_stem="site-probe",
+        probe=True,
     )
     try:
         with yt_dlp.YoutubeDL(probe_options) as probe:
