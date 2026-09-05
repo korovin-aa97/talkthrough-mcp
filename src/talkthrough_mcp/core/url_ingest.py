@@ -554,6 +554,15 @@ def _try_flock(fd: int) -> bool:
     return True
 
 
+def _posix_locks() -> bool:
+    """Whether flock is available (POSIX); elsewhere lock files are markers."""
+    try:
+        import fcntl  # noqa: F401
+    except ImportError:  # pragma: no cover - Windows best-effort
+        return False
+    return True
+
+
 def _same_file(fd: int, path: Path) -> bool:
     """Whether ``path`` still names the open file ``fd`` (inode identity)."""
     try:
@@ -570,11 +579,14 @@ def sweep_orphan_locks() -> list[str]:
     never removed one). A lock is unlinked only while this process holds it,
     so an ingestion in flight keeps its file; a waiter that loses its file
     this way reopens (see ``url_lock``). Locks of live mappings stay: one per
-    stored URL, removed with the mapping.
+    stored URL, removed with the mapping. Without flock (Windows) the files
+    are markers and are removed after closing — an open file cannot be
+    unlinked there.
     """
     root = urls_root()
     if not root.is_dir():
         return []
+    posix = _posix_locks()
     removed: list[str] = []
     for path in sorted(root.glob("*.lock")):
         if path.with_suffix(".json").is_file():
@@ -583,6 +595,11 @@ def sweep_orphan_locks() -> list[str]:
             with path.open("a") as handle:
                 if not _try_flock(handle.fileno()):
                     continue
+                if posix:
+                    # unlink while holding the lock: a waiter that opened this
+                    # inode sees the path change and reopens (url_lock)
+                    path.unlink(missing_ok=True)
+            if not posix:
                 path.unlink(missing_ok=True)
         except OSError:
             continue
