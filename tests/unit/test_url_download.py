@@ -49,6 +49,11 @@ def pinned(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(url_download, "resolve_public_host", lambda host: ["203.0.113.10"])
 
 
+def _media(content: bytes, **headers: str) -> httpx.Response:
+    """A streamed body (not preloaded), so num_bytes_downloaded counts like a socket."""
+    return httpx.Response(200, stream=httpx.ByteStream(content), headers=headers)
+
+
 def _serve(
     monkeypatch: pytest.MonkeyPatch, handler: Callable[[httpx.Request], httpx.Response]
 ) -> list[httpx.Request]:
@@ -70,10 +75,8 @@ def test_direct_download_pins_the_address_and_keeps_host_and_sni(
 ) -> None:
     requests = _serve(
         monkeypatch,
-        lambda request: httpx.Response(
-            200,
-            content=MEDIA,
-            headers={"content-type": "video/mp4", "etag": '"v1"', "last-modified": "Mon"},
+        lambda request: _media(
+            MEDIA, **{"content-type": "video/mp4", "etag": '"v1"', "last-modified": "Mon"}
         ),
     )
     source = classify_url(f"https://cdn.example.com/clip.mp4?{CANARY}")
@@ -91,6 +94,7 @@ def test_direct_download_pins_the_address_and_keeps_host_and_sni(
     assert request.headers["host"] == "cdn.example.com"
     assert request.extensions["sni_hostname"] == "cdn.example.com"
     assert f"?{CANARY}" in str(request.url)  # the query reaches the wire, and nothing else
+    assert request.headers["accept-encoding"] == "identity"
     assert all(CANARY not in stage for stage, _ in seen)
     assert any(stage.startswith("downloading source") for stage, _ in seen)
 
@@ -100,9 +104,7 @@ def test_direct_download_uses_content_type_when_the_path_has_no_extension(
 ) -> None:
     _serve(
         monkeypatch,
-        lambda request: httpx.Response(
-            200, content=MEDIA, headers={"content-type": "audio/mpeg; charset=binary"}
-        ),
+        lambda request: _media(MEDIA, **{"content-type": "audio/mpeg; charset=binary"}),
     )
     source = classify_url("https://cdn.example.com/download?id=7")
     downloaded = download_direct(source, tmp_path, max_bytes=10_000, report=lambda *a: None)
@@ -119,8 +121,9 @@ def test_direct_download_refuses_non_media_responses(
         ),
     )
     source = classify_url("https://cdn.example.com/download?id=7")
-    with pytest.raises(UnsupportedUrlError, match="not supported media"):
+    with pytest.raises(url_download.NotMediaResponse, match="not a media file") as info:
         download_direct(source, tmp_path, max_bytes=10_000, report=lambda *a: None)
+    assert info.value.content_type == "text/html"
     assert list(tmp_path.iterdir()) == []
 
 
@@ -142,7 +145,7 @@ def test_direct_download_follows_and_revalidates_redirects(
             return httpx.Response(
                 301, headers={"location": f"https://media.example.net/final.mp4?{CANARY}"}
             )
-        return httpx.Response(200, content=MEDIA, headers={"content-type": "video/mp4"})
+        return _media(MEDIA, **{"content-type": "video/mp4"})
 
     handler_requests = _serve(monkeypatch, handler)
 
@@ -152,7 +155,7 @@ def test_direct_download_follows_and_revalidates_redirects(
                 301, headers={"location": f"https://media.example.net/final.mp4?{CANARY}"}
             )
         if request.url.path == "/final.mp4":
-            return httpx.Response(200, content=MEDIA, headers={"content-type": "video/mp4"})
+            return _media(MEDIA, **{"content-type": "video/mp4"})
         return httpx.Response(302, headers={"location": "/moved/clip.mp4"})
 
     monkeypatch.setattr(url_download, "_TRANSPORT", httpx.MockTransport(relay))
@@ -230,8 +233,8 @@ def test_direct_download_declared_size_above_the_cap_is_refused_before_any_byte(
 ) -> None:
     _serve(
         monkeypatch,
-        lambda request: httpx.Response(
-            200, content=MEDIA, headers={"content-type": "video/mp4", "content-length": "999999"}
+        lambda request: _media(
+            MEDIA, **{"content-type": "video/mp4", "content-length": "999999"}
         ),
     )
     with pytest.raises(DownloadError, match="above the 10000 byte cap"):
@@ -274,10 +277,8 @@ def test_direct_download_truncated_body_is_an_error(
 ) -> None:
     _serve(
         monkeypatch,
-        lambda request: httpx.Response(
-            200,
-            content=MEDIA[:100],
-            headers={"content-type": "video/mp4", "content-length": str(len(MEDIA))},
+        lambda request: _media(
+            MEDIA[:100], **{"content-type": "video/mp4", "content-length": str(len(MEDIA))}
         ),
     )
     with pytest.raises(DownloadError, match="truncated"):
@@ -422,7 +423,7 @@ def test_youtube_download_uses_the_allowlisted_options_and_names_the_file(
     assert options["noplaylist"] is True and "max_downloads" not in options
     assert options["cookiesfrombrowser"] is None and options["cookiefile"] is None
     assert options["remote_components"] == [] and options["extractor_args"] == {}
-    assert options["max_filesize"] == 100_000
+    assert "max_filesize" not in options  # a silent per-format skip in yt-dlp; the hook caps
     assert Path(options["ffmpeg_location"]) == Path("/opt/ffmpeg/bin")
     assert options["js_runtimes"] == {"deno": {"path": "/opt/deno/bin/deno"}}
     assert options["outtmpl"]["default"].endswith("youtube-nHfGfEiVdE8.%(ext)s")
@@ -566,3 +567,135 @@ def test_youtube_options_never_include_user_configuration() -> None:
 def test_downloaded_record_is_plain_data() -> None:
     record = Downloaded(path=Path("/x"), extension=".mp4", downloaded_bytes=1, downloader="t")
     assert record.validators == {} and record.title is None
+
+
+# --- review fixes (2026-09-05) ---------------------------------------------------
+
+
+def test_direct_download_handles_content_encoding_gzip(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, pinned: None
+) -> None:
+    import gzip
+
+    compressed = gzip.compress(MEDIA)
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            stream=httpx.ByteStream(compressed),
+            headers={
+                "content-type": "video/mp4",
+                "content-encoding": "gzip",
+                "content-length": str(len(compressed)),
+            },
+        )
+
+    _serve(monkeypatch, handler)
+    downloaded = download_direct(
+        classify_url("https://cdn.example.com/clip.mp4"), tmp_path, max_bytes=10_000,
+        report=lambda *a: None,
+    )
+    assert downloaded.path.read_bytes() == MEDIA
+    assert downloaded.downloaded_bytes == len(MEDIA)
+
+
+def test_direct_download_falls_back_to_the_next_validated_address(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(
+        url_download, "resolve_public_host", lambda host: ["2001:db8::1", "203.0.113.10"]
+    )
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.host == "2001:db8::1":
+            raise httpx.ConnectError("Network is unreachable")
+        return _media(MEDIA, **{"content-type": "video/mp4"})
+
+    requests = _serve(monkeypatch, handler)
+    downloaded = download_direct(
+        classify_url("https://cdn.example.com/clip.mp4"), tmp_path, max_bytes=10_000,
+        report=lambda *a: None,
+    )
+    assert downloaded.downloaded_bytes == len(MEDIA)
+    assert [request.url.host for request in requests] == ["2001:db8::1", "203.0.113.10"]
+
+
+def test_direct_download_uses_the_final_hop_path_extension(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, pinned: None
+) -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/download":
+            return httpx.Response(
+                302, headers={"location": "https://bucket.example.net/recordings/standup.mp4?X=1"}
+            )
+        return _media(MEDIA, **{"content-type": "application/octet-stream"})
+
+    _serve(monkeypatch, handler)
+    downloaded = download_direct(
+        classify_url("https://files.example.com/download?id=42"), tmp_path, max_bytes=10_000,
+        report=lambda *a: None,
+    )
+    assert downloaded.extension == ".mp4"
+
+
+def test_malformed_redirect_target_is_refused_cleanly(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, pinned: None
+) -> None:
+    _serve(
+        monkeypatch,
+        lambda request: httpx.Response(
+            302, headers={"location": "https://cdn.example.com:8o80/clip.mp4"}
+        ),
+    )
+    with pytest.raises(UnsafeUrlError, match="malformed"):
+        download_direct(
+            classify_url("https://cdn.example.com/clip.mp4"), tmp_path, max_bytes=10_000,
+            report=lambda *a: None,
+        )
+
+
+def test_direct_download_progress_is_throttled(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, pinned: None
+) -> None:
+    big = b"z" * (3 * url_download.REPORT_EVERY_BYTES + 5)
+    _serve(monkeypatch, lambda request: _media(big, **{"content-type": "video/mp4"}))
+    seen, report = _report_log()
+    download_direct(
+        classify_url("https://cdn.example.com/clip.mp4"), tmp_path, max_bytes=len(big) + 1,
+        report=report,
+    )
+    progress_lines = [stage for stage, _ in seen if stage.startswith("downloading source")]
+    assert 2 <= len(progress_lines) <= 6
+
+
+def test_youtube_bot_check_is_a_retryable_condition_not_a_private_video(
+    fake_yt_dlp: type[_FakeYoutubeDL], tmp_path: Path
+) -> None:
+    fake_yt_dlp.fail_with = _FakeYoutubeDLError(
+        "ERROR: [youtube] nHfGfEiVdE8: Sign in to confirm you\u2019re not a bot. Use "
+        "--cookies-from-browser or --cookies for the authentication."
+    )
+    with pytest.raises(DownloadError, match="bot check") as info:
+        download_youtube(
+            classify_url("https://youtu.be/nHfGfEiVdE8"), tmp_path, max_bytes=100_000,
+            max_seconds=7200, report=lambda *a: None,
+        )
+    assert "private" not in str(info.value).split("this is not")[0]
+
+
+def test_youtube_intermediate_only_output_is_reported_as_incomplete(
+    fake_yt_dlp: type[_FakeYoutubeDL], tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    fake_yt_dlp.info = {**fake_yt_dlp.info, "requested_formats": []}
+
+    def skipped_video(self: Any, info: dict[str, Any], download: bool = True) -> None:
+        template = self.options["outtmpl"]["default"]
+        Path(template.replace(".%(ext)s", ".f251.webm")).write_bytes(b"audio only")
+
+    monkeypatch.setattr(_FakeYoutubeDL, "process_ie_result", skipped_video)
+    with pytest.raises(DownloadError, match="before the video and audio tracks were merged"):
+        download_youtube(
+            classify_url("https://youtu.be/nHfGfEiVdE8"), tmp_path, max_bytes=100_000,
+            max_seconds=7200, report=lambda *a: None,
+        )
+    assert list(tmp_path.iterdir()) == []

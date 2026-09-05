@@ -252,6 +252,7 @@ async def process_url(
     diarize: bool | None = None,
     num_speakers: int | None = None,
     refresh: bool = False,
+    force: bool = False,
 ) -> dict[str, Any]:
     # The initial message names the network step honestly and never echoes
     # the URL (query strings may carry signed tokens).
@@ -261,6 +262,7 @@ async def process_url(
         url_ingest.process_url,
         url,
         refresh=refresh,
+        force=force,
         recorded_at=recorded_at,
         vocabulary=vocabulary,
         language=language,
@@ -731,6 +733,7 @@ def label_speakers(
             reused=True,
             elapsed_s=0.0,
             reprocess_recovered=tuple(f"{item.staging} ({item.action})" for item in recovered),
+            missing_frame_files=len(jobs.missing_frame_files(manifest)),
         )
     )
     return {
@@ -831,6 +834,18 @@ def list_jobs() -> dict[str, Any]:
                     _job_speakers(manifest.transcript.diarization)
                     if manifest.transcript.diarization is not None
                     and manifest.transcript.diarization.available
+                    else {}
+                ),
+                **(
+                    {
+                        "wall_clock_note": (
+                            "downloaded source: no recording start is known (upload and "
+                            "download times are not recording times) — pass recorded_at to "
+                            "process_url(..., force=true) or process_media(path, "
+                            "recorded_at=..., force=true) to anchor t_wall"
+                        )
+                    }
+                    if manifest.media.origin is not None and manifest.wall_clock is None
                     else {}
                 ),
                 **(

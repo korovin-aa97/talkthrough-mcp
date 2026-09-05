@@ -18,11 +18,12 @@ ffprobe before anything reaches the job store.
 
 from __future__ import annotations
 
+import contextlib
 import logging
 import os
-import shutil
+import re
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
@@ -53,6 +54,7 @@ ProgressFn = Callable[[str, float], None]
 
 CHUNK_BYTES = 64 * 1024
 DISK_CHECK_EVERY_BYTES = 64 * 1024 * 1024
+REPORT_EVERY_BYTES = 1024 * 1024
 MIN_FREE_BYTES_UNKNOWN_SIZE = 512 * 1024 * 1024
 CONNECT_TIMEOUT_S = 30.0
 READ_TIMEOUT_S = 60.0
@@ -61,6 +63,8 @@ DOWNLOAD_DEADLINE_S = 3600.0
 # the frame extraction pass bounded without promising an exact container.
 YOUTUBE_FORMAT = "bv*[height<=1080]+ba/b[height<=1080]/b"
 YOUTUBE_MAX_HEIGHT = 1080
+# yt-dlp names per-format intermediates ``<name>.f<format_id>.<ext>`` before merging
+_INTERMEDIATE = re.compile(r"\.f[0-9A-Za-z_-]+\.[A-Za-z0-9]+$")
 _REDIRECT_STATUSES = {301, 302, 303, 307, 308}
 # Test seam: an httpx transport that replaces real sockets (never set in production).
 _TRANSPORT: Any = None
@@ -98,7 +102,13 @@ def _pick_extension(path_hint: str | None, content_type: str) -> str | None:
 
 def _validate_hop(url: str) -> tuple[str, str]:
     """Scheme/userinfo/port checks for every hop; returns ``(host, url)``."""
-    parts = urlsplit(url)
+    try:
+        parts = urlsplit(url)
+        parts.port  # noqa: B018 — validates the port syntax eagerly
+    except ValueError as exc:
+        raise UnsafeUrlError(
+            f"a redirect target is malformed ({exc}) — refusing to follow"
+        ) from exc
     if parts.scheme.lower() != "https":
         raise UnsafeUrlError("a redirect left https:// — refusing to follow it")
     if parts.username is not None or parts.password is not None:
@@ -117,6 +127,55 @@ def _pinned_url(url: str, address: str) -> str:
     return urlunsplit(("https", netloc, parts.path or "/", parts.query, ""))
 
 
+class NotMediaResponse(UnsupportedUrlError):
+    """The server answered with a page, not a media file (a site adapter may still apply)."""
+
+    def __init__(self, content_type: str) -> None:
+        self.content_type = content_type
+        super().__init__(
+            f"the response is not a media file (content-type {content_type!r}) — pass a "
+            "direct link to an mp4/mov/webm/mkv/m4a/mp3/wav/ogg/flac file, or a video page "
+            "yt-dlp can read"
+        )
+
+
+@contextlib.contextmanager
+def _open_pinned(
+    client: Any, url: str, host: str, addresses: list[str]
+) -> Iterator[Any]:
+    """Stream ``url`` from the first validated address that accepts a connection.
+
+    All addresses passed the destination gate; a broken IPv6 route (an
+    AAAA answer first, no working v6 default route) must not fail a host
+    whose IPv4 address would have worked.
+    """
+    import httpx
+
+    last: Exception | None = None
+    for index, address in enumerate(addresses):
+        stream = client.stream(
+            "GET",
+            _pinned_url(url, address),
+            headers={"Host": host},
+            extensions={"sni_hostname": host},
+        )
+        try:
+            response = stream.__enter__()
+        except (httpx.ConnectError, httpx.ConnectTimeout) as exc:
+            last = exc
+            if index + 1 < len(addresses):
+                logger.info("connect to %s failed (%s); trying the next address", address, exc)
+                continue
+            raise
+        try:
+            yield response
+        finally:
+            stream.__exit__(None, None, None)
+        return
+    assert last is not None
+    raise last
+
+
 def download_direct(
     source: UrlSource,
     dest_dir: Path,
@@ -132,7 +191,13 @@ def download_direct(
     url = source.request_url
     redirects = 0
     started = time.monotonic()
-    headers = {"User-Agent": f"talkthrough-mcp/{__version__}", "Accept": "*/*"}
+    # identity: a transparently decompressed body would not match the raw
+    # Content-Length and the byte cap must count what actually travels
+    headers = {
+        "User-Agent": f"talkthrough-mcp/{__version__}",
+        "Accept": "*/*",
+        "Accept-Encoding": "identity",
+    }
     timeout = httpx.Timeout(CONNECT_TIMEOUT_S, read=READ_TIMEOUT_S, write=30.0, pool=30.0)
     client_kwargs: dict[str, Any] = {
         "follow_redirects": False,
@@ -147,14 +212,8 @@ def download_direct(
                 host, url = _validate_hop(url)
                 secrets.append(url)
                 report("resolving destination", 0.03)
-                address = resolve_public_host(host)[0]
-                pinned = _pinned_url(url, address)
-                with client.stream(
-                    "GET",
-                    pinned,
-                    headers={"Host": host},
-                    extensions={"sni_hostname": host},
-                ) as response:
+                addresses = resolve_public_host(host)
+                with _open_pinned(client, url, host, addresses) as response:
                     if response.status_code in _REDIRECT_STATUSES:
                         location = response.headers.get("location")
                         if not location:
@@ -174,14 +233,16 @@ def download_direct(
                     content_type = (
                         response.headers.get("content-type", "").split(";")[0].strip().lower()
                     )
-                    extension = _pick_extension(source.path_extension, content_type)
+                    # the final hop's path counts too: a redirect into a signed
+                    # object URL often ends in .mp4 while the object is served
+                    # as application/octet-stream
+                    final_suffix = Path(urlsplit(url).path).suffix.lower()
+                    hint = source.path_extension or (
+                        final_suffix if final_suffix in MEDIA_EXTENSIONS else None
+                    )
+                    extension = _pick_extension(hint, content_type)
                     if extension is None:
-                        raise UnsupportedUrlError(
-                            f"the response is not supported media (content-type "
-                            f"{content_type or 'unknown'!r}; the URL path has no media "
-                            "extension) — pass a direct link to an mp4/mov/webm/mkv/m4a/mp3/"
-                            "wav/ogg/flac file, or a YouTube video URL"
-                        )
+                        raise NotMediaResponse(content_type or "unknown")
                     length_raw = response.headers.get("content-length")
                     length: int | None = None
                     if length_raw and length_raw.isdigit():
@@ -191,21 +252,27 @@ def download_direct(
                                 f"the file is {length} bytes, above the {max_bytes} byte cap "
                                 "(TALKTHROUGH_MAX_DOWNLOAD_BYTES)"
                             )
+                    # the file itself plus the pipeline's own 2x preflight, so
+                    # a download never lands in a refusal loop
                     check_free_disk(
                         dest_dir,
-                        (length * 2) if length is not None else MIN_FREE_BYTES_UNKNOWN_SIZE,
+                        (length * 3) if length is not None else MIN_FREE_BYTES_UNKNOWN_SIZE,
                         what="the download",
                     )
                     part = dest_dir / f"download{extension}.part"
                     final = dest_dir / f"download{extension}"
                     written = 0
                     next_disk_check = DISK_CHECK_EVERY_BYTES
+                    next_report = 0
                     fd = os.open(part, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
                     try:
                         with os.fdopen(fd, "wb") as handle:
                             for chunk in response.iter_bytes(CHUNK_BYTES):
                                 written += len(chunk)
-                                if written > max_bytes:
+                                # raw bytes on the wire are what the cap and
+                                # Content-Length describe
+                                raw = max(written, response.num_bytes_downloaded)
+                                if raw > max_bytes:
                                     raise DownloadError(
                                         f"download exceeded the {max_bytes} byte cap "
                                         "(TALKTHROUGH_MAX_DOWNLOAD_BYTES) — aborted"
@@ -221,19 +288,23 @@ def download_direct(
                                         dest_dir, max(1, (length or written) - written),
                                         what="the download",
                                     )
-                                fraction = (written / length) if length else 0.0
-                                report(
-                                    f"downloading source: {_mb(written)}/{_mb(length)} MB",
-                                    0.05 + 0.08 * min(1.0, fraction),
-                                )
+                                if raw >= next_report:
+                                    next_report = raw + REPORT_EVERY_BYTES
+                                    fraction = (raw / length) if length else 0.0
+                                    report(
+                                        f"downloading source: {_mb(raw)}/{_mb(length)} MB",
+                                        0.05 + 0.08 * min(1.0, fraction),
+                                    )
                     except BaseException:
                         part.unlink(missing_ok=True)
                         raise
-                    if length is not None and written != length:
+                    raw_total = response.num_bytes_downloaded
+                    if length is not None and raw_total != length:
                         part.unlink(missing_ok=True)
                         raise DownloadError(
-                            f"truncated download: {written} of {length} bytes — retry"
+                            f"truncated download: {raw_total} of {length} bytes — retry"
                         )
+                    report(f"downloading source: {_mb(raw_total)}/{_mb(length)} MB", 0.13)
                     os.replace(part, final)
                     validators = {
                         key: response.headers[key]
@@ -254,8 +325,19 @@ def download_direct(
             f"network timeout while downloading {source.safe_label()}: "
             f"{_bounded_reason(str(exc), *secrets)}"
         ) from exc
+    except httpx.InvalidURL as exc:
+        # httpx builds the redirect request eagerly even with
+        # follow_redirects=False, so a malformed Location surfaces here
+        raise UnsafeUrlError(
+            f"a redirect target is malformed ({_bounded_reason(str(exc), *secrets)}) — "
+            "refusing to follow"
+        ) from exc
     except httpx.HTTPError as exc:
         reason = _bounded_reason(str(exc), *secrets)
+        if "location header" in reason.lower():
+            raise UnsafeUrlError(
+                f"a redirect target is malformed ({reason}) — refusing to follow"
+            ) from exc
         hint = (
             " — on a TLS-inspecting corporate network set SSL_CERT_FILE"
             if "certificate" in reason.lower() or "ssl" in reason.lower()
@@ -341,7 +423,9 @@ def youtube_options(
         "outtmpl": {"default": str(dest_dir / f"youtube-{video_id}.%(ext)s")},
         "restrictfilenames": True,
         "windowsfilenames": True,
-        "max_filesize": max_bytes,
+        # NOT max_filesize: yt-dlp treats it as a silent per-format skip (no
+        # error, no hook, no merge), which could leave an audio-only
+        # intermediate behind. The progress hook enforces the cap instead.
         "socket_timeout": CONNECT_TIMEOUT_S,
         "retries": 3,
         "fragment_retries": 3,
@@ -396,9 +480,16 @@ def _published_at(info: dict[str, Any]) -> str | None:
     return None
 
 
+def _is_bot_check(message: str) -> bool:
+    lowered = message.lower().replace("\u2019", "'")
+    return "not a bot" in lowered
+
+
 def _youtube_restriction(message: str) -> str | None:
     """Map a yt-dlp failure to one bounded, actionable category."""
     lowered = message.lower()
+    if _is_bot_check(message):
+        return None  # handled as a retryable network condition by the caller
     if "age" in lowered and ("confirm" in lowered or "restricted" in lowered):
         return "the video is age-restricted — sign-in based access is not supported"
     if "private video" in lowered or "sign in" in lowered or "login" in lowered:
@@ -553,6 +644,13 @@ def download_youtube(
                 else f"download exceeded {DOWNLOAD_DEADLINE_S:.0f}s — aborted"
             ) from exc
         message = _bounded_reason(str(exc), *secrets)
+        if _is_bot_check(message):
+            raise DownloadError(
+                f"the provider asked for a sign-in bot check for {source.safe_label()} — "
+                "this is not a private video: it happens from datacenter/VPN addresses or "
+                "with a stale yt-dlp; retry later, from another network, or refresh the "
+                "tool environment (cookies are not supported)"
+            ) from exc
         restriction = _youtube_restriction(message)
         if restriction is not None:
             raise UnsupportedUrlError(f"{source.safe_label()}: {restriction}") from exc
@@ -598,18 +696,24 @@ def _produced_file(info: dict[str, Any], dest_dir: Path, video_id: str) -> Path:
     candidates = [
         path
         for path in dest_dir.glob(f"youtube-{video_id}.*")
-        if path.is_file() and path.suffix.lower() in MEDIA_EXTENSIONS
+        if path.is_file()
+        and path.suffix.lower() in MEDIA_EXTENSIONS
+        and not _INTERMEDIATE.search(path.name)
     ]
     if len(candidates) == 1:
         return candidates[0]
+    leftovers = sorted(p.name for p in dest_dir.iterdir() if p.is_file())
     for path in dest_dir.iterdir():
-        if path.is_file() and path.suffix == ".part":
+        if path.is_file():
             path.unlink(missing_ok=True)
+    if any(_INTERMEDIATE.search(name) for name in leftovers):
+        raise DownloadError(
+            "the provider download stopped before the video and audio tracks were merged "
+            "(a skipped track or an interrupted merge) — retry; if it persists the format "
+            "may need a JavaScript runtime, see docs/TROUBLESHOOTING.md"
+        )
     raise DownloadError(
         "the provider download produced no supported media file (mp4/webm/mkv) — the "
         "format may need a JavaScript runtime; see docs/TROUBLESHOOTING.md"
     )
 
-
-def remove_tree(path: Path) -> None:
-    shutil.rmtree(path, ignore_errors=True)

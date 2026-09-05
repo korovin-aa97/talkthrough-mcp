@@ -62,6 +62,11 @@ def _build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="download again even if this URL was ingested before",
     )
+    process_url.add_argument(
+        "--force",
+        action="store_true",
+        help="rebuild the stored job from the kept source (re-anchor, new model)",
+    )
     process_url.add_argument("--recorded-at", default=None, help="ISO 8601 wall-clock override")
     process_url.add_argument(
         "--language", default=None, help="transcription language (default auto)"
@@ -182,6 +187,7 @@ def _cmd_process_url(args: argparse.Namespace) -> int:
     ingested = url_ingest.process_url(
         args.url,
         refresh=args.refresh,
+        force=args.force,
         recorded_at=args.recorded_at,
         vocabulary=args.vocabulary,
         language=args.language,

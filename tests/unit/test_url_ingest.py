@@ -383,3 +383,16 @@ def test_media_origin_tolerates_malformed_or_future_payloads() -> None:
     assert parsed.downloaded_bytes is None
     assert parsed.provider_id == "42"
     assert "future_field" not in parsed.to_dict()
+
+
+@pytest.mark.parametrize(
+    "url",
+    [
+        "https://cdn.example.com:8o80/clip.mp4",
+        "https://cdn.example.com:99999/clip.mp4",
+        "https://[::1/clip.mp4",
+    ],
+)
+def test_malformed_urls_are_input_errors_not_internal_errors(url: str) -> None:
+    with pytest.raises(UnsupportedUrlError, match="malformed"):
+        classify_url(url)
