@@ -177,7 +177,16 @@ ENGINE_SPECS: list[dict[str, str]] = [
         "extra": (
             "Skills: this repo ships the talkthrough skill at `.agents/skills/talkthrough/` — "
             "Codex discovers it automatically inside a checkout; for global use copy it to "
-            "`~/.agents/skills/` and invoke with `$talkthrough`."
+            "`~/.agents/skills/` and invoke with `$talkthrough`.\n\n"
+            "`process_url` is annotated as an open-world (network) tool, so an interactive "
+            "Codex session asks before calling it and a non-interactive `codex exec` run "
+            "cancels it (\"user cancelled MCP tool call\"). To let unattended runs download "
+            "public URLs, approve that one tool in the same config:\n\n"
+            "```toml\n"
+            "[mcp_servers.talkthrough.tools.process_url]\n"
+            'approval_mode = "approve"\n'
+            "```\n\n"
+            "Every other tool stays local and needs no approval."
         ),
         "docs_url": "https://developers.openai.com/codex/mcp",
     },

@@ -385,6 +385,25 @@ Errors never echo the URL (query strings may carry signed tokens); the
 `origin` block of the summary names the provider and the public video id or
 host instead.
 
+## Codex cancels `process_url` ("user cancelled MCP tool call")
+
+`process_url` is honestly annotated as an open-world, non-idempotent tool
+(it reaches the network). Interactive Codex asks before running it; a
+non-interactive `codex exec` run (approval policy `never`) auto-cancels it
+and the agent reports the cancellation. Approve that one tool in
+`~/.codex/config.toml` (or project `.codex/config.toml`) — every other
+talkthrough tool is local and unaffected:
+
+```toml
+[mcp_servers.talkthrough.tools.process_url]
+approval_mode = "approve"
+```
+
+(`default_tools_approval_mode = "approve"` on the `[mcp_servers.talkthrough]`
+table approves all of its tools at once.) Claude Code and other clients that
+prompt on annotations behave the same way: the prompt is the feature, not a
+bug — a download is the one thing the server does outside your machine.
+
 ## YouTube download fails or picks a poor format
 
 `yt-dlp` needs a JavaScript runtime for some YouTube formats. The `[url]`
