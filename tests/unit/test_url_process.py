@@ -266,8 +266,10 @@ def test_gc_removes_the_managed_source_with_the_job_and_its_url_mapping(
     job_id = ingested.result.manifest.job_id
     jobs.delete_job(job_id)
     result = jobs.gc(keep_days=30)
-    assert result.swept == [f"urls/{url_ingest.mapping_path(ingested.source.mapping_key).name}"]
+    mapping = url_ingest.mapping_path(ingested.source.mapping_key)
+    assert result.swept == [f"urls/{mapping.name}", f"urls/{mapping.with_suffix('.lock').name}"]
     assert not (jobs.job_dir(job_id) / "source").exists()
+    assert not any(url_ingest.urls_root().iterdir())
 
 
 def test_forced_rebuild_of_a_url_job_keeps_its_origin(
@@ -683,3 +685,65 @@ def test_refresh_replaces_stale_provider_metadata_when_the_bytes_are_unchanged(
     assert origin.downloaded_at is not None and origin.downloaded_at > "2020-01-01T00:00:00+00:00"
     assert refreshed.origin == origin
     assert jobs.load_job(job_id).media.managed_source == first.result.manifest.media.managed_source
+
+
+# --- URL lock files (0.4.1: gc left one empty .lock per URL forever) ---------------
+
+
+def test_gc_sweeps_orphan_url_locks_but_keeps_live_and_held_ones(
+    stubbed: dict[str, Any], isolated_home: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    ingested = process_url(URL)  # live: a mapping and its lock
+    live_lock = url_ingest.mapping_path(ingested.source.mapping_key).with_suffix(".lock")
+    assert live_lock.exists()
+
+    def failing(source: Any, dest_dir: Path, *, max_bytes: int, report: Any) -> Downloaded:
+        raise DownloadError("HTTP 403 for https://cdn.example.com/…")
+
+    monkeypatch.setattr(url_download, "download_direct", failing)
+    refused = "https://cdn.example.com/other.mp4"
+    with pytest.raises(DownloadError):
+        process_url(refused)
+    orphan_lock = url_ingest.mapping_path(
+        url_ingest.classify_url(refused).mapping_key
+    ).with_suffix(".lock")
+    assert orphan_lock.exists() and not orphan_lock.with_suffix(".json").exists()
+
+    held_key = "site:example:held"
+    held_lock = url_ingest.mapping_path(held_key).with_suffix(".lock")
+    with url_ingest.url_lock(held_key):
+        result = jobs.gc(keep_days=30)
+        assert result.swept == [f"urls/{orphan_lock.name}"]
+        assert not orphan_lock.exists() and live_lock.exists() and held_lock.exists()
+    # released and without a mapping: the next pass takes it
+    assert jobs.gc(keep_days=30).swept == [f"urls/{held_lock.name}"]
+    assert not held_lock.exists() and live_lock.exists()
+
+
+def test_url_lock_reopens_when_a_sweep_removed_the_file_under_it(
+    isolated_home: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A gc pass can unlink an orphan lock between a waiter's open() and its
+    flock(); a lock on the unlinked inode would guard nothing, so url_lock
+    checks the path still names the file it holds and reopens otherwise."""
+    import fcntl
+
+    key = "site:example:raced"
+    lock_path = url_ingest.mapping_path(key).with_suffix(".lock")
+    real_flock = fcntl.flock
+    calls: list[int] = []
+
+    def racing_flock(fd: int, operation: int) -> None:
+        calls.append(fd)
+        if len(calls) == 1:
+            lock_path.unlink()  # the sweep, between our open() and flock()
+        real_flock(fd, operation)
+
+    monkeypatch.setattr(fcntl, "flock", racing_flock)
+    with url_ingest.url_lock(key):
+        assert lock_path.exists()
+        with lock_path.open("a") as other, pytest.raises(BlockingIOError):
+            real_flock(other.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)  # the CURRENT file is held
+    assert len(calls) == 2
+    with lock_path.open("a") as other:
+        real_flock(other.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)  # released on exit

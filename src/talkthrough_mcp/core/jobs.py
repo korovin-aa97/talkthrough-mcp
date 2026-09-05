@@ -715,10 +715,12 @@ def gc(keep_days: int) -> GcResult:
             removed.append(manifest.job_id)
     swept_reprocess, recovered = _sweep_reprocess_dirs()
     # URL ingestion artifacts: index entries whose job is gone (including the
-    # ones just removed above) and download workspaces a dead process left.
-    from .url_ingest import sweep_stale_downloads, sweep_stale_mappings
+    # ones just removed above), lock files without a mapping, and download
+    # workspaces a dead process left.
+    from .url_ingest import sweep_orphan_locks, sweep_stale_downloads, sweep_stale_mappings
 
     url_swept = [f"urls/{name}" for name in sweep_stale_mappings()]
+    url_swept.extend(f"urls/{name}" for name in sweep_orphan_locks())
     url_swept.extend(f"downloads/{name}" for name in sweep_stale_downloads())
     return GcResult(
         removed=removed,
