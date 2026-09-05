@@ -573,6 +573,21 @@ def _youtube_restriction(message: str) -> str | None:
     return None
 
 
+def _page_reader_failure(
+    label: str, exc: BaseException, secrets: tuple[str, ...]
+) -> DownloadError:
+    """The catch-all for exceptions the extractor stack raises past yt-dlp's
+    own error class — a TypeError from a parser that met a changed page, for
+    instance (TED, release QA 2026-09-05). Name the exception, keep its first
+    line, and say what to do about it."""
+    return DownloadError(
+        f"the page reader failed on {label} ({type(exc).__name__}: "
+        f"{_bounded_reason(str(exc), *secrets)}) — the site may have changed its page "
+        "layout: refresh the tool environment so yt-dlp updates, or pass a direct link "
+        "to the media file"
+    )
+
+
 def preflight_info(
     info: dict[str, Any], *, max_seconds: int, max_bytes: int, require_duration: bool = True
 ) -> int | None:
@@ -734,10 +749,7 @@ def download_youtube(
                 f"download exceeded the {max_bytes} byte cap (TALKTHROUGH_MAX_DOWNLOAD_BYTES) "
                 "— aborted"
             ) from exc
-        raise DownloadError(
-            f"unexpected downloader failure for {source.safe_label()}: "
-            f"{type(exc).__name__}: {_bounded_reason(str(exc), *secrets)}"
-        ) from exc
+        raise _page_reader_failure(source.safe_label(), exc, secrets) from exc
     size = produced.stat().st_size
     if size > max_bytes:
         produced.unlink(missing_ok=True)
@@ -934,10 +946,7 @@ def download_site(
                 f"download exceeded the {max_bytes} byte cap (TALKTHROUGH_MAX_DOWNLOAD_BYTES) "
                 "— aborted"
             ) from exc
-        raise DownloadError(
-            f"unexpected downloader failure for {source.safe_label()}: "
-            f"{type(exc).__name__}: {_bounded_reason(str(exc), *secrets)}"
-        ) from exc
+        raise _page_reader_failure(source.safe_label(), exc, secrets) from exc
     size = produced.stat().st_size
     if size > max_bytes:
         produced.unlink(missing_ok=True)
