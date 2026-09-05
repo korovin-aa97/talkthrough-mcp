@@ -130,6 +130,25 @@ async def _run_session(home: Path) -> None:
         prompt_names = sorted(prompt.name for prompt in prompts_result.prompts)
         assert prompt_names == sorted(guidance.PROMPT_NAMES)
 
+        # 2b. process_url is the one open-world tool; its refusals must reach
+        # the client as clean tool errors before any network access, and the
+        # message must never echo the URL (query strings may carry tokens).
+        url_tool = tools["process_url"]
+        assert url_tool.annotations is not None
+        assert url_tool.annotations.open_world_hint is True
+        assert url_tool.annotations.idempotent_hint is False
+        for bad_url, fragment in (
+            (str(DEMO_MP4), "process_media"),
+            ("https://www.youtube.com/playlist?list=PLxyz", "playlist"),
+            ("https://user:hunter2@cdn.example.com/clip.mp4?sig=SECRET-4242", "credentials"),
+        ):
+            refused = await session.call_tool("process_url", {"url": bad_url})
+            assert refused.is_error, bad_url
+            first_block = refused.content[0]
+            assert isinstance(first_block, types.TextContent)
+            assert fragment in first_block.text, first_block.text
+            assert "hunter2" not in first_block.text and "SECRET-4242" not in first_block.text
+
         # 3. Process the committed fixture (the long call).
         progress_updates: list[tuple[float, float | None, str | None]] = []
 
