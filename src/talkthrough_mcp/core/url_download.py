@@ -350,6 +350,11 @@ def youtube_options(
         "overwrites": True,
         "progress_hooks": [progress_hook],
         "ffmpeg_location": str(Path(ffmpeg_path()).parent),
+        # Deterministic merge: without -bitexact the Matroska/MP4 muxer stamps
+        # a muxing date and a random segment UID, so two downloads of the same
+        # video hashed to two jobs (caught on the demo, 2026-09-05). With it,
+        # refresh=true on an unchanged video lands on the same job id.
+        "postprocessor_args": {"merger": ["-bitexact"]},
         "cookiesfrombrowser": None,
         "cookiefile": None,
         "remote_components": [],
