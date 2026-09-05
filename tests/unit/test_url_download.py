@@ -127,6 +127,23 @@ def test_direct_download_refuses_non_media_responses(
     assert list(tmp_path.iterdir()) == []
 
 
+def test_direct_download_refuses_html_even_when_the_path_looks_like_media(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, pinned: None
+) -> None:
+    """A Wikimedia Commons *page* URL ends in .ogv; the page itself is not media."""
+    _serve(
+        monkeypatch,
+        lambda request: httpx.Response(
+            200, content=b"<html>player</html>", headers={"content-type": "text/html"}
+        ),
+    )
+    source = classify_url("https://commons.example.org/wiki/File:Clip.ogv")
+    assert source.path_extension == ".ogv"
+    with pytest.raises(url_download.NotMediaResponse):
+        download_direct(source, tmp_path, max_bytes=10_000, report=lambda *a: None)
+    assert list(tmp_path.iterdir()) == []
+
+
 def test_direct_download_follows_and_revalidates_redirects(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -481,6 +498,17 @@ def test_preflight_estimate_sums_requested_formats() -> None:
     assert preflight_info({"duration": 10}, max_seconds=100, max_bytes=1000) is None
 
 
+def test_preflight_unknown_duration_is_refused_by_default_but_allowed_for_sites() -> None:
+    with pytest.raises(UnsupportedUrlError, match="reports no duration"):
+        preflight_info({"id": "x"}, max_seconds=100, max_bytes=1000)
+    # Site extractors (e.g. Instagram) omit the duration for anonymous clients; the
+    # cap is then enforced by ffprobe on the downloaded file.
+    relaxed = dict(max_seconds=100, max_bytes=1000, require_duration=False)
+    assert preflight_info({"id": "x"}, **relaxed) is None
+    with pytest.raises(UnsupportedUrlError, match="live stream"):
+        preflight_info({"id": "x", "is_live": True}, **relaxed)
+
+
 @pytest.mark.parametrize(
     ("message", "fragment"),
     [
@@ -699,3 +727,129 @@ def test_youtube_intermediate_only_output_is_reported_as_incomplete(
             max_seconds=7200, report=lambda *a: None,
         )
     assert list(tmp_path.iterdir()) == []
+
+
+# --- any-site page reader (2026-09-05) ---------------------------------------------
+
+
+def _site_info(**patch: Any) -> dict[str, Any]:
+    info = {
+        "id": "987654321",
+        "extractor_key": "Vimeo",
+        "title": "Sintel trailer",
+        "duration": 52,
+        "is_live": False,
+        "live_status": "not_live",
+        "availability": "public",
+        "age_limit": 0,
+        "upload_date": "20100512",
+        "requested_formats": [{"filesize": 3000}],
+    }
+    info.update(patch)
+    return info
+
+
+def test_site_download_names_the_file_by_provider_and_id(
+    fake_yt_dlp: type[_FakeYoutubeDL], tmp_path: Path
+) -> None:
+    from talkthrough_mcp.core.url_download import download_site
+
+    fake_yt_dlp.info = _site_info()
+    source = classify_url("https://vimeo.com/987654321?share=copy")
+    seen, report = _report_log()
+    downloaded = download_site(
+        source, tmp_path, max_bytes=100_000, max_seconds=7200, report=report
+    )
+    assert downloaded.kind == "site"
+    assert downloaded.provider == "vimeo" and downloaded.provider_id == "987654321"
+    assert downloaded.path == tmp_path / "vimeo-987654321.mp4"
+    assert downloaded.title == "Sintel trailer" and downloaded.published_at == "2010-05-12"
+    assert any(stage.startswith("reading the video page") for stage, _ in seen)
+    probe, ydl = fake_yt_dlp.instances
+    assert probe.options["outtmpl"]["default"].endswith("site-probe.%(ext)s")
+    assert ydl.options["outtmpl"]["default"].endswith("vimeo-987654321.%(ext)s")
+    assert ydl.options["cookiesfrombrowser"] is None and ydl.options["remote_components"] == []
+
+
+def test_site_download_resolves_a_single_entry_page_and_refuses_many(
+    fake_yt_dlp: type[_FakeYoutubeDL], tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from talkthrough_mcp.core.url_download import download_site
+
+    single = _site_info(extractor_key="Instagram", id="C_abc-123")
+    fake_yt_dlp.info = {"_type": "playlist", "entries": [{"_type": "url", "url": "x"}]}
+
+    original = _FakeYoutubeDL.process_ie_result
+
+    def dispatch(self: Any, entry: dict[str, Any], download: bool = True) -> Any:
+        if not download:
+            return dict(single)
+        return original(self, entry, download)
+
+    monkeypatch.setattr(_FakeYoutubeDL, "process_ie_result", dispatch)
+    downloaded = download_site(
+        classify_url("https://www.instagram.com/reel/C_abc-123/"), tmp_path,
+        max_bytes=100_000, max_seconds=7200, report=lambda *a: None,
+    )
+    assert downloaded.provider == "instagram" and downloaded.provider_id == "C_abc-123"
+    assert downloaded.path.name == "instagram-C_abc-123.mp4"
+
+    fake_yt_dlp.info = {"_type": "playlist", "entries": [{"url": "a"}, {"url": "b"}]}
+    with pytest.raises(UnsupportedUrlError, match="contains 2 videos"):
+        download_site(
+            classify_url("https://www.instagram.com/p/carousel/"), tmp_path,
+            max_bytes=100_000, max_seconds=7200, report=lambda *a: None,
+        )
+
+
+def test_site_download_reuses_a_known_job_before_downloading(
+    fake_yt_dlp: type[_FakeYoutubeDL], tmp_path: Path
+) -> None:
+    from talkthrough_mcp.core.url_download import ReuseExistingJob, download_site
+
+    fake_yt_dlp.info = _site_info()
+    with pytest.raises(ReuseExistingJob) as info:
+        download_site(
+            classify_url("https://player.vimeo.com/video/987654321"), tmp_path,
+            max_bytes=100_000, max_seconds=7200, report=lambda *a: None,
+            known_job=lambda provider, pid: (
+                "a" * 16 if (provider, pid) == ("vimeo", "987654321") else None
+            ),
+        )
+    assert info.value.job_id == "a" * 16
+    assert list(tmp_path.iterdir()) == []
+
+
+def test_site_download_maps_unsupported_pages_and_bot_walls(
+    fake_yt_dlp: type[_FakeYoutubeDL], tmp_path: Path
+) -> None:
+    from talkthrough_mcp.core.url_download import download_site
+
+    fake_yt_dlp.fail_with = _FakeYoutubeDLError(
+        "ERROR: Unsupported URL: https://example.org/about?tok=SECRET-TOKEN-4242"
+    )
+    with pytest.raises(UnsupportedUrlError, match="no video could be found") as info:
+        download_site(
+            classify_url("https://example.org/about?tok=SECRET-TOKEN-4242"), tmp_path,
+            max_bytes=100_000, max_seconds=7200, report=lambda *a: None,
+        )
+    assert "SECRET-TOKEN" not in str(info.value)
+    fake_yt_dlp.fail_with = _FakeYoutubeDLError(
+        "ERROR: [Instagram] C1: Sign in to confirm you\u2019re not a bot"
+    )
+    with pytest.raises(DownloadError, match="bot check"):
+        download_site(
+            classify_url("https://www.instagram.com/reel/C1/"), tmp_path,
+            max_bytes=100_000, max_seconds=7200, report=lambda *a: None,
+        )
+
+
+def test_provider_ids_are_bounded_and_filename_safe() -> None:
+    from talkthrough_mcp.core.url_download import safe_provider, safe_provider_id
+
+    assert safe_provider_id("abc_DEF-123.x") == "abc_DEF-123.x"
+    assert safe_provider_id("") == "unknown"
+    weird = safe_provider_id("a/b c?d=e" + "x" * 100)
+    assert "/" not in weird and " " not in weird and len(weird) <= 60
+    assert safe_provider("Vimeo") == "vimeo" and safe_provider("Generic") == "generic"
+    assert safe_provider(None) == "site"

@@ -47,7 +47,7 @@ from .wallclock import resolve_wall_clock
 
 logger = logging.getLogger(__name__)
 
-VIDEO_EXTENSIONS = {".mov", ".mp4", ".webm", ".mkv"}
+VIDEO_EXTENSIONS = {".mov", ".mp4", ".webm", ".mkv", ".ogv"}
 AUDIO_EXTENSIONS = {".m4a", ".mp3", ".wav", ".ogg", ".flac"}
 
 DEFAULT_MAX_SECONDS = 7200

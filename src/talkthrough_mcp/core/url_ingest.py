@@ -58,6 +58,25 @@ TITLE_MAX_CHARS = 200
 
 KIND_YOUTUBE = "youtube"
 KIND_DIRECT = "direct_url"
+KIND_SITE = "site"
+# Hosts that never serve a media file at the URL people paste: skip the direct
+# attempt and go straight to the page reader (saves a request and a 4xx).
+PAGE_HOSTS = frozenset(
+    {
+        "vimeo.com", "www.vimeo.com", "player.vimeo.com",
+        "www.tiktok.com", "tiktok.com", "vm.tiktok.com",
+        "www.instagram.com", "instagram.com",
+        "www.loom.com", "loom.com",
+        "drive.google.com", "docs.google.com",
+        "x.com", "twitter.com", "www.twitter.com", "mobile.twitter.com",
+        "www.facebook.com", "facebook.com", "fb.watch",
+        "www.twitch.tv", "twitch.tv",
+        "www.dailymotion.com", "dailymotion.com",
+        "www.reddit.com", "reddit.com", "v.redd.it",
+        "rutube.ru", "vk.com", "www.vk.com", "vkvideo.ru",
+        "www.bilibili.com", "bilibili.com",
+    }
+)
 
 _YOUTUBE_HOSTS = frozenset(
     {
@@ -84,13 +103,14 @@ _YOUTUBE_REJECTED_PATHS = {
 }
 # Extensions the local pipeline accepts; a direct URL must end up as one of
 # these after ffprobe agrees the bytes are media.
-VIDEO_EXTENSIONS = frozenset({".mov", ".mp4", ".webm", ".mkv"})
+VIDEO_EXTENSIONS = frozenset({".mov", ".mp4", ".webm", ".mkv", ".ogv"})
 AUDIO_EXTENSIONS = frozenset({".m4a", ".mp3", ".wav", ".ogg", ".flac"})
 MEDIA_EXTENSIONS = VIDEO_EXTENSIONS | AUDIO_EXTENSIONS
 CONTENT_TYPE_EXTENSIONS: dict[str, str] = {
     "video/mp4": ".mp4",
     "video/quicktime": ".mov",
     "video/webm": ".webm",
+    "video/ogg": ".ogv",
     "video/x-matroska": ".mkv",
     "audio/mp4": ".m4a",
     "audio/x-m4a": ".m4a",
@@ -179,7 +199,7 @@ class UrlSource:
     def safe_label(self) -> str:
         if self.kind == KIND_YOUTUBE:
             return f"YouTube video {self.provider_id}"
-        return f"https://{self.host}/… (direct media URL)"
+        return f"https://{self.host}/…"
 
 
 def classify_url(raw: str) -> UrlSource:
@@ -608,11 +628,24 @@ def download_workspace() -> Iterator[Path]:
         shutil.rmtree(staging, ignore_errors=True)
 
 
-def managed_source_name(source: UrlSource, extension: str) -> str:
+def managed_source_name(
+    source: UrlSource,
+    extension: str,
+    *,
+    provider: str | None = None,
+    provider_id: str | None = None,
+) -> str:
     """Talkthrough names the file — never the remote title."""
     if source.kind == KIND_YOUTUBE:
         return f"youtube-{source.provider_id}{extension}"
+    if provider and provider_id:
+        return f"{provider}-{provider_id}{extension}"
     return f"direct-{source.url_sha256[:12]}{extension}"
+
+
+def site_mapping_key(provider: str, provider_id: str) -> str:
+    """Second-level index key: the same video reached through two URL forms."""
+    return f"site:{provider}:{provider_id}"
 
 
 def managed_source_relative(name: str) -> str:
@@ -652,12 +685,15 @@ def build_origin(
     downloaded_bytes: int,
     title: str | None,
     published_at: str | None,
+    kind: str | None = None,
+    provider: str | None = None,
+    provider_id: str | None = None,
 ) -> MediaOrigin:
     return MediaOrigin(
-        kind=source.kind,
-        provider=source.provider,
+        kind=kind or source.kind,
+        provider=provider or source.provider,
         url_sha256=source.url_sha256,
-        provider_id=source.provider_id,
+        provider_id=provider_id or source.provider_id,
         host=source.host,
         title=bounded_title(title),
         published_at=published_at,
@@ -690,6 +726,72 @@ def attach_managed_source(job_id: str, managed_source: str, origin: MediaOrigin)
 
 
 # --- orchestration ----------------------------------------------------------------
+
+
+def _download(
+    source: UrlSource,
+    staging: Path,
+    *,
+    max_bytes: int,
+    max_seconds: int,
+    report: Any,
+    allow_reuse: bool = True,
+) -> Any:
+    """Fetch the source: YouTube adapter, direct media file, or a video page.
+
+    A non-YouTube URL is tried as a media file first (our own gated, pinned
+    downloader); when the server answers with a page or an HTTP error, the
+    page reader (yt-dlp, any site) takes over. Security refusals from the
+    direct attempt are final — they never fall back.
+    """
+    from . import url_download
+
+    if source.kind == KIND_YOUTUBE:
+        return url_download.download_youtube(
+            source, staging, max_bytes=max_bytes, max_seconds=max_seconds, report=report
+        )
+
+    def known_job(provider: str, provider_id: str) -> str | None:
+        if not allow_reuse:
+            return None
+        mapping = load_mapping(site_mapping_key(provider, provider_id))
+        return mapping.job_id if mapping is not None else None
+
+    first_error: Exception | None = None
+    if source.host not in PAGE_HOSTS:
+        try:
+            return url_download.download_direct(
+                source, staging, max_bytes=max_bytes, report=report
+            )
+        except (url_download.NotMediaResponse, url_download.HttpStatusError) as exc:
+            first_error = exc
+            for leftover in staging.iterdir():
+                if leftover.is_file():
+                    leftover.unlink(missing_ok=True)
+    else:
+        # still the destination gate, before yt-dlp's own client touches it
+        resolve_public_host(source.host or "")
+    try:
+        return url_download.download_site(
+            source,
+            staging,
+            max_bytes=max_bytes,
+            max_seconds=max_seconds,
+            report=report,
+            known_job=known_job,
+        )
+    except (DownloadError, UnsupportedUrlError) as second:
+        if first_error is None:
+            raise
+        if source.path_extension is not None and isinstance(
+            first_error, url_download.HttpStatusError
+        ):
+            # a link that looks like a media file and answered with an HTTP
+            # error is best explained by that error
+            raise first_error from second
+        raise type(second)(
+            f"{second} (the URL is not a media file either: {first_error})"
+        ) from second
 
 
 @dataclass(frozen=True)
@@ -781,15 +883,59 @@ def process_url(
         report("resolving provider", 0.02)
         max_bytes = max_download_bytes()
         max_seconds = pipeline.max_seconds_cap()
+        extra_keys: list[str] = []
         with download_workspace() as staging:
-            if source.kind == KIND_YOUTUBE:
-                downloaded = url_download.download_youtube(
-                    source, staging, max_bytes=max_bytes, max_seconds=max_seconds, report=report
+            try:
+                # ``refresh`` asks for a new download, so the provider-identity
+                # index must not short-circuit it either.
+                downloaded = _download(
+                    source,
+                    staging,
+                    max_bytes=max_bytes,
+                    max_seconds=max_seconds,
+                    report=report,
+                    allow_reuse=not refresh,
                 )
-            else:
-                downloaded = url_download.download_direct(
-                    source, staging, max_bytes=max_bytes, report=report
+            except url_download.ReuseExistingJob as known:
+                # The page resolves to a video already stored under another
+                # URL form: remember this URL too and serve that job.
+                stored, _unreadable = jobs.load_previous_job(known.job_id)
+                if stored is not None:
+                    path = source_path(
+                        stored.media.path, known.job_id, stored.media.managed_source
+                    )
+                    if path.is_file():
+                        save_mapping(
+                            source.mapping_key,
+                            UrlMapping(
+                                job_id=known.job_id,
+                                provider=known.provider,
+                                created_at=datetime.now(UTC).isoformat(timespec="seconds"),
+                                provider_id=known.provider_id,
+                            ),
+                        )
+                        result = pipeline.process_media(
+                            str(path), **analysis, progress=pipeline_report
+                        )
+                        return UrlProcessResult(
+                            result=result,
+                            source=source,
+                            origin=result.manifest.media.origin,
+                            reused_url_mapping=True,
+                            refreshed=False,
+                            downloaded_bytes=None,
+                        )
+                # the indexed job is gone or its source was removed: download
+                downloaded = _download(
+                    source,
+                    staging,
+                    max_bytes=max_bytes,
+                    max_seconds=max_seconds,
+                    report=report,
+                    allow_reuse=False,
                 )
+            if downloaded.provider and downloaded.provider_id:
+                extra_keys.append(site_mapping_key(downloaded.provider, downloaded.provider_id))
             report("verifying media", 0.14)
             info = probe_media(downloaded.path)
             if info.duration_s <= 0:
@@ -803,7 +949,12 @@ def process_url(
                     "(override with TALKTHROUGH_MAX_SECONDS)"
                 )
             job_id = jobs.compute_job_id(downloaded.path)
-            name = managed_source_name(source, downloaded.extension)
+            name = managed_source_name(
+                source,
+                downloaded.extension,
+                provider=downloaded.provider,
+                provider_id=downloaded.provider_id,
+            )
             relative = managed_source_relative(name)
             origin = build_origin(
                 source,
@@ -811,12 +962,15 @@ def process_url(
                 downloaded_bytes=downloaded.downloaded_bytes,
                 title=downloaded.title,
                 published_at=downloaded.published_at,
+                kind=downloaded.kind,
+                provider=downloaded.provider,
+                provider_id=downloaded.provider_id,
             )
             mapping = UrlMapping(
                 job_id=job_id,
-                provider=source.provider,
+                provider=downloaded.provider or source.provider,
                 created_at=datetime.now(UTC).isoformat(timespec="seconds"),
-                provider_id=source.provider_id,
+                provider_id=downloaded.provider_id or source.provider_id,
                 validators=downloaded.validators,
             )
             # Install and process under ONE job lock (re-entrant for the
@@ -829,6 +983,8 @@ def process_url(
             with jobs.job_lock(job_id):
                 managed = install_managed_source(job_id, downloaded.path, name)
                 save_mapping(source.mapping_key, mapping)
+                for key in extra_keys:
+                    save_mapping(key, mapping)
                 result = pipeline.process_media(
                     str(managed),
                     **analysis,

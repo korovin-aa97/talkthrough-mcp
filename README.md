@@ -383,7 +383,7 @@ Then, in your agent:
 | Tool | What it does |
 |---|---|
 | `process_media(path, recorded_at?, vocabulary?, language?, model?, diarize?, num_speakers?, force?)` | Ingest a video/audio file: local STT, keyframes, OCR, wall-clock, opt-in speaker labels. Returns a compact summary. Idempotent by content hash — re-calls are instant; `diarize=true` on a processed job adds speakers without re-transcribing. |
-| `process_url(url, recorded_at?, vocabulary?, language?, model?, diarize?, num_speakers?, refresh?)` | The one network tool: download one public video/audio URL once (a direct `https://` media link, or one YouTube video with the `[url]` extra), keep the source inside the job, then run the same local pipeline. Same-URL re-calls serve the stored job without network unless `refresh=true`; the raw URL is never stored. |
+| `process_url(url, recorded_at?, vocabulary?, language?, model?, diarize?, num_speakers?, refresh?, force?)` | The one network tool: download one public video/audio URL once (a direct `https://` media link, one YouTube video, or any public video page yt-dlp can read — with the `[url]` extra), keep the source inside the job, then run the same local pipeline. Same-URL re-calls serve the stored job without network unless `refresh=true`; `force=true` rebuilds from the kept source; the raw URL is never stored. |
 | `get_transcript(job_id, start_ms?, end_ms?, format?)` | Paginated transcript as `segments`, `text`, or `srt` (speaker-prefixed when diarized, plus a roster header); truncation returns `next_start_ms`. |
 | `get_frames(job_id, at_ms? \| start_ms?+end_ms?, max_frames?, include_duplicates?)` | Keyframe images nearest a timestamp or evenly thinned across a range (unique frames by default, max 6/call); each frame names its absolute `path`. |
 | `get_moment(job_id, start_ms, end_ms)` | The "one remark" bundle: transcript slice + up to 3 frames + their OCR text + wall-clock range (+ `speakers_in_range` when diarized). |
@@ -610,18 +610,26 @@ If something breaks, please open an issue.
 
 ## Supported inputs
 
-Video: `.mov` `.mp4` `.webm` `.mkv` — audio-only: `.m4a` `.mp3` `.wav` `.ogg`
+Video: `.mov` `.mp4` `.webm` `.mkv` `.ogv` — audio-only: `.m4a` `.mp3` `.wav` `.ogg`
 `.flac` (transcript tools only; frame tools explain why they're unavailable).
 
 URLs (via `process_url`, since 0.4.0): a direct `https://` link to one of
-those media files, or one public YouTube video (`watch`, `youtu.be`,
-`shorts`, a completed live — needs the `[url]` extra, which the generated
-configs above already carry). The source is downloaded once, kept inside the
-job, and never re-fetched for later questions. Not supported: playlists,
-channels, active live streams, private, members-only, age-restricted or
-DRM-protected videos, cookies or logins, and other sites. You are
-responsible for having the right to download and process what you point it
-at; talkthrough does not bypass any restriction.
+those media files; one public YouTube video (`watch`, `youtu.be`, `shorts`,
+a completed live); or any public video **page** yt-dlp can read — public
+Instagram reels, TikTok, Wikimedia Commons file pages (each verified on
+release day), the rest of yt-dlp's ~1800 site extractors and pages with a
+plain HTML5/HLS player (the `[url]` extra, which the generated configs above
+already carry, brings yt-dlp). Always anonymous: a site that demands a
+sign-in from anonymous clients (Vimeo does, with this yt-dlp) is refused
+with the reason. The source is
+downloaded once, kept inside the job, and never re-fetched for later
+questions. Not supported: playlists, channels, active live streams,
+private, members-only, age-restricted or DRM-protected videos, cookies or
+logins — a site that hides a video behind a login or a bot wall answers
+with a clear refusal, not a workaround (Instagram in particular rate-limits
+anonymous access). You are responsible for having the right to download
+and process what you point it at; talkthrough does not bypass any
+restriction.
 
 ## Limitations
 
@@ -639,12 +647,13 @@ Honest edges, so you can decide fast:
   speakers; **pass `num_speakers` whenever the headcount is known** — it
   removes the worst failure mode at any size, and it is the way to go for
   large meetings (10+).
-- **URL ingestion covers one public video at a time.** Direct HTTPS media
-  links and single public YouTube videos only; playlists, channels, live
-  streams, gated or DRM content and other providers are out of scope
-  ([#5](https://github.com/korovin-aa97/talkthrough-mcp/issues/5) tracks
-  what comes next). A YouTube upload date is not a recording time, so URL
-  jobs have `wall_clock: null` unless you pass `recorded_at`.
+- **URL ingestion covers one public video at a time, without logins.**
+  Direct HTTPS media links, single public YouTube videos and public video
+  pages yt-dlp can read; playlists, channels, live streams, gated or DRM
+  content and anything behind a login or a bot wall are refused with a
+  reason. Sites change; a page that worked yesterday can need a newer yt-dlp
+  tomorrow. A provider's upload date is not a recording time, so URL jobs
+  have `wall_clock: null` unless you pass `recorded_at`.
 - **Keyframes + transcript, not motion analysis.** A glitch *between* scene
   changes can be invisible in the frame set; `extract_frame` re-checks any
   instant, but frame-by-frame motion reasoning is your multimodal model's job.
@@ -736,8 +745,8 @@ without a human reading docs:
 
 ## Roadmap
 
-more URL providers (Vimeo, Loom, Drive) · cloud STT · embeddings/semantic
-search · hosted/remote mode · `.mcpb` bundle · whisper.cpp backend
+cloud STT · embeddings/semantic search · hosted/remote mode · `.mcpb`
+bundle · whisper.cpp backend
 
 ## License
 

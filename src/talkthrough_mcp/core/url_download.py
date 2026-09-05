@@ -85,6 +85,30 @@ class Downloaded:
     title: str | None = None
     published_at: str | None = None
     validators: dict[str, str] = field(default_factory=dict)
+    # Site downloads (any page yt-dlp can read): the extractor that handled
+    # the page and its public id, so the job can be named and indexed by
+    # provider identity rather than by one URL form.
+    kind: str | None = None
+    provider: str | None = None
+    provider_id: str | None = None
+
+
+class ReuseExistingJob(Exception):
+    """Raised by a site download when the page resolves to an already stored job."""
+
+    def __init__(self, job_id: str, provider: str, provider_id: str) -> None:
+        self.job_id = job_id
+        self.provider = provider
+        self.provider_id = provider_id
+        super().__init__(job_id)
+
+
+class HttpStatusError(DownloadError):
+    """A non-media, non-redirect HTTP status from a direct download attempt."""
+
+    def __init__(self, status: int, label: str) -> None:
+        self.status = status
+        super().__init__(f"the server answered HTTP {status} for {label}")
 
 
 def _mb(value: int | None) -> str:
@@ -94,7 +118,24 @@ def _mb(value: int | None) -> str:
 # --- direct HTTPS ----------------------------------------------------------------
 
 
+# A page or text document is never media, however the path ends: Wikimedia
+# Commons serves the *page* for a file at a URL ending in ``.ogv``/``.webm``,
+# and a login or error page can sit behind any ``.mp4`` link.
+_TEXT_CONTENT_TYPES = frozenset(
+    {
+        "text/html",
+        "application/xhtml+xml",
+        "text/plain",
+        "text/xml",
+        "application/xml",
+        "application/json",
+    }
+)
+
+
 def _pick_extension(path_hint: str | None, content_type: str) -> str | None:
+    if content_type in _TEXT_CONTENT_TYPES:
+        return None
     if path_hint in MEDIA_EXTENSIONS:
         return path_hint
     return CONTENT_TYPE_EXTENSIONS.get(content_type)
@@ -134,15 +175,13 @@ class NotMediaResponse(UnsupportedUrlError):
         self.content_type = content_type
         super().__init__(
             f"the response is not a media file (content-type {content_type!r}) — pass a "
-            "direct link to an mp4/mov/webm/mkv/m4a/mp3/wav/ogg/flac file, or a video page "
+            "direct link to an mp4/mov/webm/mkv/ogv/m4a/mp3/wav/ogg/flac file, or a video page "
             "yt-dlp can read"
         )
 
 
 @contextlib.contextmanager
-def _open_pinned(
-    client: Any, url: str, host: str, addresses: list[str]
-) -> Iterator[Any]:
+def _open_pinned(client: Any, url: str, host: str, addresses: list[str]) -> Iterator[Any]:
     """Stream ``url`` from the first validated address that accepts a connection.
 
     All addresses passed the destination gate; a broken IPv6 route (an
@@ -226,10 +265,7 @@ def download_direct(
                         url = urljoin(url, location)
                         continue
                     if response.status_code != 200:
-                        raise DownloadError(
-                            f"the server answered HTTP {response.status_code} for "
-                            f"{source.safe_label()}"
-                        )
+                        raise HttpStatusError(response.status_code, source.safe_label())
                     content_type = (
                         response.headers.get("content-type", "").split(";")[0].strip().lower()
                     )
@@ -285,7 +321,8 @@ def download_direct(
                                 if written >= next_disk_check:
                                     next_disk_check += DISK_CHECK_EVERY_BYTES
                                     check_free_disk(
-                                        dest_dir, max(1, (length or written) - written),
+                                        dest_dir,
+                                        max(1, (length or written) - written),
                                         what="the download",
                                     )
                                 if raw >= next_report:
@@ -404,10 +441,16 @@ def youtube_options(
     max_bytes: int,
     progress_hook: Callable[[dict[str, Any]], None],
     secrets: tuple[str, ...],
+    output_stem: str | None = None,
 ) -> dict[str, Any]:
-    """The allowlisted YoutubeDL option set — nothing else is ever passed."""
+    """The allowlisted YoutubeDL option set — nothing else is ever passed.
+
+    ``output_stem`` names the file for site downloads; the default is the
+    YouTube stem. Both are Talkthrough-owned templates (never the title).
+    """
     from . import jobs
 
+    stem = output_stem or f"youtube-{video_id}"
     options: dict[str, Any] = {
         # One video only. NOT max_downloads: yt-dlp raises MaxDownloadsReached
         # as a control-flow signal right after the first download, which the
@@ -420,7 +463,7 @@ def youtube_options(
         "logger": _RedactingLogger(secrets),
         "color": {"stdout": "no_color", "stderr": "no_color"},
         "format": YOUTUBE_FORMAT,
-        "outtmpl": {"default": str(dest_dir / f"youtube-{video_id}.%(ext)s")},
+        "outtmpl": {"default": str(dest_dir / f"{stem}.%(ext)s")},
         "restrictfilenames": True,
         "windowsfilenames": True,
         # NOT max_filesize: yt-dlp treats it as a silent per-format skip (no
@@ -510,10 +553,16 @@ def _youtube_restriction(message: str) -> str | None:
     return None
 
 
-def preflight_info(info: dict[str, Any], *, max_seconds: int, max_bytes: int) -> int | None:
+def preflight_info(
+    info: dict[str, Any], *, max_seconds: int, max_bytes: int, require_duration: bool = True
+) -> int | None:
     """Reject playlists, live streams, restricted videos and cap breaches.
 
-    Returns the estimated download size when the provider reports one.
+    Returns the estimated download size when the provider reports one. YouTube
+    always reports a duration for a completed video, so a missing one is refused
+    there; site extractors (Instagram among them) often omit it for anonymous
+    clients, so with ``require_duration=False`` an unknown duration is allowed and
+    the cap is enforced by ffprobe on the downloaded file instead.
     """
     if info.get("_type") in {"playlist", "multi_video"} or "entries" in info:
         raise UnsupportedUrlError(
@@ -538,10 +587,12 @@ def preflight_info(info: dict[str, Any], *, max_seconds: int, max_bytes: int) ->
         )
     duration = info.get("duration")
     if not isinstance(duration, (int, float)) or isinstance(duration, bool) or duration <= 0:
-        raise UnsupportedUrlError(
-            "the provider reports no duration for this video — only completed recordings "
-            "with a known length are supported"
-        )
+        if require_duration:
+            raise UnsupportedUrlError(
+                "the provider reports no duration for this video — only completed recordings "
+                "with a known length are supported"
+            )
+        duration = 0
     if duration > max_seconds:
         raise ValidationError(
             f"duration {duration:.0f}s exceeds the {max_seconds}s cap "
@@ -632,7 +683,7 @@ def download_youtube(
             )
             report("downloading source", 0.05)
             ydl.process_ie_result(info, download=True)
-            produced = _produced_file(info, dest_dir, source.provider_id)
+            produced = _produced_file(info, dest_dir, f"youtube-{source.provider_id}")
     except (DownloadError, UnsafeUrlError, UnsupportedUrlError, ValidationError):
         raise
     except yt_dlp.utils.YoutubeDLError as exc:
@@ -684,7 +735,209 @@ def download_youtube(
     )
 
 
-def _produced_file(info: dict[str, Any], dest_dir: Path, video_id: str) -> Path:
+_SAFE_ID = re.compile(r"[^A-Za-z0-9._-]+")
+
+
+def safe_provider_id(value: object) -> str:
+    """A bounded, filename-safe rendering of a provider id (or a hash of it)."""
+    import hashlib
+
+    text = str(value or "").strip()
+    if not text:
+        return "unknown"
+    cleaned = _SAFE_ID.sub("-", text).strip("-.")
+    if cleaned and cleaned == text and len(cleaned) <= 64:
+        return cleaned
+    digest = hashlib.sha256(text.encode("utf-8")).hexdigest()[:12]
+    return f"{cleaned[:40].strip('-.') or 'id'}-{digest}"
+
+
+def safe_provider(value: object) -> str:
+    text = _SAFE_ID.sub("", str(value or "")).lower()
+    return text[:40] or "site"
+
+
+def download_site(
+    source: UrlSource,
+    dest_dir: Path,
+    *,
+    max_bytes: int,
+    max_seconds: int,
+    report: ProgressFn,
+    known_job: Callable[[str, str], str | None] | None = None,
+) -> Downloaded:
+    """Download one video from any page yt-dlp can read (its ~1800 site
+    extractors plus generic HTML5/HLS player detection), no cookies.
+
+    ``known_job(provider, provider_id)`` may return an existing job id after
+    the metadata preflight; then :class:`ReuseExistingJob` is raised instead
+    of downloading the same video through another URL form. The initial host
+    passed the destination gate before this call; yt-dlp follows embedded
+    players and redirects with its own client (documented residual risk).
+    """
+    try:
+        import yt_dlp
+    except ImportError as exc:
+        raise UrlExtraMissingError(
+            "reading a video page needs the optional [url] extra (yt-dlp) — install the "
+            'server as uvx --python ">=3.11,<3.14" "talkthrough-mcp[diarization,url]" '
+            '(JSON configs: "args": ["--python", ">=3.11,<3.14", '
+            '"talkthrough-mcp[diarization,url]"]), restart the client and retry'
+        ) from exc
+    secrets = source.secrets
+    _disable_yt_dlp_plugins()
+    cap_hit: list[str] = []
+    started = time.monotonic()
+    finished_bytes = 0
+
+    def progress_hook(status: dict[str, Any]) -> None:
+        nonlocal finished_bytes
+        downloaded = status.get("downloaded_bytes")
+        total = status.get("total_bytes") or status.get("total_bytes_estimate")
+        current = int(downloaded) if isinstance(downloaded, (int, float)) else 0
+        if finished_bytes + current > max_bytes:
+            cap_hit.append("bytes")
+            raise DownloadError(
+                f"download exceeded the {max_bytes} byte cap (TALKTHROUGH_MAX_DOWNLOAD_BYTES) "
+                "— aborted"
+            )
+        if time.monotonic() - started > DOWNLOAD_DEADLINE_S:
+            cap_hit.append("time")
+            raise DownloadError(f"download exceeded {DOWNLOAD_DEADLINE_S:.0f}s — aborted")
+        if status.get("status") == "finished":
+            finished_bytes += current
+            return
+        if status.get("status") == "downloading" and isinstance(downloaded, (int, float)):
+            total_int = int(total) if isinstance(total, (int, float)) else None
+            fraction = (current / total_int) if total_int else 0.0
+            report(
+                f"downloading source: {_mb(finished_bytes + current)}"
+                f"/{_mb(finished_bytes + total_int if total_int else None)} MB",
+                0.05 + 0.08 * min(1.0, fraction),
+            )
+
+    stem_holder: list[str] = []
+
+    def stem_for(info: dict[str, Any]) -> str:
+        stem = f"{safe_provider(info.get('extractor_key'))}-{safe_provider_id(info.get('id'))}"
+        stem_holder.append(stem)
+        return stem
+
+    # The output template is fixed once the extractor and id are known, so
+    # the option set is built after the preflight; a first probe instance
+    # only extracts metadata (download=False never writes a file).
+    probe_options = youtube_options(
+        dest_dir,
+        video_id="probe",
+        max_bytes=max_bytes,
+        progress_hook=progress_hook,
+        secrets=secrets,
+        output_stem="site-probe",
+    )
+    try:
+        with yt_dlp.YoutubeDL(probe_options) as probe:
+            report("reading the video page (yt-dlp)", 0.04)
+            info = probe.extract_info(source.request_url, download=False)
+            if not isinstance(info, dict):
+                raise DownloadError("the page yielded no video metadata")
+            entries = (
+                list(info.get("entries") or [])
+                if info.get("_type") in {"playlist", "multi_video"}
+                else []
+            )
+            if entries:
+                if len(entries) != 1:
+                    raise UnsupportedUrlError(
+                        f"the page contains {len(entries)} videos — pass a link to one video"
+                    )
+                resolved = probe.process_ie_result(entries[0], download=False)
+                if not isinstance(resolved, dict):
+                    raise DownloadError("the page's single video could not be resolved")
+                info = resolved
+            provider = safe_provider(info.get("extractor_key"))
+            provider_id = safe_provider_id(info.get("id"))
+            if known_job is not None:
+                existing = known_job(provider, provider_id)
+                if existing is not None:
+                    raise ReuseExistingJob(existing, provider, provider_id)
+            estimate = preflight_info(
+                info, max_seconds=max_seconds, max_bytes=max_bytes, require_duration=False
+            )
+            check_free_disk(
+                dest_dir,
+                (estimate * 3) if estimate else MIN_FREE_BYTES_UNKNOWN_SIZE,
+                what="the download",
+            )
+            stem = stem_for(info)
+        options = youtube_options(
+            dest_dir,
+            video_id=provider_id,
+            max_bytes=max_bytes,
+            progress_hook=progress_hook,
+            secrets=secrets,
+            output_stem=stem,
+        )
+        with yt_dlp.YoutubeDL(options) as ydl:
+            report("downloading source", 0.05)
+            ydl.process_ie_result(info, download=True)
+            produced = _produced_file(info, dest_dir, stem)
+    except (DownloadError, UnsafeUrlError, UnsupportedUrlError, ValidationError, ReuseExistingJob):
+        raise
+    except yt_dlp.utils.YoutubeDLError as exc:
+        if cap_hit:
+            raise DownloadError(
+                f"download exceeded the {max_bytes} byte cap (TALKTHROUGH_MAX_DOWNLOAD_BYTES) "
+                "— aborted"
+                if cap_hit[0] == "bytes"
+                else f"download exceeded {DOWNLOAD_DEADLINE_S:.0f}s — aborted"
+            ) from exc
+        message = _bounded_reason(str(exc), *secrets)
+        if _is_bot_check(message):
+            raise DownloadError(
+                f"the site asked for a sign-in bot check for {source.safe_label()} — retry "
+                "later or from another network; cookies are not supported"
+            ) from exc
+        restriction = _youtube_restriction(message)
+        if restriction is not None:
+            raise UnsupportedUrlError(f"{source.safe_label()}: {restriction}") from exc
+        if "unsupported url" in message.lower() or "no video" in message.lower():
+            raise UnsupportedUrlError(
+                f"no video could be found on {source.safe_label()}: {message}"
+            ) from exc
+        raise DownloadError(
+            f"the page could not be read for {source.safe_label()}: {message}"
+        ) from exc
+    except Exception as exc:  # anything else from the extractor stack
+        if cap_hit:
+            raise DownloadError(
+                f"download exceeded the {max_bytes} byte cap (TALKTHROUGH_MAX_DOWNLOAD_BYTES) "
+                "— aborted"
+            ) from exc
+        raise DownloadError(
+            f"unexpected downloader failure for {source.safe_label()}: "
+            f"{type(exc).__name__}: {_bounded_reason(str(exc), *secrets)}"
+        ) from exc
+    size = produced.stat().st_size
+    if size > max_bytes:
+        produced.unlink(missing_ok=True)
+        raise DownloadError(
+            f"the downloaded file is {size} bytes, above the {max_bytes} byte cap "
+            "(TALKTHROUGH_MAX_DOWNLOAD_BYTES)"
+        )
+    return Downloaded(
+        path=produced,
+        extension=produced.suffix.lower(),
+        downloaded_bytes=size,
+        downloader=f"yt-dlp {yt_dlp.version.__version__}",
+        title=info.get("title") if isinstance(info.get("title"), str) else None,
+        published_at=_published_at(info),
+        kind="site",
+        provider=provider,
+        provider_id=provider_id,
+    )
+
+
+def _produced_file(info: dict[str, Any], dest_dir: Path, stem: str) -> Path:
     """The merged output yt-dlp wrote, found without trusting remote names."""
     for entry in info.get("requested_downloads") or []:
         if isinstance(entry, dict):
@@ -695,7 +948,7 @@ def _produced_file(info: dict[str, Any], dest_dir: Path, video_id: str) -> Path:
                     return path
     candidates = [
         path
-        for path in dest_dir.glob(f"youtube-{video_id}.*")
+        for path in dest_dir.glob(f"{stem}.*")
         if path.is_file()
         and path.suffix.lower() in MEDIA_EXTENSIONS
         and not _INTERMEDIATE.search(path.name)
@@ -713,7 +966,6 @@ def _produced_file(info: dict[str, Any], dest_dir: Path, video_id: str) -> Path:
             "may need a JavaScript runtime, see docs/TROUBLESHOOTING.md"
         )
     raise DownloadError(
-        "the provider download produced no supported media file (mp4/webm/mkv) — the "
+        "the provider download produced no supported media file (mp4/webm/mkv/ogv) — the "
         "format may need a JavaScript runtime; see docs/TROUBLESHOOTING.md"
     )
-
