@@ -428,6 +428,7 @@ def test_youtube_download_uses_the_allowlisted_options_and_names_the_file(
     assert options["outtmpl"]["default"].endswith("youtube-nHfGfEiVdE8.%(ext)s")
     assert str(tmp_path / "home" / "cache" / "yt-dlp") == options["cachedir"]
     assert options["writeinfojson"] is False and options["writethumbnail"] is False
+    assert options["postprocessor_args"] == {"merger": ["-bitexact"]}
     assert sys.modules["yt_dlp"].globals.plugin_dirs.value == []  # type: ignore[attr-defined]
     assert any(stage.startswith("downloading source") for stage, _ in seen)
 
