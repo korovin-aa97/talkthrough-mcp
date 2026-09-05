@@ -40,6 +40,15 @@ def _troubleshooting_contract(path: Path) -> dict[str, bool]:
                 "`talkthrough-mcp gc --keep-days 30` cleans Talkthrough jobs",
             )
         ),
+        "rebuild_recovery": all(
+            fact in normalized
+            for fact in (
+                "`manifest.json.damaged-<timestamp>`",
+                "`recovery_note`",
+                "`missing_frame_count`",
+                "roughly twice the size of its `frames/` directory",
+            )
+        ),
     }
 
 
@@ -81,6 +90,7 @@ def test_removing_an_operational_fact_breaks_its_contract(
         "tls_before_setup": ("Set `SSL_CERT_FILE` before", "Configure certificates before"),
         "uv_trust_and_mirror": ("`UV_PYTHON_INSTALL_MIRROR`", "the organization mirror"),
         "cache_scopes": ("`uv cache clean talkthrough-mcp`", "the package cache command"),
+        "rebuild_recovery": ("roughly twice the size", "somewhat more than the size"),
     }
     old, new = replacements[removed_fact]
     copy = tmp_path / "TROUBLESHOOTING.md"

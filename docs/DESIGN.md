@@ -51,7 +51,7 @@ exact instants.
 | `core/dedup.py` | Pillow-only dHash (9×8) + Hamming marking |
 | `core/ocr.py` | RapidOCR wrapper; `TALKTHROUGH_OCR=off` or import failure → graceful off |
 | `core/manifest.py` | Schema, save/load, SRT, slicing, frame queries, search |
-| `core/jobs.py` | Content-addressed store, per-job thread lock + POSIX flock, listing, gc |
+| `core/jobs.py` | Content-addressed store, per-job thread lock + POSIX flock, staged rebuild commit + interrupted-commit recovery, damaged-manifest quarantine, listing, gc |
 | `core/errors.py` | `ValidationError` / `UnknownJobError` / `AudioOnlyJobError` / `ToolFailureError` |
 
 ## Job store
@@ -60,14 +60,34 @@ exact instants.
 ~/.talkthrough/                  (TALKTHROUGH_HOME overrides)
 └── jobs/<sha256(file)[:16]>/
     ├── manifest.json
+    ├── manifest.json.damaged-<ts>   (an unreadable manifest a rebuild set aside)
     ├── frames/t<ms 8-digit>.jpg
     ├── extracts/…               (extract_frame outputs)
+    ├── .reprocess-<id>/         (hidden rebuild workspace, gone after commit)
     └── job.lock
 ```
 
 Content addressing makes renames/moves free and `process_media` idempotent:
 the second call on the same bytes returns the stored summary in milliseconds.
 `force=true` rebuilds (e.g. to re-anchor `recorded_at` or change vocabulary).
+
+A rebuild of an existing job is staged inside the job directory and
+published by three renames under the job lock: `frames/` → workspace
+`previous-frames/`, staged `frames/` → live, staged `manifest.json` → live.
+Catchable failures roll the frames back before the manifest moves. A hard
+kill between the renames is repaired on the next lock acquisition
+(`process_media`, `label_speakers`, `gc`): a workspace holding
+`previous-frames/` proves the sequence started, so it is either finished
+(`rolled_forward`) or reversed (`rolled_back`) and the response reports it
+in `recovery_note`; only workspaces whose commit never began fall under the
+age-based gc sweep. Read tools never take the lock; they compare the frame
+index with the directory listing and report `missing_frame_count` plus an
+`integrity_note` instead of silently serving fewer frames. An unreadable
+`manifest.json` is never a cache hit and never a bare decoder error: the
+rebuild keeps it as `manifest.json.damaged-<ts>` and says so in
+`manifest_recovery_note`. The disk preflight of a rebuild reserves the
+current `frames/` size on top of twice the media size, because the previous
+keyframes stay on disk until the commit.
 
 ## Manifest schema (`talkthrough-manifest/v1`)
 
@@ -158,7 +178,14 @@ The whole tool surface is built to keep responses small:
 - Pending speaker identities are capped on response surfaces and stay
   separate from active names. Each served entry may carry a bounded anchor
   to its source roster; stale labels can only be removed with an explicit
-  null patch and never become active automatically.
+  null patch and never become active automatically. Entries beyond the cap
+  are still removable, so their labels (not names) are listed in
+  `speaker_names_pending_review_hidden_labels` (itself capped at 100).
+  The response-only `speaker_names_pending_review_dropped` report exists
+  for manifests where an active and a pending name share one label; the
+  tool surface itself cannot create that state (`label_speakers` reviews a
+  label out of pending review, and a relabelling amend leaves no active
+  names behind), so it fires only for hand-edited or foreign manifests.
 - Tool descriptions themselves are budgeted: one-line examples, ≤120 chars
   each (gated by `tests/unit/test_guidance.py`).
 
