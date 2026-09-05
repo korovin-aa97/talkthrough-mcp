@@ -401,3 +401,110 @@ def test_list_jobs_shows_the_origin_of_url_jobs(
     (entry,) = list_jobs()["jobs"]
     assert entry["origin"] == {"kind": "direct_url", "provider": "cdn.example.com"}
     assert CANARY not in json.dumps(entry)
+
+
+# --- review fixes (2026-09-05) ---------------------------------------------------
+
+
+def test_mapping_is_saved_right_after_install_so_a_refusal_costs_no_second_download(
+    stubbed: dict[str, Any], isolated_home: Path
+) -> None:
+    from dataclasses import replace as dc_replace
+
+    from talkthrough_mcp.core.diarize import Diarization, Turn, speaker_roster
+    from talkthrough_mcp.core.errors import ValidationError
+    from talkthrough_mcp.core.manifest import save_manifest
+
+    first = process_url(URL)
+    job_id = first.result.manifest.job_id
+    manifest = jobs.load_job(job_id)
+    turns = [Turn(0, 4000, "S1"), Turn(4000, 8000, "S2")]
+    manifest.transcript.diarization = Diarization(
+        available=True, reason="", detected_num_speakers=2, speakers=speaker_roster(turns),
+        turns=turns, speaker_names={"S1": "Vera"},
+    )
+    manifest.transcript = dc_replace(manifest.transcript, model="tiny")
+    save_manifest(manifest, jobs.job_dir(job_id))
+    # an explicit other model on an identity-bearing job is refused — via the
+    # stored mapping, without any network
+    with pytest.raises(ValidationError, match="force=true, diarize=true"):
+        process_url(URL, model="large-v3-turbo")
+    assert stubbed["downloads"] == 1
+
+
+def test_force_rebuilds_a_url_job_from_the_kept_source_without_network(
+    stubbed: dict[str, Any], isolated_home: Path
+) -> None:
+    first = process_url(URL)
+    rebuilt = process_url(URL, force=True, recorded_at="2026-09-05T14:00:00+02:00")
+    assert stubbed["downloads"] == 1
+    assert rebuilt.reused_url_mapping is True
+    assert rebuilt.result.reused is False
+    assert rebuilt.result.manifest.job_id == first.result.manifest.job_id
+    assert rebuilt.result.manifest.wall_clock is not None
+    assert rebuilt.result.manifest.media.origin == first.result.manifest.media.origin
+
+
+def test_same_bytes_from_two_urls_survive_one_failing_pipeline(
+    stubbed: dict[str, Any], isolated_home: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A's failure cleanup must never remove the source B installed: B waits on
+    the job lock and installs only after A's directory is gone."""
+    from talkthrough_mcp.core import stt
+    from talkthrough_mcp.core.errors import ToolFailureError
+
+    b_downloaded = threading.Event()
+    real_download = url_download.download_direct
+
+    def gated_download(source: Any, dest_dir: Path, *, max_bytes: int, report: Any) -> Downloaded:
+        result = real_download(source, dest_dir, max_bytes=max_bytes, report=report)
+        if threading.current_thread().name == "B":
+            b_downloaded.set()
+        return result
+
+    monkeypatch.setattr(url_download, "download_direct", gated_download)
+    real_transcribe = stt.transcribe
+
+    def transcribe(*args: Any, **kwargs: Any) -> Any:
+        if threading.current_thread().name == "A":
+            assert b_downloaded.wait(timeout=20), "B never finished its download"
+            raise ToolFailureError("controlled STT failure in A")
+        return real_transcribe(*args, **kwargs)
+
+    monkeypatch.setattr(stt, "transcribe", transcribe)
+    outcomes: dict[str, Any] = {}
+
+    def run(name: str, url: str) -> None:
+        try:
+            outcomes[name] = process_url(url)
+        except Exception as exc:  # recorded for the assertions
+            outcomes[name] = exc
+
+    thread_a = threading.Thread(target=run, args=("A", URL), name="A")
+    thread_b = threading.Thread(
+        target=run, args=("B", "https://mirror.example.org/copy.m4a"), name="B"
+    )
+    thread_a.start()
+    time.sleep(0.3)
+    thread_b.start()
+    thread_a.join(timeout=60)
+    thread_b.join(timeout=60)
+    assert isinstance(outcomes["A"], ToolFailureError)
+    assert not isinstance(outcomes["B"], Exception), outcomes["B"]
+    manifest = outcomes["B"].result.manifest
+    assert manifest.media.managed_source is not None
+    assert (jobs.job_dir(manifest.job_id) / manifest.media.managed_source).is_file()
+    assert jobs.job_exists(manifest.job_id)
+
+
+def test_list_jobs_notes_the_missing_wall_clock_of_url_jobs(
+    stubbed: dict[str, Any], isolated_home: Path
+) -> None:
+    from talkthrough_mcp.server import list_jobs
+
+    process_url(URL)
+    (entry,) = list_jobs()["jobs"]
+    assert "recorded_at" in entry["wall_clock_note"]
+    process_url(URL, force=True, recorded_at="2026-09-05T14:00:00+02:00")
+    (entry,) = list_jobs()["jobs"]
+    assert "wall_clock_note" not in entry

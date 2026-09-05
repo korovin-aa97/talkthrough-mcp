@@ -360,3 +360,56 @@ def test_forced_rebuild_passes_the_frames_directory_size_as_reserve(
     monkeypatch.setattr(pipeline, "_validate_caps", spy)
     pipeline.process_media(str(media), force=True, diarize_speakers=True, num_speakers=2)
     assert seen == [frames_bytes]
+
+
+# --- review fixes (2026-09-05) ---------------------------------------------------
+
+
+def test_transient_read_error_never_quarantines_an_intact_manifest(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    media, stored = _stored_force_identity_job(tmp_path, monkeypatch, video=True)
+    _stub_successful_force(media, monkeypatch, video=True)
+    directory = jobs.job_dir(stored.job_id)
+    before = (directory / "manifest.json").read_bytes()
+    real_load = jobs.load_manifest
+
+    def flaky_load(path: Path):  # type: ignore[no-untyped-def]
+        raise OSError(24, "Too many open files")
+
+    monkeypatch.setattr(jobs, "load_manifest", flaky_load)
+    with pytest.raises(ToolFailureError, match=r"could not read manifest\.json"):
+        pipeline.process_media(str(media))
+    monkeypatch.setattr(jobs, "load_manifest", real_load)
+    assert (directory / "manifest.json").read_bytes() == before
+    assert not list(directory.glob(f"manifest.json{jobs.DAMAGED_MANIFEST_SUFFIX}*"))
+    assert not list(directory.glob(f"{jobs.REPROCESS_PREFIX}*"))
+
+
+def test_roll_forward_quarantines_an_unreadable_live_manifest(isolated_home: Path) -> None:
+    job_id = "e7" * 8
+    staging = _interrupted_commit(job_id, completed_steps=2)
+    (jobs.job_dir(job_id) / "manifest.json").write_text("{}", encoding="utf-8")
+    recovered = jobs.recover_interrupted_reprocess(job_id)
+    assert [item.action for item in recovered] == ["rolled_forward"]
+    backups = list(jobs.job_dir(job_id).glob(f"manifest.json{jobs.DAMAGED_MANIFEST_SUFFIX}*"))
+    assert len(backups) == 1 and backups[0].read_text(encoding="utf-8") == "{}"
+    assert jobs.load_job(job_id).created_at == NEW
+    assert not staging.exists()
+
+
+def test_label_speakers_reports_missing_frames(isolated_home: Path) -> None:
+    from talkthrough_mcp.core.diarize import Diarization, Turn, speaker_roster
+    from talkthrough_mcp.server import label_speakers
+
+    job_id = "f8" * 8
+    manifest = _materialize(job_id, jobs.job_dir(job_id), marker=b"old:", created_at=OLD)
+    turns = [Turn(0, 5000, "S1"), Turn(5000, 8000, "S2")]
+    manifest.transcript.diarization = Diarization(
+        available=True, reason="", detected_num_speakers=2, speakers=speaker_roster(turns),
+        turns=turns,
+    )
+    save_manifest(manifest, jobs.job_dir(job_id))
+    (jobs.frames_dir(job_id) / "t00006006.jpg").unlink()
+    payload = label_speakers(job_id, {"S1": "Vera"})
+    assert payload["integrity_note"].startswith("1 indexed keyframe file(s) are missing")

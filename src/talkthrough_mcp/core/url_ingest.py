@@ -45,7 +45,7 @@ from urllib.parse import SplitResult, parse_qs, urlsplit, urlunsplit
 
 from . import jobs
 from .errors import ToolFailureError, ValidationError
-from .manifest import MediaOrigin
+from .manifest import MediaOrigin, atomic_write_text
 
 logger = logging.getLogger(__name__)
 
@@ -196,7 +196,11 @@ def classify_url(raw: str) -> UrlSource:
             "that is a local path — local files are handled by process_media(path=...), "
             "not process_url"
         )
-    parts = urlsplit(text)
+    try:
+        parts = urlsplit(text)
+        parts.port  # noqa: B018 — validates the port syntax eagerly
+    except ValueError as exc:
+        raise UnsupportedUrlError(f"malformed URL ({exc})") from exc
     scheme = parts.scheme.lower()
     if scheme == "file":
         raise UnsupportedUrlError(
@@ -496,21 +500,7 @@ def load_mapping(mapping_key: str) -> UrlMapping | None:
 
 def save_mapping(mapping_key: str, mapping: UrlMapping) -> Path:
     path = mapping_path(mapping_key)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    encoded = json.dumps(mapping.to_dict(), ensure_ascii=False, indent=2)
-    temp_path: Path | None = None
-    try:
-        with tempfile.NamedTemporaryFile(
-            mode="w", encoding="utf-8", dir=path.parent, prefix=".", suffix=".tmp", delete=False
-        ) as handle:
-            temp_path = Path(handle.name)
-            handle.write(encoded)
-            handle.flush()
-            os.fsync(handle.fileno())
-        os.replace(temp_path, path)
-    finally:
-        if temp_path is not None:
-            temp_path.unlink(missing_ok=True)
+    atomic_write_text(path, json.dumps(mapping.to_dict(), ensure_ascii=False, indent=2))
     return path
 
 
@@ -718,6 +708,7 @@ def process_url(
     url: str,
     *,
     refresh: bool = False,
+    force: bool = False,
     recorded_at: str | None = None,
     vocabulary: str | None = None,
     language: str | None = None,
@@ -752,6 +743,9 @@ def process_url(
         "model": model,
         "diarize_speakers": diarize_speakers,
         "num_speakers": num_speakers,
+        # ``force`` rebuilds the stored job from the kept source (re-anchor
+        # recorded_at, change the model); ``refresh`` re-downloads instead.
+        "force": force,
     }
     with url_lock(source.mapping_key):
         if not refresh:
@@ -818,34 +812,41 @@ def process_url(
                 title=downloaded.title,
                 published_at=downloaded.published_at,
             )
-            managed = install_managed_source(job_id, downloaded.path, name)
-        result = pipeline.process_media(
-            str(managed),
-            **analysis,
-            progress=pipeline_report,
-            origin=origin,
-            managed_source=relative,
-        )
-        if result.reused and (
-            result.manifest.media.managed_source != relative
-            or result.manifest.media.origin is None
-        ):
-            # Same bytes as a job processed earlier (a local file, or another
-            # URL): keep that job, but remember the managed copy and origin.
-            attach_managed_source(job_id, relative, origin)
-            from dataclasses import replace
-
-            result = replace(result, manifest=jobs.load_job(job_id))
-        save_mapping(
-            source.mapping_key,
-            UrlMapping(
+            mapping = UrlMapping(
                 job_id=job_id,
                 provider=source.provider,
                 created_at=datetime.now(UTC).isoformat(timespec="seconds"),
                 provider_id=source.provider_id,
                 validators=downloaded.validators,
-            ),
-        )
+            )
+            # Install and process under ONE job lock (re-entrant for the
+            # pipeline's own acquisition): another URL with the same bytes
+            # waits here instead of installing into a directory that this
+            # call's failure cleanup could remove from under it. The mapping
+            # is written as soon as the file is in place, so a refusal or a
+            # failure after this point never costs a second download; a
+            # mapping to a job that never got its manifest is dropped lazily.
+            with jobs.job_lock(job_id):
+                managed = install_managed_source(job_id, downloaded.path, name)
+                save_mapping(source.mapping_key, mapping)
+                result = pipeline.process_media(
+                    str(managed),
+                    **analysis,
+                    progress=pipeline_report,
+                    origin=origin,
+                    managed_source=relative,
+                )
+                if result.reused and (
+                    result.manifest.media.managed_source != relative
+                    or result.manifest.media.origin is None
+                ):
+                    # Same bytes as a job processed earlier (a local file, or
+                    # another URL): keep that job, remember the managed copy
+                    # and origin.
+                    attach_managed_source(job_id, relative, origin)
+                    from dataclasses import replace
+
+                    result = replace(result, manifest=jobs.load_job(job_id))
         return UrlProcessResult(
             result=result,
             source=source,

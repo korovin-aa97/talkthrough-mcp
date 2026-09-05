@@ -72,6 +72,7 @@ Examples:
 - known recording start: process_url(url=..., recorded_at="2026-09-05T14:00:00+02:00") — enables t_wall
 - second call, same URL → origin.reused_url_mapping=true, no network, same job_id
 - the video changed on the provider → process_url(url=..., refresh=true): new download, maybe a new job_id
+- re-anchor or change the model on a stored URL job → process_url(url=..., recorded_at=..., force=true), no download
 - error mentions [url] → run uvx --python ">=3.11,<3.14" "talkthrough-mcp[diarization,url]" and restart
 - playlist / channel / live / private URL → clear error; pass a single public video URL instead
 - origin.published_at is the provider's upload time, not when the recording was made — never use it as t_wall
