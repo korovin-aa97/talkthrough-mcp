@@ -423,7 +423,7 @@ def test_youtube_download_uses_the_allowlisted_options_and_names_the_file(
     assert options["cookiesfrombrowser"] is None and options["cookiefile"] is None
     assert options["remote_components"] == [] and options["extractor_args"] == {}
     assert options["max_filesize"] == 100_000
-    assert options["ffmpeg_location"] == "/opt/ffmpeg/bin"
+    assert Path(options["ffmpeg_location"]) == Path("/opt/ffmpeg/bin")
     assert options["js_runtimes"] == {"deno": {"path": "/opt/deno/bin/deno"}}
     assert options["outtmpl"]["default"].endswith("youtube-nHfGfEiVdE8.%(ext)s")
     assert str(tmp_path / "home" / "cache" / "yt-dlp") == options["cachedir"]
