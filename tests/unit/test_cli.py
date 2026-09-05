@@ -6,6 +6,7 @@ from __future__ import annotations
 import io
 import json
 import logging
+import re
 import sys
 from collections.abc import Iterator
 from pathlib import Path
@@ -113,33 +114,48 @@ def test_main_configures_logging_before_dispatching(
 
 
 def test_version_flag_names_the_package_python_and_extras(
-    capsys: pytest.CaptureFixture[str],
+    capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    import importlib.metadata as metadata
+
     from talkthrough_mcp import __version__
 
+    installed = {"yt-dlp": "2026.8.19", "sherpa-onnx": "1.13.4"}
+    monkeypatch.setattr(metadata, "version", lambda name: installed[name])
     with pytest.raises(SystemExit) as info:
         cli.main(["--version"])
     assert info.value.code == 0
-    out = capsys.readouterr().out
-    assert out.startswith(f"talkthrough-mcp {__version__} (python 3.")
-    assert "url extra: yt-dlp " in out and "diarization extra: sherpa-onnx " in out
-    assert out == cli.version_line() + "\n"
+    python = ".".join(str(part) for part in sys.version_info[:3])
+    assert capsys.readouterr().out == (
+        f"talkthrough-mcp {__version__} (python {python}; url extra: yt-dlp 2026.8.19; "
+        "diarization extra: sherpa-onnx 1.13.4)\n"
+    )
 
 
-def test_version_line_says_which_extra_is_missing(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_version_line_says_which_extras_are_missing(monkeypatch: pytest.MonkeyPatch) -> None:
     import importlib.metadata as metadata
 
-    real = metadata.version
+    def nothing_installed(name: str) -> str:
+        raise metadata.PackageNotFoundError(name)
 
-    def without_yt_dlp(name: str) -> str:
-        if name == "yt-dlp":
-            raise metadata.PackageNotFoundError(name)
-        return real(name)
-
-    monkeypatch.setattr(metadata, "version", without_yt_dlp)
+    monkeypatch.setattr(metadata, "version", nothing_installed)
     line = cli.version_line()
     assert "url extra: not installed (direct https:// media links only)" in line
-    assert "diarization extra: sherpa-onnx " in line
+    assert line.endswith("diarization extra: not installed)")
+
+
+def test_version_flag_describes_the_real_environment(capsys: pytest.CaptureFixture[str]) -> None:
+    """Whatever this environment has (CI runs the suite with and without the
+    extras), the line names each extra exactly once, in one of its two forms."""
+    with pytest.raises(SystemExit):
+        cli.main(["--version"])
+    out = capsys.readouterr().out
+    assert re.fullmatch(
+        r"talkthrough-mcp \S+ \(python 3\.\d+\.\d+; "
+        r"url extra: (yt-dlp \S+|not installed \(direct https:// media links only\)); "
+        r"diarization extra: (sherpa-onnx \S+|not installed)\)\n",
+        out,
+    ), out
 
 
 def test_json_flag_turns_a_failure_into_an_error_document(

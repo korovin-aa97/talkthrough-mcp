@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import sys
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
@@ -690,7 +691,7 @@ def test_refresh_replaces_stale_provider_metadata_when_the_bytes_are_unchanged(
 # --- URL lock files (0.4.1: gc left one empty .lock per URL forever) ---------------
 
 
-def test_gc_sweeps_orphan_url_locks_but_keeps_live_and_held_ones(
+def test_gc_sweeps_orphan_url_locks_but_keeps_live_ones(
     stubbed: dict[str, Any], isolated_home: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     ingested = process_url(URL)  # live: a mapping and its lock
@@ -709,15 +710,36 @@ def test_gc_sweeps_orphan_url_locks_but_keeps_live_and_held_ones(
     ).with_suffix(".lock")
     assert orphan_lock.exists() and not orphan_lock.with_suffix(".json").exists()
 
+    result = jobs.gc(keep_days=30)
+    assert result.swept == [f"urls/{orphan_lock.name}"]
+    assert not orphan_lock.exists() and live_lock.exists()
+    assert jobs.gc(keep_days=30).swept == []  # nothing orphaned any more
+
+
+def test_gc_leaves_a_url_lock_that_another_caller_holds(isolated_home: Path) -> None:
+    pytest.importorskip("fcntl")
     held_key = "site:example:held"
     held_lock = url_ingest.mapping_path(held_key).with_suffix(".lock")
     with url_ingest.url_lock(held_key):
-        result = jobs.gc(keep_days=30)
-        assert result.swept == [f"urls/{orphan_lock.name}"]
-        assert not orphan_lock.exists() and live_lock.exists() and held_lock.exists()
+        assert jobs.gc(keep_days=30).swept == []
+        assert held_lock.exists()
     # released and without a mapping: the next pass takes it
     assert jobs.gc(keep_days=30).swept == [f"urls/{held_lock.name}"]
-    assert not held_lock.exists() and live_lock.exists()
+    assert not held_lock.exists()
+
+
+def test_gc_sweeps_orphan_lock_markers_without_fcntl(
+    isolated_home: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Windows keeps lock files as markers (no flock); gc removes an orphan
+    marker after closing it, since an open file cannot be unlinked there."""
+    monkeypatch.setitem(sys.modules, "fcntl", None)
+    key = "site:example:marker"
+    marker = url_ingest.mapping_path(key).with_suffix(".lock")
+    with url_ingest.url_lock(key):
+        assert marker.exists()
+    assert jobs.gc(keep_days=30).swept == [f"urls/{marker.name}"]
+    assert not marker.exists()
 
 
 def test_url_lock_reopens_when_a_sweep_removed_the_file_under_it(
@@ -726,7 +748,7 @@ def test_url_lock_reopens_when_a_sweep_removed_the_file_under_it(
     """A gc pass can unlink an orphan lock between a waiter's open() and its
     flock(); a lock on the unlinked inode would guard nothing, so url_lock
     checks the path still names the file it holds and reopens otherwise."""
-    import fcntl
+    fcntl = pytest.importorskip("fcntl")
 
     key = "site:example:raced"
     lock_path = url_ingest.mapping_path(key).with_suffix(".lock")
