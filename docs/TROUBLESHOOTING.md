@@ -399,7 +399,7 @@ or logins. What to expect:
   rate-limited quickly; a "bot check" / "sign-in" refusal means the site
   blocked anonymous access, and there is no workaround here (cookies are
   not supported). Download the post yourself and use `process_media`.
-- **"the page contains N videos"** — carousels and playlists are refused;
+- **"the page contains more than one video"** — carousels and playlists are refused;
   pass a link to one video.
 - **"no video could be found"** — yt-dlp has no extractor for the site and
   found no player on the page; find the actual video URL.

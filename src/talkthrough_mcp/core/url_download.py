@@ -507,14 +507,12 @@ def youtube_options(
         options["js_runtimes"] = {"deno": {"path": deno}}
     if probe:
         # Metadata pass for a page: a multi-video page (a carousel, a folder)
-        # must come back with ALL its entries, as cheap url stubs, so the
-        # caller can count them and refuse before any download. playlist_items
-        # would slice the list to one entry before we ever see it — yt-dlp
-        # reports the full count only when the entry list happened to be
-        # exhausted (0.4.0 ingested the first video of a Loom folder silently)
-        # — and resolving every entry just to count them would fetch each
-        # video's page.
+        # only needs to reveal whether a second entry exists. Asking yt-dlp
+        # for the first two flat stubs catches that case without enumerating
+        # an entire channel or large playlist. Asking only for item 1 caused
+        # 0.4.0 to ingest the first video of a Loom folder silently.
         options["extract_flat"] = "in_playlist"
+        options["playlist_items"] = "1:2"
     else:
         # One video only; a resolved single-video info dict carries no
         # playlist, so for the download instance this is belt and braces.
@@ -881,7 +879,7 @@ def download_site(
             if entries:
                 if len(entries) != 1:
                     raise UnsupportedUrlError(
-                        f"the page contains {len(entries)} videos — pass a link to one video"
+                        "the page contains more than one video — pass a link to one video"
                     )
                 resolved = probe.process_ie_result(entries[0], download=False)
                 if not isinstance(resolved, dict):

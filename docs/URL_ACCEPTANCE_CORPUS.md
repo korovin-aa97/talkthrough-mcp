@@ -38,7 +38,7 @@ document on stdout on both outcomes.
 | Finding | URL | Expect |
 |---|---|---|
 | F-01 log leak | `https://interactive-examples.mdn.mozilla.net/media/cc0-videos/flower.mp4?qa_token=TTSECRET4242` with `TALKTHROUGH_MAX_DOWNLOAD_BYTES=1024` | the cap error; `TTSECRET4242` and `HTTP Request` absent from stderr |
-| F-02 multi-video page | `https://www.loom.com/share/folder/997db4db046f43e5912f10dc5f817b5c` with `TALKTHROUGH_MAX_DOWNLOAD_BYTES=1` | `the page contains N videos — pass a link to one video`, no `downloading source` stage |
+| F-02 multi-video page | `https://www.loom.com/share/folder/997db4db046f43e5912f10dc5f817b5c` with `TALKTHROUGH_MAX_DOWNLOAD_BYTES=1` | `the page contains more than one video — pass a link to one video`, no `downloading source` stage |
 | F-03 refresh metadata | `https://youtu.be/nHfGfEiVdE8` once; edit `media.origin.title` in the manifest; run again with `--refresh` | the title comes back from the provider, `downloaded_at` is fresh, same job id |
 | F-04 JSON errors | any refused URL with `--json` | exit 2, `{"error": {"type": …, "message": …}}` on stdout |
 | F-05 extractor crash | `https://www.ted.com/talks/candace_parker_how_to_break_down_barriers_and_not_accept_limits` | `the page reader failed on https://www.ted.com/… (TypeError: …)` with the two ways out (until yt-dlp fixes its TED extractor) |

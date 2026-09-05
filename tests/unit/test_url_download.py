@@ -413,7 +413,8 @@ class _FakeYoutubeDL:
         # is not reported unless the extractor's entry list was exhausted.
         wanted = self.options.get("playlist_items")
         if wanted and info.get("_type") in {"playlist", "multi_video"}:
-            info["entries"] = list(info.get("entries") or [])[: int(wanted)]
+            last_item = str(wanted).split(":")[-1]
+            info["entries"] = list(info.get("entries") or [])[: int(last_item)]
         return info
 
     def process_ie_result(self, info: dict[str, Any], download: bool = True) -> None:
@@ -646,14 +647,15 @@ def test_youtube_options_never_include_user_configuration() -> None:
     assert options["format"] == url_download.YOUTUBE_FORMAT
 
 
-def test_probe_options_see_every_entry_of_a_multi_video_page() -> None:
-    """The page probe must count a carousel's entries, so it asks yt-dlp for a
-    flat entry list and never for playlist item 1 only (0.4.1)."""
+def test_probe_options_stop_after_detecting_a_second_video() -> None:
+    """The page probe needs two flat stubs to distinguish one video from many
+    without walking an entire channel or playlist (0.4.1)."""
     probe = youtube_options(
         Path("/tmp/x"), video_id="probe", max_bytes=10, progress_hook=lambda s: None,
         secrets=(), output_stem="site-probe", probe=True,
     )
-    assert probe["extract_flat"] == "in_playlist" and "playlist_items" not in probe
+    assert probe["extract_flat"] == "in_playlist"
+    assert probe["playlist_items"] == "1:2"
     assert probe["noplaylist"] is True
     download = youtube_options(
         Path("/tmp/x"), video_id="abc", max_bytes=10, progress_hook=lambda s: None, secrets=()
@@ -864,7 +866,7 @@ def test_site_download_resolves_a_single_entry_page_and_refuses_many(
     assert downloaded.path.name == "instagram-C_abc-123.mp4"
 
     fake_yt_dlp.info = {"_type": "playlist", "entries": [{"url": "a"}, {"url": "b"}]}
-    with pytest.raises(UnsupportedUrlError, match="contains 2 videos"):
+    with pytest.raises(UnsupportedUrlError, match="contains more than one video"):
         download_site(
             classify_url("https://www.instagram.com/p/carousel/"), tmp_path,
             max_bytes=100_000, max_seconds=7200, report=lambda *a: None,
@@ -885,7 +887,7 @@ def test_site_download_refuses_a_folder_page_before_any_download(
         "extractor_key": "LoomFolder",
         "entries": [{"_type": "url", "url": stub} for stub in ("a", "b", "c")],
     }
-    with pytest.raises(UnsupportedUrlError, match="contains 3 videos") as info:
+    with pytest.raises(UnsupportedUrlError, match="contains more than one video") as info:
         download_site(
             classify_url("https://www.loom.com/share/folder/997db4db046f43e5912f10dc5f817b5c"),
             tmp_path, max_bytes=100_000, max_seconds=7200, report=lambda *a: None,
@@ -893,6 +895,7 @@ def test_site_download_refuses_a_folder_page_before_any_download(
     assert "pass a link to one video" in str(info.value)
     (probe,) = fake_yt_dlp.instances  # no download instance was ever built
     assert probe.options["extract_flat"] == "in_playlist"
+    assert probe.options["playlist_items"] == "1:2"
     assert list(tmp_path.iterdir()) == []
 
 
