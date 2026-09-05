@@ -541,6 +541,55 @@ def sweep_stale_mappings() -> list[str]:
     return removed
 
 
+def _try_flock(fd: int) -> bool:
+    """Take an exclusive non-blocking flock; always True without fcntl (markers only)."""
+    try:
+        import fcntl
+    except ImportError:  # pragma: no cover - Windows best-effort
+        return True
+    try:
+        fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except BlockingIOError:
+        return False
+    return True
+
+
+def _same_file(fd: int, path: Path) -> bool:
+    """Whether ``path`` still names the open file ``fd`` (inode identity)."""
+    try:
+        return os.path.samestat(os.fstat(fd), os.stat(path))
+    except OSError:
+        return False
+
+
+def sweep_orphan_locks() -> list[str]:
+    """Remove URL lock files whose mapping is gone (gc).
+
+    ``url_lock`` creates one empty ``<key>.lock`` per URL before anything is
+    validated, so a refused or failed URL left a file behind forever (0.4.0
+    never removed one). A lock is unlinked only while this process holds it,
+    so an ingestion in flight keeps its file; a waiter that loses its file
+    this way reopens (see ``url_lock``). Locks of live mappings stay: one per
+    stored URL, removed with the mapping.
+    """
+    root = urls_root()
+    if not root.is_dir():
+        return []
+    removed: list[str] = []
+    for path in sorted(root.glob("*.lock")):
+        if path.with_suffix(".json").is_file():
+            continue
+        try:
+            with path.open("a") as handle:
+                if not _try_flock(handle.fileno()):
+                    continue
+                path.unlink(missing_ok=True)
+        except OSError:
+            continue
+        removed.append(path.name)
+    return removed
+
+
 def sweep_stale_downloads(min_age_s: float = jobs.PARTIAL_SWEEP_MIN_AGE_S) -> list[str]:
     """Remove download staging directories a dead process left behind (gc)."""
     root = downloads_root()
@@ -573,7 +622,10 @@ def url_lock(mapping_key: str, *, wait_seconds: int = 3600) -> Iterator[None]:
 
     The second caller waits for the first and then finds the mapping instead
     of downloading the same source twice. Cross-process: POSIX flock on an
-    index-side lock file (no-op on platforms without fcntl).
+    index-side lock file (no-op on platforms without fcntl). ``gc`` removes a
+    lock file whose mapping is gone, so after acquiring, the path is checked
+    to still name the file held — a lock on an unlinked inode guards nothing
+    — and the file is reopened otherwise.
     """
     with _URL_LOCKS_GUARD:
         process_lock = _URL_LOCKS.setdefault(mapping_key, threading.Lock())
@@ -595,20 +647,26 @@ def url_lock(mapping_key: str, *, wait_seconds: int = 3600) -> Iterator[None]:
             return
         import time
 
-        with lock_path.open("w") as handle:
-            deadline = time.monotonic() + wait_seconds
-            while True:
-                try:
-                    fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
-                    break
-                except BlockingIOError:
-                    if time.monotonic() >= deadline:
-                        raise ToolFailureError(
-                            "another process has been ingesting this URL for over "
-                            f"{wait_seconds}s — retry later"
-                        ) from None
-                    time.sleep(1)
-            yield
+        deadline = time.monotonic() + wait_seconds
+        while True:
+            with lock_path.open("w") as handle:
+                while True:
+                    try:
+                        fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+                        break
+                    except BlockingIOError:
+                        if time.monotonic() >= deadline:
+                            raise ToolFailureError(
+                                "another process has been ingesting this URL for over "
+                                f"{wait_seconds}s — retry later"
+                            ) from None
+                        time.sleep(1)
+                if _same_file(handle.fileno(), lock_path):
+                    yield
+                    return
+                # gc swept the (then orphan) file between open() and flock():
+                # reopen — that creates a fresh file, or joins the one a newer
+                # caller created — and compete again.
     finally:
         process_lock.release()
 
