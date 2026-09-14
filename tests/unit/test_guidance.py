@@ -366,3 +366,13 @@ def test_marketplace_points_at_the_plugin_subdir() -> None:
     sources = [plugin["source"] for plugin in manifest["plugins"]]
     assert sources == ["./integrations/claude-code"]
     assert (REPO_ROOT / "integrations/claude-code/.claude-plugin/plugin.json").is_file()
+
+
+def test_documented_warmup_matches_current_plugin_launcher() -> None:
+    project = tomllib.loads((REPO_ROOT / "pyproject.toml").read_text())["project"]
+    command = (
+        f'uvx --python "{project["requires-python"]}" '
+        f'"talkthrough-mcp[diarization,url]=={project["version"]}" --version'
+    )
+    for name in ("README.md", "docs/TROUBLESHOOTING.md"):
+        assert command in (REPO_ROOT / name).read_text(), name

@@ -32,7 +32,18 @@ uv run mypy src
 uv run pytest -q
 ```
 
-CI runs the same three on ubuntu (full suite) and macos (lint + unit).
+CI runs the full suite with lint and strict typing on Ubuntu. macOS runs
+lint + unit; Windows runs lint + unit + real CLI/reuse/diarization smokes.
+Python 3.11/3.12/3.13 run unit and MCP inventory checks, with a real CLI
+fixture on 3.13. Fresh wheel installs with both extras run on all three OSes;
+Ubuntu also tests the full suite against the installed wheel, and checks
+sdist and minimal installs. Fresh installs resolve dependencies independently
+of `uv.lock`; frozen checkout tests and fresh installs cover different risks.
+
+Release work stays on a dedicated branch until its candidate passes the
+checks. Merge immediately before release, verify the resulting main commit,
+and tag that commit. The changelog date is the tag's UTC calendar day; leave
+an upcoming release marked `Unreleased` until that day is known.
 
 ## Layout in one breath
 
@@ -52,7 +63,8 @@ agent-facing version of these rules.
   behavior needs real ffmpeg/whisper (fixtures are committed — see
   `tests/fixtures/make_fixtures.py`).
 - Keep the privacy promise: no network calls at runtime beyond one-time
-  tool/model downloads, no telemetry, recordings never leave the machine.
+  tool/model downloads and the explicit `process_url` download, no telemetry,
+  recordings never leave the machine.
 - Keep responses token-budgeted: new tool output must be paginated or capped
   (see "Token-budget rules" in `docs/DESIGN.md`).
 - New tools/prompts must ship guidance: 10-15 one-line examples per tool
