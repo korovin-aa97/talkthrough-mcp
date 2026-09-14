@@ -275,6 +275,67 @@ def test_two_urls_with_the_same_bytes_are_one_job(
     assert stored.media.origin is not None
     assert stored.media.origin.provider == "cdn.example.com", "the first origin is kept"
     assert len(list(url_ingest.urls_root().glob("*.json"))) == 2
+    source_dir = jobs.job_dir(stored.job_id) / "source"
+    assert list(source_dir.iterdir()) == [Path(first.result.manifest.media.path)]
+    assert stored.media.managed_source == first.result.manifest.media.managed_source
+
+
+@pytest.mark.parametrize("damage", ["missing", "same-size", "symlink"])
+def test_convergence_does_not_reuse_an_unverified_source(
+    stubbed: dict[str, Any], tmp_path: Path, damage: str,
+) -> None:
+    first = process_url(URL).result.manifest
+    old = Path(first.media.path)
+    if damage == "same-size":
+        old.write_bytes(b"b" * len(MEDIA))
+    else:
+        old.unlink()
+        if damage == "symlink":
+            target = tmp_path / "external.m4a"
+            target.write_bytes(MEDIA)
+            try:
+                old.symlink_to(target)
+            except OSError:
+                pytest.skip("creating symlinks is not permitted on this platform")
+    second = process_url("https://mirror.example.org/copy.m4a").result.manifest
+    kept = url_ingest.source_path(second.media.path, second.job_id, second.media.managed_source)
+    assert kept.read_bytes() == MEDIA
+    assert second.media.managed_source != first.media.managed_source
+    if damage == "symlink":
+        assert old.is_symlink() and old.read_bytes() == MEDIA
+
+
+def test_concurrent_distinct_urls_keep_one_verified_copy(
+    stubbed: dict[str, Any],
+) -> None:
+    stubbed["delay"] = 0.1
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        futures = [pool.submit(process_url, url) for url in (
+            URL, "https://mirror.example.org/copy.m4a",
+        )]
+        results = [future.result(timeout=20).result.manifest for future in futures]
+    assert results[0].job_id == results[1].job_id
+    assert results[0].media.managed_source == results[1].media.managed_source
+    assert len(list((jobs.job_dir(results[0].job_id) / "source").iterdir())) == 1
+
+
+def test_failed_convergent_rebuild_preserves_the_existing_source_and_manifest(
+    stubbed: dict[str, Any], monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    first = process_url(URL).result.manifest
+    directory = jobs.job_dir(first.job_id)
+    before = (directory / "manifest.json").read_bytes()
+
+    def fail(*args: Any, **kwargs: Any) -> None:
+        raise DownloadError("injected rebuild failure")
+
+    monkeypatch.setattr(pipeline, "_build_manifest", fail)
+    with pytest.raises(DownloadError, match="injected rebuild"):
+        process_url("https://mirror.example.org/copy.m4a", force=True)
+    assert (directory / "manifest.json").read_bytes() == before
+    assert Path(first.media.path).read_bytes() == MEDIA
+    assert len(list((directory / "source").iterdir())) == 1
+    assert len(list(url_ingest.urls_root().glob("*.json"))) == 1
 
 
 def test_gc_removes_the_managed_source_with_the_job_and_its_url_mapping(

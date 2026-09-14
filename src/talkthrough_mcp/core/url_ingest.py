@@ -809,14 +809,40 @@ def managed_source_relative(name: str) -> str:
     return f"{SOURCE_DIR_NAME}/{name}"
 
 
+def _verified_managed_source(job_id: str, relative: str | None) -> Path | None:
+    """A regular managed file matching this content identity, under the job lock."""
+    if relative is None:
+        return None
+    parts = Path(relative).parts
+    if len(parts) != 2 or parts[0] != SOURCE_DIR_NAME:
+        return None
+    directory = jobs.job_dir(job_id)
+    source_dir = directory / SOURCE_DIR_NAME
+    candidate = directory / relative
+    if directory.is_symlink() or source_dir.is_symlink() or candidate.is_symlink():
+        return None
+    try:
+        if candidate.suffix.lower() not in MEDIA_EXTENSIONS or not candidate.is_file():
+            return None
+        return candidate if jobs.compute_job_id(candidate) == job_id else None
+    except FileNotFoundError:
+        return None
+    except OSError as exc:
+        raise ToolFailureError(
+            f"could not verify the managed source for job {job_id}: {exc} — "
+            "retry; the existing source was left untouched"
+        ) from exc
+
+
 def install_managed_source(job_id: str, downloaded: Path, name: str) -> Path:
     """Move a verified download into ``jobs/<job_id>/source/<name>``.
 
-    Same filesystem, atomic replace. Re-installing identical bytes is
-    harmless (content-addressed job), so two URLs that converge on one job
-    may both install without coordination.
+    Same filesystem, atomic replace. The caller holds the job lock while
+    checking for a reusable copy, installing and publishing the manifest.
     """
     target_dir = jobs.job_dir(job_id) / SOURCE_DIR_NAME
+    if jobs.job_dir(job_id).is_symlink() or target_dir.is_symlink():
+        raise ValidationError("the managed source directory is a symlink — refusing to write")
     target_dir.mkdir(parents=True, exist_ok=True)
     target = target_dir / name
     try:
@@ -1144,7 +1170,15 @@ def process_url(
             # entry resolves immediately and a failed pipeline leaves no
             # partial job or stale mapping.
             with jobs.job_lock(job_id), jobs.partial_job_cleanup(job_id):
-                managed = install_managed_source(job_id, downloaded.path, name)
+                previous, _unreadable = jobs.load_previous_job(job_id)
+                managed = _verified_managed_source(
+                    job_id, previous.media.managed_source if previous is not None else None
+                )
+                if managed is not None:
+                    relative = managed_source_relative(managed.name)
+                    downloaded.path.unlink()
+                else:
+                    managed = install_managed_source(job_id, downloaded.path, name)
                 result = pipeline.process_media(
                     str(managed),
                     **analysis,
