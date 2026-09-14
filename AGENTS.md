@@ -21,7 +21,11 @@ uv run mypy src                # strict typing (must be clean)
 uv run python scripts/gen_integrations.py   # regenerate ALL engine artifacts
 ```
 
-CI = ruff + mypy + unit + integration + e2e on ubuntu; ruff + unit on macos.
+CI: Ubuntu runs ruff + strict mypy + unit/integration/e2e. macOS runs
+ruff + unit; Windows adds real CLI/reuse/diarization smokes to ruff + unit.
+Python 3.11/3.12/3.13 run unit + inventory (3.13 also real CLI). Fresh wheel
+installs with both extras are checked on all three OSes; Ubuntu also runs
+the full suite against the installed wheel, plus sdist and minimal installs.
 
 ## Architecture in one breath
 

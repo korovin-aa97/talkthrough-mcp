@@ -366,6 +366,21 @@ resolves to this lean form) — an explicit `diarize=true` will then answer
 with the one-line install fix. Details in
 [Speakers](#speakers-optional-diarization).
 
+### Updating to 0.4.2
+
+Update your plugin or generated config, then warm its exact pinned launcher
+before reconnecting the MCP client:
+
+```bash
+uvx --python ">=3.11,<3.14" "talkthrough-mcp[diarization,url]==0.4.2" --version
+```
+
+The output should name 0.4.2 and both extras. This prepares dependencies;
+the first recording can still need model/tool downloads. A cold environment
+can exceed the client's startup timeout. See
+[startup recovery](docs/TROUBLESHOOTING.md#first-run-is-slow--downloads-a-lot).
+Existing jobs need no migration.
+
 ### Upgrading from 0.3.x
 
 Regenerated configs and the plugin carry `[diarization,url]`. A config you
@@ -677,7 +692,8 @@ Honest edges, so you can decide fast:
   content and anything behind a login or a bot wall are refused with a
   reason. Sites change; a page that worked yesterday can need a newer yt-dlp
   tomorrow. A provider's upload date is not a recording time, so URL jobs
-  have `wall_clock: null` unless you pass `recorded_at`.
+  have `wall_clock: null` unless the container has a usable creation timestamp
+  or you pass `recorded_at`. The download file's mtime is never used.
 - **Memory: budget about 2 GB for a cold run.** Whisper, the OCR models and
   the frame pass live in one process. A 78-second video on `tiny` with OCR
   peaked at 1.6 GB RSS during the 0.4.0 release QA (download included); the

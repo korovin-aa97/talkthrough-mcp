@@ -31,17 +31,25 @@ environments. Set `SSL_CERT_FILE` before either uv setup or the first media
 processing on a TLS-inspecting corporate network: managed Python, package,
 static-ffmpeg, and model downloads all need the trusted CA.
 
-Stage 1 can outlast the MCP client's start-up timeout: Claude Code waits
-30 s for a server to answer, and a cold `[diarization,url]` environment
-(onnxruntime, opencv, Deno, yt-dlp, …) took 77 s to assemble on a fast
-connection in our release runs. The client then lists the server as
-*failed* although nothing is broken — uv keeps everything it already
-fetched, so reconnect (`/mcp` → reconnect, or restart the client) and the
-second start is immediate. Claude Code remembers a failed server for about
-15 minutes, so a headless `claude -p` retried right away can still report
-it as failed without launching it again. To avoid the false start entirely, warm the
-environment once from a shell with the exact launcher the config uses,
-e.g. `uvx --python ">=3.11,<3.14" "talkthrough-mcp[diarization,url]==0.4.0" --help`.
+Stage 1 can outlast the MCP client's startup timeout. Warm the exact
+launcher from your installed config after updating the plugin:
+
+```bash
+uvx --python ">=3.11,<3.14" "talkthrough-mcp[diarization,url]==0.4.2" --version
+```
+
+This installs the Python environment and reports the server version and
+extras; it does **not** download Whisper/OCR/diarization models or exercise
+ffmpeg. Process a short recording once to prepare those separately.
+Then reconnect through `/mcp` or restart the client. A client's cached
+failure can survive a retry; inspect its MCP log for a new server startup
+before attributing that retry to Talkthrough. Timeout and retry-cache
+behavior depend on the client version, so no fixed delay is assumed here.
+Claude Code documents `MCP_TIMEOUT` (milliseconds) for a longer startup
+window; set it in the environment **launching Claude Code**, for example
+`MCP_TIMEOUT=120000 claude`. See the
+[Claude Code MCP documentation](https://code.claude.com/docs/en/mcp).
+Do not clear your entire uv cache as the first recovery step.
 
 A second run in the same warm environment does not redownload dependencies.
 Warm processing is network-free and reuses model caches; re-processing the
@@ -473,7 +481,15 @@ deleted with the job by `talkthrough-mcp gc`. The URL index under
 stored. A repeat `process_url` on the same URL serves the stored job with no
 network; `refresh=true` downloads again, and if the bytes changed you get a
 new job id. The same bytes reached through a local file and through a URL
-are one job.
+are one job. Different URLs with identical bytes reuse a verified retained
+source, so they do not add another managed media copy.
+
+If an indexed job's manifest is damaged, a repeat URL call can rebuild it
+locally from one unambiguous retained source whose content hash matches the
+job. The damaged manifest is quarantined, and `manifest_recovery_note`
+reports the recovery. Provider title/publication/download times that cannot
+be recovered stay unknown; use `refresh=true` to fetch fresh metadata.
+A missing, corrupt or ambiguous source requires downloading again.
 
 ## `t_wall` is null or looks wrong
 

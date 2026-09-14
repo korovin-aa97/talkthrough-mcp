@@ -107,7 +107,8 @@ process_url(url)
     downloader); a page or an HTTP error hands it to the page reader
     (yt-dlp: ~1800 site extractors + generic HTML5/HLS player detection,
     no cookies); known page hosts skip the media attempt
-  → URL index hit and refresh=false → the stored job, zero network
+  → URL index hit and refresh=false → the stored job, zero network;
+    unreadable manifest → try a verified, unambiguous retained source first
   → destination gate: every DNS answer must be a public address
   → download into ~/.talkthrough/downloads/.dl-*/ under caps:
       bytes (TALKTHROUGH_MAX_DOWNLOAD_BYTES), duration (provider metadata,
@@ -126,8 +127,8 @@ a local file processed earlier, converge on one job — the manifest gains
 `media.origin` and `media.managed_source` additively); a page video is
 also indexed by provider identity (`site:<extractor>:<id>`), so two URL
 forms of one Instagram/TikTok video converge before a second download; the
-raw URL, its query and userinfo never reach a manifest, the index, a log
-line, a progress message or an error (`url_ingest.redact` is the single
+raw URL, its query and userinfo never reach a manifest, the index, a
+Talkthrough log line, progress message or tool-body error (`url_ingest.redact` is the single
 choke point; the CLI holds the HTTP client loggers — httpx logs every
 request line with its URL — at WARNING and passes every foreign log record
 and every traceback through the same redactor; canary tests pin errors,
@@ -137,6 +138,21 @@ with its job and drops index entries whose job is gone. Same-URL calls
 serialize on a URL lock, and the install + pipeline run under the job lock,
 so a second caller finds the mapping instead of downloading twice and a
 failing call can never remove a source another call just installed.
+Existing managed sources are reused under the job lock only after checking
+that the path is a regular media file inside `source/` (no symlink) and its
+content hash matches the job id. Recovery from an unreadable manifest requires
+exactly one such media candidate. It preserves the URL mapping, quarantines
+the damaged manifest and reports missing provider metadata without inventing
+it. `refresh=true` still downloads. The historical `media.path` may refer to
+an earlier local source; `media.managed_source` is the authoritative retained
+source for retrieval.
+
+URL error context is scoped per call and sanitization runs inside the worker,
+before an exception crosses back to MCP. It handles JSON-escaped and
+percent-encoded URLs as well as known query values. SDK argument validation
+runs before that boundary and may echo invalid input; client input logs are
+also outside this guarantee (see SECURITY).
+
 Residual, documented in SECURITY: the page reader follows embedded players
 and redirects with yt-dlp's own client; only the named host is gated.
 
