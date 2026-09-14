@@ -43,6 +43,8 @@ from .url_ingest import (
     UrlExtraMissingError,
     UrlSource,
     _bounded_reason,
+    _redact_url_errors,
+    _remember_url,
     check_free_disk,
     redact,
     resolve_public_host,
@@ -219,6 +221,7 @@ def _open_pinned(client: Any, url: str, host: str, addresses: list[str]) -> Iter
     raise last
 
 
+@_redact_url_errors
 def download_direct(
     source: UrlSource,
     dest_dir: Path,
@@ -253,7 +256,7 @@ def download_direct(
         with httpx.Client(**client_kwargs) as client:
             while True:
                 host, url = _validate_hop(url)
-                secrets.append(url)
+                secrets.extend(_remember_url(url))
                 report("resolving destination", 0.03)
                 addresses = resolve_public_host(host)
                 with _open_pinned(client, url, host, addresses) as response:

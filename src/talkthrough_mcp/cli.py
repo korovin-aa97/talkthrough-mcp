@@ -32,20 +32,19 @@ class _RedactUrls(logging.Filter):
     The privacy contract says a raw URL — its query and userinfo above all —
     never reaches a log line. Talkthrough's own loggers already pass their text
     through ``url_ingest.redact`` or use a safe label such as ``https://host/…``
-    that must survive, so only foreign records are rewritten; a traceback is
-    scrubbed whoever logs it (exception messages quote URLs freely).
+    that must survive. Known per-call secrets are removed from every logger;
+    generic URL patterns apply to foreign records and all tracebacks.
     """
 
     def filter(self, record: logging.LogRecord) -> bool:
         from .core.url_ingest import redact
 
         own = record.name == _OWN_LOGGER or record.name.startswith(_OWN_LOGGER + ".")
-        if not own:
-            message = record.getMessage()
-            redacted = redact(message)
-            if redacted != message:
-                record.msg = redacted
-                record.args = ()
+        message = record.getMessage()
+        redacted = redact(message, known_only=own)
+        if redacted != message:
+            record.msg = redacted
+            record.args = ()
         if record.exc_info and record.exc_info[0] is not None:
             record.exc_text = redact(logging.Formatter().formatException(record.exc_info))
             record.exc_info = None

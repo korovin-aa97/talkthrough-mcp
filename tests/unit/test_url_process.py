@@ -347,6 +347,104 @@ def test_process_url_tool_errors_are_clean_and_redacted(
     assert "hunter2" not in str(info.value) and CANARY not in str(info.value)
 
 
+@pytest.mark.parametrize("expected", [False, True])
+def test_url_errors_are_sanitized_before_leaving_the_worker(
+    stubbed: dict[str, Any], monkeypatch: pytest.MonkeyPatch, expected: bool,
+) -> None:
+    from mcp.server.mcpserver.exceptions import ToolError
+
+    from talkthrough_mcp.core.errors import ValidationError
+    from talkthrough_mcp.server import process_url as tool
+
+    def fail(*args: Any, **kwargs: Any) -> None:
+        message = f"provider failed on bare path /standup.m4a?{CANARY}"
+        if expected:
+            raise ValidationError(message)
+        raise RuntimeError(message)
+
+    monkeypatch.setattr(url_download, "download_direct", fail)
+    with pytest.raises(ToolError) as info:
+        asyncio.run(tool(URL, _Ctx()))  # type: ignore[arg-type]
+    assert CANARY not in str(info.value)
+    assert "provider failed" in str(info.value)
+
+
+def test_url_failure_keeps_the_cli_json_contract(
+    stubbed: dict[str, Any], monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    from talkthrough_mcp.cli import main
+
+    def fail(*args: Any, **kwargs: Any) -> None:
+        raise RuntimeError(f"provider failed: {CANARY}")
+
+    monkeypatch.setattr(url_download, "download_direct", fail)
+    with pytest.raises(SystemExit) as info:
+        main(["process-url", URL, "--json"])
+    assert info.value.code == 2
+    captured = capsys.readouterr()
+    assert CANARY not in captured.err + captured.out
+    assert "RuntimeError" in json.loads(captured.out)["error"]["message"]
+
+
+def test_concurrent_url_calls_scrub_logs_and_progress_then_forget_their_queries(
+    stubbed: dict[str, Any], monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import io
+    import logging
+    from urllib.parse import urlsplit
+
+    from talkthrough_mcp.cli import _privacy_handler
+    from talkthrough_mcp.core.errors import ToolFailureError
+
+    stream = io.StringIO()
+    handler = _privacy_handler(stream)
+    logger = logging.getLogger("test_provider_v042")
+    logger.addHandler(handler)
+    barrier = threading.Barrier(2)
+    queries = ("sig=FIRST4242", "sig=SECOND4242")
+    progress: list[str] = []
+
+    def fail(source: Any, *args: Any, **kwargs: Any) -> None:
+        query = urlsplit(source.request_url).query
+        barrier.wait(timeout=5)
+        logger.warning("bare query %s", query)
+        kwargs["report"](f"provider query {query}", 0.1)
+        try:
+            raise ValueError(f"nested query {query}")
+        except ValueError:
+            raise RuntimeError(f"bare query {query}") from None
+
+    monkeypatch.setattr(url_download, "download_direct", fail)
+    try:
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            futures = [pool.submit(
+                process_url, f"https://cdn.example.com/v.m4a?{query}",
+                progress=lambda stage, fraction: progress.append(stage),
+            ) for query in queries]
+            for future in futures:
+                with pytest.raises(ToolFailureError) as info:
+                    future.result(timeout=10)
+                assert all(query not in str(info.value) for query in queries)
+        assert all(query not in stream.getvalue() + str(progress) for query in queries)
+        # A later, unrelated log has no retained per-call secret registry.
+        logger.warning("outside call: %s", queries[0])
+        assert queries[0] in stream.getvalue().splitlines()[-1]
+    finally:
+        logger.removeHandler(handler)
+
+
+def test_common_tool_error_wrapper_redacts_unexpected_encoded_urls() -> None:
+    from mcp.server.mcpserver.exceptions import ToolError
+
+    from talkthrough_mcp.server import _tool_errors
+
+    with pytest.raises(ToolError) as info, _tool_errors():
+        raise RuntimeError(r"provider https:\/\/cdn.example\/v?sig=TTSECRET4242")
+    assert "TTSECRET4242" not in str(info.value)
+    assert "RuntimeError" in str(info.value)
+
+
 def test_cli_process_url_prints_json_to_stdout_only(
     stubbed: dict[str, Any], isolated_home: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:

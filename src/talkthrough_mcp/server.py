@@ -114,15 +114,17 @@ def _tool_errors() -> Iterator[None]:
     the user's own privileges on their own files, so the exception text is
     theirs to see.
     """
+    from .core.url_ingest import redact
+
     try:
         yield
     except TalkthroughError as exc:
-        raise ToolError(str(exc)) from exc
+        raise ToolError(redact(str(exc))) from exc
     except ToolError:
         raise
     except Exception as exc:
         raise ToolError(
-            f"unexpected {type(exc).__name__}: {exc} — this is an internal error, not "
+            f"unexpected {type(exc).__name__}: {redact(str(exc))} — this is an internal error, not "
             "an input problem; retry once, and if it persists report it with the "
             "server's stderr log at https://github.com/korovin-aa97/talkthrough-mcp/issues"
         ) from exc

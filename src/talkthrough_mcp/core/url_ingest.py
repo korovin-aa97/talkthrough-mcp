@@ -36,16 +36,18 @@ import tempfile
 import threading
 import unicodedata
 import weakref
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from contextlib import contextmanager
+from contextvars import ContextVar
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
+from functools import wraps
 from pathlib import Path
-from typing import Any
-from urllib.parse import SplitResult, parse_qs, urlsplit, urlunsplit
+from typing import Any, ParamSpec, TypeVar
+from urllib.parse import SplitResult, parse_qs, quote, urlsplit, urlunsplit
 
 from . import jobs
-from .errors import ToolFailureError, ValidationError
+from .errors import TalkthroughError, ToolFailureError, ValidationError
 from .manifest import MediaOrigin, atomic_write_text
 
 logger = logging.getLogger(__name__)
@@ -125,8 +127,14 @@ CONTENT_TYPE_EXTENSIONS: dict[str, str] = {
     "audio/x-flac": ".flac",
 }
 
-_URL_PATTERN = re.compile(r"(?i)\b(?:https?|ftp|rtmp|rtmps|rtsp|wss?)://[^\s'\"<>]+")
+_URL_PATTERN = re.compile(
+    r"(?i)(?:\b(?:https?|ftp|rtmp|rtmps|rtsp|wss?):(?:\\?/){2}"
+    r"|\bhttps?%3a%2f%2f|(?<![^\s'\"])(?:\\?/){2})[^\s'\"<>]+"
+)
 _REDACTED = "<url>"
+_URL_SECRETS: ContextVar[list[str] | None] = ContextVar("url_secrets", default=None)
+_P = ParamSpec("_P")
+_R = TypeVar("_R")
 
 
 # --- errors ---------------------------------------------------------------------
@@ -151,17 +159,74 @@ class DownloadError(ToolFailureError):
 # --- redaction --------------------------------------------------------------------
 
 
-def redact(text: str, *secrets: str) -> str:
+def _url_secrets(url: str) -> tuple[str, ...]:
+    try:
+        query = urlsplit(url).query
+    except ValueError:
+        query = ""
+    return tuple(value for value in (url, query) if value)
+
+
+def _remember_url(url: str) -> tuple[str, ...]:
+    values = _url_secrets(url)
+    current = _URL_SECRETS.get()
+    if current is not None:
+        current.extend(value for value in values if value not in current)
+    return values
+
+
+def _redact_url_errors(func: Callable[_P, _R]) -> Callable[_P, _R]:
+    """Sanitize before leaving the worker, with a fresh context per call.
+
+    Nested downloaders keep their redirect secrets until their errors/logs
+    have been scrubbed. Nothing needs to propagate back from asyncio.to_thread.
+    """
+    @wraps(func)
+    def wrapped(*args: _P.args, **kwargs: _P.kwargs) -> _R:
+        token = _URL_SECRETS.set(list(_URL_SECRETS.get() or ()))
+        try:
+            raw = args[0] if args else kwargs.get("url", kwargs.get("source"))
+            if isinstance(raw, UrlSource):
+                _remember_url(raw.request_url)
+            elif isinstance(raw, str):
+                _remember_url(raw)
+            return func(*args, **kwargs)
+        except TalkthroughError as exc:
+            # These user-facing exceptions have one message argument. Preserve
+            # subtype attributes (e.g. HttpStatusError.status for page fallback).
+            exc.args = (redact(str(exc)),)
+            raise exc from None
+        except Exception as exc:
+            raise ToolFailureError(
+                f"unexpected {type(exc).__name__}: {_bounded_reason(str(exc))} — "
+                "retry once; if it persists, report this internal error"
+            ) from None
+        finally:
+            _URL_SECRETS.reset(token)
+
+    return wrapped
+
+
+def redact(text: str, *secrets: str, known_only: bool = False) -> str:
     """Strip every URL-shaped token and every known secret from ``text``.
 
     Provider libraries put signed media URLs into their exception messages;
     the raw input carries query tokens. Neither may leave this module.
     """
-    result = text
-    for secret in secrets:
+    result = text if known_only else _URL_PATTERN.sub(_REDACTED, text)
+    for secret in (*(_URL_SECRETS.get() or ()), *secrets):
         if secret:
-            result = result.replace(secret, _REDACTED)
-    return _URL_PATTERN.sub(_REDACTED, result)
+            for value in _url_secrets(secret):
+                variants = {
+                    value, value.replace("/", r"\/"),
+                    json.dumps(value, ensure_ascii=True)[1:-1], quote(value, safe=""),
+                }
+                for variant in sorted(variants, key=len, reverse=True):
+                    if "%" in variant:
+                        result = re.sub(re.escape(variant), _REDACTED, result, flags=re.IGNORECASE)
+                    else:
+                        result = result.replace(variant, _REDACTED)
+    return result
 
 
 def _bounded_reason(text: str, *secrets: str, limit: int = 240) -> str:
@@ -194,8 +259,7 @@ class UrlSource:
     @property
     def secrets(self) -> tuple[str, ...]:
         """Strings that must never appear in any outbound text."""
-        parts = urlsplit(self.request_url)
-        return tuple(value for value in (self.request_url, parts.query) if value)
+        return _url_secrets(self.request_url)
 
     def safe_label(self) -> str:
         if self.kind == KIND_YOUTUBE:
@@ -887,6 +951,7 @@ class UrlProcessResult:
     downloaded_bytes: int | None
 
 
+@_redact_url_errors
 def process_url(
     url: str,
     *,
@@ -912,7 +977,7 @@ def process_url(
 
     def report(stage: str, fraction: float) -> None:
         if progress is not None:
-            progress(stage, max(0.0, min(1.0, fraction)))
+            progress(redact(stage), max(0.0, min(1.0, fraction)))
 
     def pipeline_report(stage: str, fraction: float) -> None:
         report(stage, 0.15 + 0.85 * fraction)

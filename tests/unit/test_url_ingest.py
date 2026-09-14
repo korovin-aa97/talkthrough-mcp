@@ -8,6 +8,7 @@ import json
 import socket
 from dataclasses import replace
 from pathlib import Path
+from urllib.parse import quote
 
 import pytest
 from tests.conftest import make_manifest
@@ -212,6 +213,34 @@ def test_redaction_strips_known_secrets_and_every_url_shape() -> None:
     assert "googlevideo" not in cleaned and "example.org" not in cleaned
     assert cleaned.count("<url>") == 4
     assert "HTTP Error 403" in cleaned
+
+
+@pytest.mark.parametrize("encoded", [
+    r'provider {"url": "https:\/\/cdn.example\/v.mp4?sig=TTSECRET4242"}',
+    "redirected to //cdn.example/v.mp4?sig=TTSECRET4242",
+    'redirected to "//cdn.example/v.mp4?sig=TTSECRET4242"',
+    "fetching https%3A%2F%2Fcdn.example%2Fv.mp4%3Fsig%3DTTSECRET4242",
+    "fetching HTTPS%3a%2f%2fcdn.example%2fv.mp4%3fsig%3dTTSECRET4242",
+])
+def test_encoded_provider_urls_are_redacted_without_prior_knowledge(encoded: str) -> None:
+    cleaned = redact(encoded)
+    assert "TTSECRET4242" not in cleaned
+    assert "cdn.example" not in cleaned
+    assert "<url>" in cleaned
+
+
+def test_known_query_is_redacted_when_a_provider_prints_only_a_path() -> None:
+    query = "sig=TTSECRET4242&expires=42"
+    raw = "https://cdn.example/v.mp4?" + query
+    for part in (query, quote(query, safe=""), quote(query, safe="").lower()):
+        assert "ttsecret4242" not in redact("host cdn.example path /v.mp4?" + part, raw).lower()
+
+
+def test_redaction_handles_long_input_and_multiple_forms() -> None:
+    message = "x" * 100_000 + ' "//cdn.example/v?sig=TTSECRET4242" https://other.example/x'
+    cleaned = redact(message)
+    assert cleaned.startswith("x" * 100_000)
+    assert cleaned.count("<url>") == 2
 
 
 def test_bounded_title_drops_control_characters_and_caps_length() -> None:
