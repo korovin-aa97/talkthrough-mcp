@@ -62,7 +62,7 @@ extract_frame works later without network; the raw URL is never stored (only a h
 id/host and a bounded title). A repeat call on the same URL serves the stored job without touching \
 the network unless refresh=true. Job ids stay content hashes: the same video from two URLs is one \
 job. YouTube and other pages need the optional [url] extra. The provider's upload date is NOT the \
-recording start: wall_clock stays null unless recorded_at is passed.
+recording start: wall_clock uses usable container creation metadata or recorded_at; download mtime is never used.
 When NOT to use: for local files (process_media), or to re-fetch data you already processed \
 (use the retrieval tools).
 Examples:
