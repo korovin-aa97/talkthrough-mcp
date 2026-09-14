@@ -1039,6 +1039,12 @@ _URL_OR_PATH = re.compile(
     re.IGNORECASE,
 )
 _TRAILING_NAME_METADATA = re.compile(r"\s*\([^()\n]{1,40}\)\s*$")
+_TRAILING_NAME_ROLE = re.compile(r"(?:,\s*|\s+[-\u2013\u2014|]\s+)([^,\n]{1,40})$")
+_NAME_ROLE_WORDS = frozenset({
+    "manager", "engineer", "director", "officer", "sales", "lead", "designer",
+    "developer", "founder", "owner", "moderator", "organizer", "host", "ceo", "cto",
+    "менеджер", "инженер", "директор", "руководитель", "организатор", "ведущий",
+})
 _APOSTROPHE_PARTICLE = re.compile(r"^([^\W\d_]+)['\u2019](.+)$", re.UNICODE)
 _EXACT_UI_PHRASES = frozenset(
     {
@@ -1314,6 +1320,15 @@ def _candidate_parts(line: str) -> tuple[str, str, str]:
     """Return bounded raw display, validation base, and dedupe key."""
     raw = " ".join(line.split()).strip()
     base = _TRAILING_NAME_METADATA.sub("", raw).strip()
+    role = _TRAILING_NAME_ROLE.search(base)
+    if (
+        role is not None
+        and len(base[:role.start()].split()) >= 2
+        and _NAME_ROLE_WORDS.intersection(_candidate_key(role.group(1)).split())
+    ):
+        # Keep the full OCR as evidence, but judge/dedupe the name separately.
+        # Requiring a recognizable role avoids cutting "Ana María, López".
+        base = base[:role.start()].strip()
     return raw, base, _candidate_key(base)
 
 
