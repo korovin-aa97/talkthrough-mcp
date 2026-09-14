@@ -117,6 +117,31 @@ jobs:
       - name: Inventory over stdio is 9 tools / 6 prompts
         shell: bash
         run: uv run --no-project --python clean-venv python scripts/check_mcp_inventory.py
+      - name: Full suite against the fresh installed wheel on Linux
+        if: runner.os == 'Linux'
+        env:
+          TALKTHROUGH_WHISPER_MODEL: tiny
+        shell: bash
+        run: |
+          uv pip install --python clean-venv pytest pytest-timeout
+          uv run --no-project --python clean-venv python -c "import talkthrough_mcp; from pathlib import Path; p=Path(talkthrough_mcp.__file__).resolve(); assert 'site-packages' in p.parts, p; print(p)"
+          uv run --no-project --python clean-venv python -m pytest -q
+      - name: Minimal wheel and sdist install smokes on Linux
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          uv venv minimal-venv --python 3.12
+          uv pip install --python minimal-venv dist/*.whl
+          uv run --no-project --python minimal-venv python -c "from importlib.util import find_spec; assert find_spec('yt_dlp') is None; assert find_spec('sherpa_onnx') is None"
+          uv run --no-project --python minimal-venv python scripts/check_mcp_inventory.py
+          uv venv sdist-venv --python 3.12
+          uv pip install --python sdist-venv dist/*.tar.gz
+          uv run --no-project --python sdist-venv python scripts/check_mcp_inventory.py
+      - name: Exact candidate launcher with fresh resolution
+        shell: bash
+        run: |
+          version="$(uv version --short)"
+          uvx --find-links dist --python ">=3.11,<3.14" "talkthrough-mcp[diarization,url]==${version}" --version
       - name: process-url refuses a playlist URL without network
         shell: bash
         run: |
