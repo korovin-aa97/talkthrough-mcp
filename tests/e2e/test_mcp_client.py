@@ -1,6 +1,6 @@
 """E2E over the real MCP stdio transport — the tool surface exactly as a client sees it.
 
-Spawns the server with ``uv run talkthrough-mcp serve`` (fresh TALKTHROUGH_HOME,
+Spawns the server with the test interpreter (checkout or installed wheel) (fresh TALKTHROUGH_HOME,
 whisper ``tiny``), then exercises the full loop: tool discovery with guidance
 examples on the wire, prompt discovery + rendering, processing the committed
 fixture, moment retrieval with real image content, search with wall-clock,
@@ -13,6 +13,7 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import sys
 from pathlib import Path
 from typing import Any
 
@@ -79,8 +80,8 @@ def _server_params(home: Path) -> StdioServerParameters:
     if diarize.engine_available():
         env.update(_preseed_model_env())
     return StdioServerParameters(
-        command="uv",
-        args=["run", "--no-sync", "--directory", str(REPO_ROOT), "talkthrough-mcp", "serve"],
+        command=sys.executable,
+        args=["-c", "from talkthrough_mcp.cli import main; main(['serve'])"],
         env=env,
         cwd=str(REPO_ROOT),
     )
