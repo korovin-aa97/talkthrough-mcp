@@ -39,7 +39,7 @@ import weakref
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from contextvars import ContextVar
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime
 from functools import wraps
 from pathlib import Path
@@ -834,6 +834,23 @@ def _verified_managed_source(job_id: str, relative: str | None) -> Path | None:
         ) from exc
 
 
+def _sole_managed_source(job_id: str) -> Path | None:
+    """Find one unambiguous recovery candidate without unbounded enumeration."""
+    directory = jobs.job_dir(job_id) / SOURCE_DIR_NAME
+    if directory.is_symlink() or not directory.is_dir():
+        return None
+    candidate: str | None = None
+    for index, path in enumerate(directory.iterdir()):
+        if index >= 32:
+            return None
+        if path.suffix.lower() not in MEDIA_EXTENSIONS:
+            continue
+        if candidate is not None:
+            return None
+        candidate = managed_source_relative(path.name)
+    return _verified_managed_source(job_id, candidate)
+
+
 def install_managed_source(job_id: str, downloaded: Path, name: str) -> Path:
     """Move a verified download into ``jobs/<job_id>/source/<name>``.
 
@@ -994,6 +1011,44 @@ class UrlProcessResult:
     downloaded_bytes: int | None
 
 
+def _recover_url_job(
+    source: UrlSource, mapping: UrlMapping, analysis: dict[str, Any], report: Any,
+) -> UrlProcessResult | None:
+    """Recover a damaged URL manifest from verified bytes, never guessed metadata."""
+    from . import pipeline
+
+    with jobs.job_lock(mapping.job_id):
+        stored, unreadable = jobs.load_previous_job(mapping.job_id)
+        if stored is not None:
+            # Another URL caller may have repaired the job while we waited.
+            path = _verified_managed_source(mapping.job_id, stored.media.managed_source)
+            origin = stored.media.origin
+        elif unreadable is not None:
+            path = _sole_managed_source(mapping.job_id)
+            origin = MediaOrigin(
+                kind=(KIND_YOUTUBE if source.kind == KIND_YOUTUBE else
+                      KIND_SITE if mapping.provider_id is not None else KIND_DIRECT),
+                provider=mapping.provider,
+                provider_id=mapping.provider_id,
+                host=source.host,
+                url_sha256=source.url_sha256,
+            )
+        else:
+            return None
+        if path is None:
+            return None
+        result = pipeline.process_media(
+            str(path), **analysis, progress=report, origin=origin,
+            managed_source=managed_source_relative(path.name),
+        )
+        if unreadable is not None:
+            result = replace(result, recovered_url_origin=True)
+        return UrlProcessResult(
+            result=result, source=source, origin=result.manifest.media.origin,
+            reused_url_mapping=True, refreshed=False, downloaded_bytes=None,
+        )
+
+
 @_redact_url_errors
 def process_url(
     url: str,
@@ -1068,6 +1123,14 @@ def process_url(
                         "managed source of job %s is gone — downloading %s again",
                         mapping.job_id,
                         source.safe_label(),
+                    )
+                elif _unreadable is not None:
+                    recovered = _recover_url_job(source, mapping, analysis, pipeline_report)
+                    if recovered is not None:
+                        return recovered
+                    logger.warning(
+                        "job %s has no unambiguous verified source — downloading again",
+                        mapping.job_id,
                     )
         report("resolving provider", 0.02)
         max_bytes = max_download_bytes()
@@ -1197,8 +1260,6 @@ def process_url(
                     # manifest carries — 0.4.0 answered ``refreshed: true``
                     # while serving the stale title and ``downloaded_at``.
                     attach_managed_source(job_id, relative, origin, replace_origin=refresh)
-                    from dataclasses import replace
-
                     result = replace(result, manifest=jobs.load_job(job_id))
                 save_mapping(source.mapping_key, mapping)
                 for key in extra_keys:

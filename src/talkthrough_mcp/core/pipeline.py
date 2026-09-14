@@ -109,6 +109,8 @@ class ProcessResult:
     damaged_manifest_backup: str | None = None
     reprocess_recovered: tuple[str, ...] = ()
     missing_frame_files: int = 0
+    # A URL manifest rebuilt offline knows only the provider facts in its mapping.
+    recovered_url_origin: bool = False
 
 
 def _env_int(name: str, default: int) -> int:
@@ -1614,6 +1616,12 @@ def integrity_notes(result: ProcessResult) -> dict[str, str]:
             "unreadable manifest were NOT carried over — inspect the backup file if they "
             "matter, then re-save them with label_speakers"
         )
+        if result.recovered_url_origin:
+            notes["manifest_recovery_note"] += (
+                ". The retained source was used without a download; provider metadata "
+                "such as title, publication time and download time is unknown — "
+                "use refresh=true to fetch it again"
+            )
     if result.missing_frame_files:
         notes["integrity_note"] = missing_frames_note(
             result.manifest, result.missing_frame_files

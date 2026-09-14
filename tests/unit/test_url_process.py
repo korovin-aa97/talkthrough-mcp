@@ -363,6 +363,87 @@ def test_forced_rebuild_of_a_url_job_keeps_its_origin(
     assert rebuilt.manifest.wall_clock is None
 
 
+@pytest.mark.parametrize("damaged", [b"{", b"\xff", b"{}", b"[]"])
+def test_damaged_url_manifest_is_rebuilt_locally_with_honest_origin(
+    stubbed: dict[str, Any], isolated_home: Path, damaged: bytes,
+) -> None:
+    first = process_url(URL)
+    job_id = first.result.manifest.job_id
+    directory = jobs.job_dir(job_id)
+    (directory / "manifest.json").write_bytes(damaged)
+    mapping_before = url_ingest.mapping_path(first.source.mapping_key).read_bytes()
+    repaired = process_url(URL)
+    assert stubbed["downloads"] == 1
+    assert repaired.reused_url_mapping and not repaired.result.reused
+    assert repaired.result.manifest.job_id == job_id
+    assert repaired.result.manifest.wall_clock is None
+    origin = repaired.result.manifest.media.origin
+    assert origin is not None and origin.provider == first.source.provider
+    assert origin.title is None and origin.published_at is None and origin.downloaded_at is None
+    assert repaired.result.damaged_manifest_backup is not None
+    assert Path(repaired.result.damaged_manifest_backup).read_bytes() == damaged
+    note = pipeline.summarize(repaired.result)["manifest_recovery_note"]
+    assert "provider metadata" in note.lower() and "refresh=true" in note
+    assert url_ingest.mapping_path(first.source.mapping_key).read_bytes() == mapping_before
+    assert CANARY not in _all_store_text(isolated_home)
+    assert process_url(URL).result.reused
+    assert stubbed["downloads"] == 1
+
+
+@pytest.mark.parametrize("source_state", ["missing", "same-size", "multiple", "symlink"])
+def test_damaged_url_manifest_does_not_guess_an_unverified_source(
+    stubbed: dict[str, Any], tmp_path: Path, source_state: str,
+) -> None:
+    first = process_url(URL).result.manifest
+    directory = jobs.job_dir(first.job_id)
+    original = Path(first.media.path)
+    (directory / "manifest.json").write_text("{}")
+    if source_state == "missing":
+        original.unlink()
+    elif source_state == "same-size":
+        original.write_bytes(b"b" * len(MEDIA))
+    elif source_state == "multiple":
+        (original.parent / "ambiguous.m4a").write_bytes(MEDIA)
+    else:
+        external = tmp_path / "external.m4a"
+        external.write_bytes(MEDIA)
+        original.unlink()
+        try:
+            original.symlink_to(external)
+        except OSError:
+            pytest.skip("creating symlinks is not permitted on this platform")
+    result = process_url(URL)
+    assert stubbed["downloads"] == 2
+    assert result.result.manifest.job_id == first.job_id
+    assert Path(result.result.manifest.media.path).read_bytes() == MEDIA
+
+
+def test_concurrent_damaged_manifest_recovery_rebuilds_once(
+    stubbed: dict[str, Any],
+) -> None:
+    first = process_url(URL)
+    job_id = first.result.manifest.job_id
+    (jobs.job_dir(job_id) / "manifest.json").write_text("{}")
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        results = [f.result(timeout=20) for f in (
+            pool.submit(process_url, URL), pool.submit(process_url, URL),
+        )]
+    assert stubbed["downloads"] == 1
+    assert sorted(result.result.reused for result in results) == [False, True]
+    assert len(list(jobs.job_dir(job_id).glob("manifest.json.damaged-*"))) == 1
+
+
+def test_explicit_refresh_still_downloads_a_damaged_url_job(
+    stubbed: dict[str, Any],
+) -> None:
+    first = process_url(URL).result.manifest
+    (jobs.job_dir(first.job_id) / "manifest.json").write_text("{}")
+    result = process_url(URL, refresh=True)
+    assert stubbed["downloads"] == 2 and result.refreshed
+    assert result.result.manifest.media.origin is not None
+    assert result.result.manifest.media.origin.downloaded_at is not None
+
+
 # --- the tool and the CLI ---------------------------------------------------------
 
 
