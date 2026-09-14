@@ -338,6 +338,19 @@ def test_claude_plugin_agent_uses_plugin_mcp_tool_namespace() -> None:
     assert "mcp__talkthrough__" not in agent
     for tool_name in guidance.TOOL_NAMES:
         assert f"{CLAUDE_PLUGIN_MCP_TOOL_PREFIX}{tool_name}" in agent
+    # A connecting server may expose no MCP tools at session start. Keep the
+    # discovery/wait helpers available without granting unrelated client tools.
+    frontmatter = agent.split("---", 2)[1]
+    allowed = {
+        line.removeprefix("  - ")
+        for line in frontmatter.splitlines()
+        if line.startswith("  - ")
+    }
+    assert allowed == {
+        "ToolSearch",
+        "WaitForMcpServers",
+        *(f"{CLAUDE_PLUGIN_MCP_TOOL_PREFIX}{name}" for name in guidance.TOOL_NAMES),
+    }
 
 
 def test_generator_covers_every_engine_folder() -> None:

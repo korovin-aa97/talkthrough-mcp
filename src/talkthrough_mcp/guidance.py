@@ -52,7 +52,11 @@ Examples:
     "process_url": """\
 Download ONE public video/audio URL once (this is the only tool that uses the network), then run \
 the same LOCAL pipeline as process_media: transcript, keyframes, OCR, wall-clock, optional \
-diarization. Supported: direct https:// links to a media file (mp4/mov/webm/mkv/ogv/m4a/mp3/wav/ogg/\
+diarization. An indexed job with an unreadable manifest can rebuild from its verified local \
+source without a download: reused=false means the pipeline rebuilt, not that media was fetched. \
+Check origin.reused_url_mapping, the download note and manifest_recovery_note; list_jobs omits \
+unreadable manifests. Unrecoverable provider metadata stays unknown unless refresh=true.
+Supported: direct https:// links to a media file (mp4/mov/webm/mkv/ogv/m4a/mp3/wav/ogg/\
 flac), one public YouTube video (watch, youtu.be, shorts, a completed live), and any public \
 video PAGE yt-dlp can read — Instagram (public reels/posts), TikTok, Wikimedia Commons, pages with \
 an HTML5/HLS player, other sites as far as their yt-dlp extractor works anonymously (Vimeo does not). Not supported: playlists, channels, active live streams, \
@@ -232,7 +236,8 @@ Examples:
 List processed recordings, newest first: job_id, source filename, duration, created, \
 wall-clock start, segment/frame counts. The store is content-addressed — the same file maps \
 to the same job even after renames or moves, and jobs persist across sessions and machines \
-restarts.
+restarts. Jobs with unreadable manifests are omitted; an empty list does not prove there are no \
+stored sources. process_media or process_url may rebuild such a job and report manifest_recovery_note.
 When NOT to use: as a health check or before every call — job_ids are stable, remember them.
 Examples:
 - user: "triage the recording I processed this morning" → list_jobs() → pick by filename + created
@@ -244,7 +249,7 @@ Examples:
 - two jobs with the same filename → the newer created one is usually the re-recording
 - diarized jobs show "speakers": N — "the 4-person meeting from Tuesday" is findable at a glance
 - URL jobs carry "origin" (provider, provider_id, title) — "the YouTube video from yesterday" is findable
-- empty list → nothing processed on this machine yet; ask the user for a file path or a public URL
+- empty list → no readable jobs; a damaged manifest may still have a source recoverable by process_media/process_url
 - job disappeared → likely `talkthrough-mcp gc` cleaned it; re-run process_media on the file (same id)
 - anti-example: checking whether a NEW file is processed → just call process_media, it is idempotent+instant
 """,

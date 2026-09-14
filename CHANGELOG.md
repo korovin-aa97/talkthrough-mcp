@@ -26,6 +26,9 @@ Patch release; no new tools, arguments or manifest migration (9 tools,
 - A damaged-manifest rebuild emits one warning instead of two.
 - Startup recovery uses the current exact plugin pin, explains dependency
   warm-up versus model downloads, and avoids universal client timeout claims.
+- The Claude Code triage agent can discover deferred MCP tools and wait for
+  a connecting server instead of starting with no available tools. Its
+  standalone instructions specify required findings fields and JSON types.
 
 ### Documentation
 
