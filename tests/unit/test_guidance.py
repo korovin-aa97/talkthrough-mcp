@@ -91,7 +91,8 @@ def test_every_tool_carries_honest_annotations() -> None:
 def test_process_url_guidance_states_the_network_boundary_and_limits() -> None:
     description = guidance.TOOL_DESCRIPTIONS["process_url"]
     for fact in ("only tool that uses the network", "refresh=true", "[url]", "playlists",
-                 "raw URL is never stored", "NOT the recording start"):
+                 "raw URL is never stored", "NOT the recording start",
+                 "container creation metadata"):
         assert fact in description
     assert "process_url" in guidance.TOOL_DESCRIPTIONS["process_media"]
 

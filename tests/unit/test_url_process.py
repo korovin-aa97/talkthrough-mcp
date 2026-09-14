@@ -11,6 +11,7 @@ import sys
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
+from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
@@ -130,7 +131,13 @@ def test_process_url_summary_carries_origin_and_a_wall_clock_note(
     stubbed: dict[str, Any], isolated_home: Path
 ) -> None:
     ingested = process_url(URL)
-    summary = pipeline.summarize(ingested.result)
+    manifest = ingested.result.manifest
+    assert manifest.media.origin is not None
+    origin_meta = replace(manifest.media.origin, published_at="2026-08-01")
+    manifest = replace(manifest, media=replace(manifest.media, origin=origin_meta))
+    summary = pipeline.summarize(replace(ingested.result, manifest=manifest))
+    assert "container creation metadata or recorded_at" in summary["origin"]["published_at_note"]
+    assert "never download mtime" in summary["origin"]["published_at_note"]
     origin = summary["origin"]
     assert origin["kind"] == "direct_url" and origin["provider"] == "cdn.example.com"
     assert origin["managed_source"].startswith("source/")

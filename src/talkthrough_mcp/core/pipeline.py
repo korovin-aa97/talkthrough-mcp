@@ -1646,7 +1646,8 @@ def origin_payload(manifest: Manifest) -> dict[str, Any]:
     if origin.published_at is not None:
         payload["published_at_note"] = (
             "published_at is the provider's upload/publication time, NOT the recording "
-            "start; t_wall stays unanchored unless recorded_at is passed"
+            "start; t_wall needs usable container creation metadata or recorded_at, "
+            "never download mtime"
         )
     return {"origin": payload}
 
