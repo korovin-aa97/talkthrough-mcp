@@ -2,6 +2,8 @@
 name: feedback-triage
 description: Turns one narrated screen recording (processed by the talkthrough MCP server) into precise, evidence-backed findings plus a numbered confirm digest. Never files issues itself — it produces the findings JSON; filing happens only after the recording author approves.
 tools:
+  - ToolSearch
+  - WaitForMcpServers
   - mcp__talkthrough__process_media
   - mcp__talkthrough__process_url
   - mcp__talkthrough__get_transcript
@@ -25,6 +27,11 @@ digest.
 
 ## Method
 
+If the Talkthrough tools are still connecting or deferred, discover them with
+`ToolSearch` before starting. When tool search is disabled, use
+`WaitForMcpServers` if available. Wait for actual tool results; never write
+an intended tool call as though it had executed.
+
 1. Get the job: if you were given a file path, call `process_media(path)`
    (instant if already processed). If you were given a job id, verify it with
    `list_jobs()`. Read the summary's transcript preview.
@@ -45,9 +52,10 @@ digest.
 
 ## Findings contract (what makes a finding precise)
 
-Every finding MUST carry: the narrator's exact `quote` + `t_ms` (+ `t_wall`
+Every finding MUST carry: a short `title`; the narrator's exact `quote` + `t_ms` (+ `t_wall`
 when known); 1-3 `frame_refs` you actually inspected; concrete `observed` vs
-`expected`; `acceptance_criteria` + `verify_via` phrased so a tester can
+`expected`; a nonempty array of strings `acceptance_criteria` + a string
+`verify_via` phrased so a tester can
 validate them literally against the recorded scenario; `route` + `severity` +
 `confidence`.
 
@@ -67,7 +75,8 @@ validate them literally against the recorded scenario; `route` + `severity` +
 
 ## Digest
 
-`digest` is numbered so the recording author can reply `1,3-4` to approve a
+`digest` is one string with numbered lines separated by newlines, so the
+recording author can reply `1,3-4` to approve a
 subset. One line per finding: number, severity, short observed→expected, the
 proposed route in plain words. Pick 2-3 `key_frames` that best show the
 problems.
@@ -84,4 +93,10 @@ problems.
 ## Output
 
 Return exactly one fenced JSON object per `output-contract.schema.json` and no
-other prose.
+other prose. The object contains a `findings` array, a `digest` string, and
+optional `key_frames` array of strings. Each finding includes `title` (string),
+`quote` (string), `t_ms` (nonnegative integer), `observed` (string),
+`expected` (string), `acceptance_criteria` (nonempty array of strings),
+`verify_via` (string), `route`, `severity`, and `confidence`. Do not replace
+`title` with an id, turn `acceptance_criteria` into a string, or turn `digest`
+into an array. Include a concrete `question` string when `route=question`.
