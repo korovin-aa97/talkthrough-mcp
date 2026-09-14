@@ -52,10 +52,12 @@ Examples:
     "process_url": """\
 Download ONE public video/audio URL once (this is the only tool that uses the network), then run \
 the same LOCAL pipeline as process_media: transcript, keyframes, OCR, wall-clock, optional \
-diarization. An indexed job with an unreadable manifest can rebuild from its verified local \
-source without a download: reused=false means the pipeline rebuilt, not that media was fetched. \
-Check origin.reused_url_mapping, the download note and manifest_recovery_note; list_jobs omits \
-unreadable manifests. Unrecoverable provider metadata stays unknown unless refresh=true.
+diarization. reused describes the pipeline cache, NOT network activity: a new URL is downloaded \
+to compare bytes even when reused=true; a local rebuild can have reused=false with no download. \
+Read origin.network and origin.reused_url_mapping for the download outcome. An indexed job with \
+an unreadable manifest can rebuild from its verified local source; manifest_recovery_note \
+explains recovery. list_jobs omits unreadable manifests. Lost provider metadata stays unknown \
+unless refresh=true.
 Supported: direct https:// links to a media file (mp4/mov/webm/mkv/ogv/m4a/mp3/wav/ogg/\
 flac), one public YouTube video (watch, youtu.be, shorts, a completed live), and any public \
 video PAGE yt-dlp can read — Instagram (public reels/posts), TikTok, Wikimedia Commons, pages with \
