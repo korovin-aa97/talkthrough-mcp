@@ -72,6 +72,44 @@ def _serve(
 # --- direct HTTPS --------------------------------------------------------------
 
 
+def test_internationalized_hosts_use_ascii_dns_host_and_sni(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    hosts: list[str] = []
+
+    def resolve(host: str) -> list[str]:
+        hosts.append(host)
+        return ["203.0.113.10"]
+
+    monkeypatch.setattr(url_download, "resolve_public_host", resolve)
+    target = "https://пример.рф/second.mp4"
+
+    def serve(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/first.mp4":
+            return httpx.Response(302, headers=[(b"location", target.encode("utf-8"))])
+        return _media(MEDIA, **{"content-type": "video/mp4"})
+
+    requests = _serve(monkeypatch, serve)
+    source = classify_url("https://пример.рф/first.mp4")
+    download_direct(source, tmp_path, max_bytes=10_000, report=lambda *a: None)
+    assert hosts == ["xn--e1afmkfd.xn--p1ai"] * 2
+    assert all(request.headers["host"] == hosts[0] for request in requests)
+    assert all(request.extensions["sni_hostname"] == hosts[0] for request in requests)
+
+
+@pytest.mark.parametrize("host", ["a..example", "\ud800.example", "x" * 64 + ".example"])
+def test_invalid_idn_is_an_actionable_refusal_before_dns(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, host: str,
+) -> None:
+    def unexpected(*args: Any, **kwargs: Any) -> None:
+        pytest.fail("invalid IDN must not reach DNS")
+
+    monkeypatch.setattr(url_download, "resolve_public_host", unexpected)
+    with pytest.raises(UnsupportedUrlError, match="internationalized domain name"):
+        source = classify_url(f"https://{host}/clip.mp4")
+        download_direct(source, tmp_path, max_bytes=10_000, report=lambda *a: None)
+
+
 def test_direct_download_pins_the_address_and_keeps_host_and_sni(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, pinned: None
 ) -> None:
