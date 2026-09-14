@@ -46,6 +46,7 @@ from .url_ingest import (
     _redact_url_errors,
     _remember_url,
     check_free_disk,
+    normalize_host,
     redact,
     resolve_public_host,
 )
@@ -158,10 +159,13 @@ def _validate_hop(url: str) -> tuple[str, str]:
         raise UnsafeUrlError("a redirect carried credentials — refusing to follow it")
     if parts.port not in (None, 443):
         raise UnsafeUrlError("a redirect moved off port 443 — refusing to follow it")
-    host = (parts.hostname or "").lower().rstrip(".")
+    host = normalize_host(parts.hostname or "")
     if not host:
         raise UnsafeUrlError("a redirect had no host — refusing to follow it")
-    return host, urlunsplit(("https", parts.netloc, parts.path or "/", parts.query, ""))
+    netloc = f"[{host}]" if ":" in host else host
+    if parts.port is not None:
+        netloc += f":{parts.port}"
+    return host, urlunsplit(("https", netloc, parts.path or "/", parts.query, ""))
 
 
 def _pinned_url(url: str, address: str) -> str:

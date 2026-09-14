@@ -219,7 +219,8 @@ def redact(text: str, *secrets: str, known_only: bool = False) -> str:
             for value in _url_secrets(secret):
                 variants = {
                     value, value.replace("/", r"\/"),
-                    json.dumps(value, ensure_ascii=True)[1:-1], quote(value, safe=""),
+                    json.dumps(value, ensure_ascii=True)[1:-1],
+                    quote(value, safe="", errors="surrogatepass"),
                 }
                 for variant in sorted(variants, key=len, reverse=True):
                     if "%" in variant:
@@ -301,7 +302,7 @@ def classify_url(raw: str) -> UrlSource:
             "credentials inside the URL (user:pass@host) are not accepted; no cookies, "
             "logins or custom headers are sent"
         )
-    host = (parts.hostname or "").lower().rstrip(".")
+    host = normalize_host(parts.hostname or "")
     if not host:
         raise UnsupportedUrlError("url has no host")
     if host in _YOUTUBE_HOSTS:
@@ -420,13 +421,29 @@ def is_public_address(address: ipaddress.IPv4Address | ipaddress.IPv6Address | s
     )
 
 
+def normalize_host(host: str) -> str:
+    """One ASCII hostname for DNS, Host and TLS SNI; preserve IP literals."""
+    bare = host.lower().rstrip(".")
+    try:
+        ipaddress.ip_address(bare)
+    except ValueError:
+        try:
+            return bare.encode("idna").decode("ascii").rstrip(".")
+        except UnicodeError as exc:
+            raise UnsupportedUrlError(
+                "the host name is not a valid internationalized domain name — "
+                "check the spelling or use the site's ASCII hostname"
+            ) from exc
+    return bare
+
+
 def resolve_public_host(host: str) -> list[str]:
     """Resolve ``host`` and require EVERY returned address to be public.
 
     A name that resolves to one public and one private address is refused
     outright — a resolver may hand a connection either one.
     """
-    bare = host.strip("[]")
+    bare = normalize_host(host.strip("[]"))
     try:
         literal: ipaddress.IPv4Address | ipaddress.IPv6Address | None = ipaddress.ip_address(bare)
     except ValueError:
