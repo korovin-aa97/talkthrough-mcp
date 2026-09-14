@@ -77,6 +77,17 @@ NAME_PLATES = [
     "Мария Кузнецова",
     "Дмитрий Ильин",
     "V. Smith",
+    "Vera Smith, Senior Product Manager",
+    "Vera Smith, Head of Sales",
+    "Vera Smith, Chief Executive Officer",
+    "Vera Smith, Senior Software Engineer",
+    "Vera Smith - Senior Product Manager",
+    "Vera Smith – Senior Software Engineer",
+    "Vera Smith — Chief Executive Officer",
+    "Vera Smith | Head of Sales",
+    "Ирина Петрова, главный инженер",
+    "Jean-Luc Picard, Senior Product Manager",
+    "Sam O'Neil, Head of Sales",
 ]
 
 # UI chrome the way meeting apps, recorders, IDEs, browsers and dashboards
@@ -206,6 +217,10 @@ UI_CHROME = [
     "Participantes",
     "Partager l'écran",
     "Quitter",
+    "Screen Sharing, Senior Product Manager",
+    "Product Manager | Head of Sales",
+    ", Senior Product Manager",
+    " - Senior Product Manager",
 ]
 
 
@@ -237,6 +252,23 @@ def test_chrome_vocabulary_never_contains_common_given_names() -> None:
     for name in ("grace", "mark", "will", "hope", "bill", "rose", "faith", "joy", "chase",
                  "sharon", "reed", "post", "вера", "роман", "надежда", "любовь"):
         assert name not in pipeline._UI_CHROME_WORDS
+
+
+@pytest.mark.parametrize("line", ["Ana María, López", "Smith, Vera", "Jean-Luc Picard"])
+def test_name_metadata_does_not_strip_a_surname(line: str) -> None:
+    assert pipeline._candidate_parts(line)[1] == line
+
+
+def test_title_card_deduplicates_by_name_and_keeps_the_raw_evidence() -> None:
+    from dataclasses import replace
+
+    manifest = make_manifest()
+    manifest.frames.items = [
+        replace(manifest.frames.items[0], ocr_text="Vera Smith, Senior Product Manager\nVera Smith")
+    ]
+    assert pipeline._name_candidates(manifest, 0) == [
+        {"text": "Vera Smith, Senior Product Manager", "frame_ms": 0}
+    ]
 
 
 # --- F5: hidden pending labels are listed ---------------------------------------
