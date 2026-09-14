@@ -19,7 +19,8 @@ Patch release; no new tools, arguments or manifest migration (9 tools,
 - Internationalized download/redirect hosts use the same ASCII IDNA name
   for DNS, HTTP Host and TLS SNI; invalid names fail before a connection.
 - Different URLs with identical media bytes reuse a verified managed source
-  under the job lock instead of retaining duplicate media files.
+  under the job lock instead of retaining duplicate media files. Guidance
+  distinguishes pipeline reuse from whether a URL was downloaded.
 - Indexed URL jobs with a damaged manifest rebuild from an unambiguous,
   verified local source before attempting another download. Recovery retains
   quarantine and reports unavailable provider metadata honestly.
