@@ -752,7 +752,7 @@ def process_media(
     report("hashing file", 0.02)
     job_id = jobs.compute_job_id(media)
 
-    def reusable() -> Manifest | None:
+    def reusable(*, under_lock: bool = False) -> Manifest | None:
         """Reuse unless forced — or unless an EXPLICIT per-call model differs
         from the stored transcript's model (silently returning the old model's
         text would betray the caller's intent). A changed env default
@@ -763,7 +763,8 @@ def process_media(
             return None
         manifest, unreadable = jobs.load_previous_job(job_id)
         if manifest is None:
-            logger.warning(
+            log = logger.warning if under_lock else logger.debug
+            log(
                 "job %s has an unreadable manifest (%s) — rebuilding from the source",
                 job_id,
                 unreadable,
@@ -800,7 +801,7 @@ def process_media(
             for item in jobs.recover_interrupted_reprocess(job_id)
         )
         # Re-check under the lock: a concurrent call may have just finished it.
-        manifest_hit = reusable()
+        manifest_hit = reusable(under_lock=True)
         if manifest_hit is not None:
             if _needs_diarize_amend(manifest_hit, diarize_request):
                 logger.info(

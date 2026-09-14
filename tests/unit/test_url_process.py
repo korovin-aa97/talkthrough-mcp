@@ -444,6 +444,20 @@ def test_explicit_refresh_still_downloads_a_damaged_url_job(
     assert result.result.manifest.media.origin.downloaded_at is not None
 
 
+def test_unreadable_manifest_warning_is_emitted_once_per_rebuild(
+    stubbed: dict[str, Any], caplog: pytest.LogCaptureFixture,
+) -> None:
+    first = process_url(URL).result.manifest
+    manifest = jobs.job_dir(first.job_id) / "manifest.json"
+    for _ in range(2):
+        manifest.write_text("{}")
+        caplog.clear()
+        process_url(URL)
+        warnings = [record for record in caplog.records
+                    if record.levelname == "WARNING" and "unreadable manifest" in record.message]
+        assert len(warnings) == 1
+
+
 # --- the tool and the CLI ---------------------------------------------------------
 
 
