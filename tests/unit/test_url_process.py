@@ -618,7 +618,12 @@ def test_url_errors_keep_the_host_label_through_every_boundary(
     def http_404(source: Any, dest_dir: Path, *, max_bytes: int, report: Any) -> Downloaded:
         raise url_download.HttpStatusError(404, source.safe_label())
 
+    def no_video(source: Any, dest_dir: Path, **kwargs: Any) -> Downloaded:
+        # Never the real page reader: it would need the [url] extra and the network.
+        raise DownloadError(f"the page could not be read for {source.safe_label()}")
+
     monkeypatch.setattr(url_download, "download_direct", http_404)
+    monkeypatch.setattr(url_download, "download_site", no_video)
     with pytest.raises(ToolError) as info, _tool_errors():
         process_url(URL)
     assert str(info.value) == "the server answered HTTP 404 for https://cdn.example.com/…"
