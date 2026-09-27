@@ -243,6 +243,47 @@ def test_redaction_handles_long_input_and_multiple_forms() -> None:
     assert cleaned.count("<url>") == 2
 
 
+@pytest.mark.parametrize(
+    "message",
+    [
+        "the server answered HTTP 404 for https://cdn.example.org/…",
+        "no video could be found on https://example.org/…: Unsupported URL",
+        "network timeout while downloading https://[2001:db8::1]:443/… (direct media URL)",
+    ],
+)
+def test_the_safe_host_label_survives_redaction(message: str) -> None:
+    # 0.4.2 RC regression: the generic pattern ate the label the errors are built on.
+    assert redact(message) == message
+
+
+@pytest.mark.parametrize(
+    "raw",
+    [
+        "https://cdn.example.org/…?sig=TTSECRET4242",
+        "https://cdn.example.org/…/v.mp4",
+        "https://user:TTSECRET4242@cdn.example.org/…",
+        "https://cdn.example.org/v.mp4?sig=TTSECRET4242",
+    ],
+)
+def test_anything_beyond_the_safe_label_is_still_redacted(raw: str) -> None:
+    cleaned = redact(f"failed for {raw}")
+    assert cleaned == "failed for <url>"
+
+
+@pytest.mark.parametrize(
+    ("host", "ascii_host"),
+    [
+        ("straße.de", "xn--strae-oqa.de"),  # IDNA 2003 would say strasse.de
+        ("Bücher.Example.", "xn--bcher-kva.example"),
+        ("пример.рф", "xn--e1afmkfd.xn--p1ai"),
+        ("cdn_1.example.com", "cdn_1.example.com"),
+        ("2001:db8::1", "2001:db8::1"),
+    ],
+)
+def test_hosts_normalize_like_httpx_and_browsers(host: str, ascii_host: str) -> None:
+    assert url_ingest.normalize_host(host) == ascii_host
+
+
 def test_bounded_title_drops_control_characters_and_caps_length() -> None:
     title = url_ingest.bounded_title("  A\x00 title\n with  \u200bzero width ")
     assert title == "A title with zero width"

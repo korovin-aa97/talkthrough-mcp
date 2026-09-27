@@ -608,6 +608,45 @@ def test_common_tool_error_wrapper_redacts_unexpected_encoded_urls() -> None:
     assert "RuntimeError" in str(info.value)
 
 
+def test_url_errors_keep_the_host_label_through_every_boundary(
+    stubbed: dict[str, Any], isolated_home: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from mcp.server.mcpserver.exceptions import ToolError
+
+    from talkthrough_mcp.server import _tool_errors
+
+    def http_404(source: Any, dest_dir: Path, *, max_bytes: int, report: Any) -> Downloaded:
+        raise url_download.HttpStatusError(404, source.safe_label())
+
+    monkeypatch.setattr(url_download, "download_direct", http_404)
+    with pytest.raises(ToolError) as info, _tool_errors():
+        process_url(URL)
+    assert str(info.value) == "the server answered HTTP 404 for https://cdn.example.com/…"
+
+
+def test_unexpected_errors_keep_a_redacted_traceback_on_stderr(
+    stubbed: dict[str, Any],
+    isolated_home: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    from talkthrough_mcp.core.errors import ToolFailureError
+
+    def broken(source: Any, *args: Any, **kwargs: Any) -> None:
+        raise KeyError(f"lookup failed for {source.request_url}")
+
+    monkeypatch.setattr(url_download, "download_direct", broken)
+    with (
+        caplog.at_level("ERROR", logger="talkthrough_mcp"),
+        pytest.raises(ToolFailureError, match="stderr log") as info,
+    ):
+        process_url(URL)
+    assert CANARY not in str(info.value)
+    logged = "\n".join(record.getMessage() for record in caplog.records)
+    assert "Traceback" in logged and "in broken" in logged and "KeyError" in logged
+    assert CANARY not in logged and "cdn.example.com/recordings" not in logged
+
+
 def test_cli_process_url_prints_json_to_stdout_only(
     stubbed: dict[str, Any], isolated_home: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:

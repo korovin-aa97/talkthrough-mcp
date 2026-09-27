@@ -35,6 +35,9 @@ classifiers = [
 ]
 dependencies = [
     "faster-whisper>=1.2.1",
+    # Explicit: url_ingest encodes non-ASCII hosts with IDNA 2008/UTS 46 (the
+    # stdlib codec is IDNA 2003). Already required transitively via httpx.
+    "idna>=3.7",
     # 2.1.1 is the first stable 2.x release tested by the v0.3 port. Keep the
     # next-major bound explicit: MCP 3.x may change the public server contract.
     "mcp>=2.1.1,<3",
