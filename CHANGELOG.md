@@ -4,10 +4,10 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions follow
 [SemVer](https://semver.org/).
 
-## [0.4.2] — Unreleased
+## [0.4.2] — 2026-09-27
 
 Patch release; no new tools, arguments or manifest migration (9 tools,
-6 prompts). The date will be set to the UTC day of the release tag.
+6 prompts).
 
 ### Fixed
 
