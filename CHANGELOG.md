@@ -21,6 +21,9 @@ Patch release; no new tools, arguments or manifest migration (9 tools,
 - Internationalized download/redirect hosts use the same ASCII IDNA 2008
   (UTS 46) name for DNS, HTTP Host and TLS SNI, as browsers and httpx do
   (`straße.de` is not `strasse.de`); invalid names fail before a connection.
+- Without the optional `[url]` extra, a direct media link that answers with
+  an HTTP error reports that error instead of asking to install the extra;
+  direct media URLs need no extra. Pages still name the extra they need.
 - Different URLs with identical media bytes reuse a verified managed source
   under the job lock instead of retaining duplicate media files. Guidance
   distinguishes pipeline reuse from whether a URL was downloaded.

@@ -948,6 +948,49 @@ def test_when_both_attempts_fail_the_error_names_both(
         process_url("https://cdn.example.org/missing.mp4")
 
 
+def test_without_the_url_extra_a_media_link_reports_its_http_error(
+    stubbed: dict[str, Any], isolated_home: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Direct media URLs need no extra: its absence must not hide their HTTP error."""
+
+    def http_404(source: Any, dest_dir: Path, *, max_bytes: int, report: Any) -> Downloaded:
+        raise url_download.HttpStatusError(404, source.safe_label())
+
+    monkeypatch.setattr(url_download, "download_direct", http_404)
+    monkeypatch.setitem(sys.modules, "yt_dlp", None)  # the [url] extra is not installed
+    with pytest.raises(DownloadError) as info:
+        process_url("https://cdn.example.org/missing.mp4")
+    assert str(info.value) == "the server answered HTTP 404 for https://cdn.example.org/…"
+
+
+@pytest.mark.parametrize(
+    ("url", "direct_error"),
+    [
+        # a page served for a media-looking path: only the page reader can help
+        ("https://cdn.example.org/clip.webm", lambda: url_download.NotMediaResponse("text/html")),
+        # an HTTP error on a page URL may still be a page the reader can read
+        ("https://videos.example.org/watch/1", lambda: url_download.HttpStatusError(403, "x")),
+    ],
+    ids=["page-for-a-media-path", "http-error-on-a-page-url"],
+)
+def test_without_the_url_extra_pages_still_ask_for_it(
+    stubbed: dict[str, Any],
+    isolated_home: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    url: str,
+    direct_error: Any,
+) -> None:
+    from talkthrough_mcp.core.url_ingest import UrlExtraMissingError
+
+    def fail(source: Any, dest_dir: Path, *, max_bytes: int, report: Any) -> Downloaded:
+        raise direct_error()
+
+    monkeypatch.setattr(url_download, "download_direct", fail)
+    monkeypatch.setitem(sys.modules, "yt_dlp", None)
+    with pytest.raises(UrlExtraMissingError, match=r"optional \[url\] extra"):
+        process_url(url)
+
+
 def test_refresh_bypasses_the_provider_index_and_downloads_again(
     stubbed: dict[str, Any], isolated_home: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

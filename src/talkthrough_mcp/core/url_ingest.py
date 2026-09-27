@@ -1016,6 +1016,14 @@ def _download(
         raise type(second)(
             f"{second} (the URL is not a media file either: {first_error})"
         ) from second
+    except UrlExtraMissingError as missing:
+        # Direct media URLs need no extra: without the page reader, a media
+        # link's HTTP error is still the answer. A page keeps the install hint.
+        if source.path_extension is not None and isinstance(
+            first_error, url_download.HttpStatusError
+        ):
+            raise first_error from missing
+        raise
 
 
 @dataclass(frozen=True)
