@@ -34,6 +34,7 @@ import shutil
 import socket
 import tempfile
 import threading
+import traceback
 import unicodedata
 import weakref
 from collections.abc import Callable, Iterator
@@ -45,6 +46,8 @@ from functools import wraps
 from pathlib import Path
 from typing import Any, ParamSpec, TypeVar
 from urllib.parse import SplitResult, parse_qs, quote, urlsplit, urlunsplit
+
+import idna
 
 from . import jobs
 from .errors import TalkthroughError, ToolFailureError, ValidationError
@@ -127,9 +130,13 @@ CONTENT_TYPE_EXTENSIONS: dict[str, str] = {
     "audio/x-flac": ".flac",
 }
 
+# ``UrlSource.safe_label`` ("https://host/…": no path, query or userinfo) is
+# meant to reach the user, so a URL whose whole remainder is a host and "/…"
+# followed by a delimiter is left alone; anything longer is still redacted.
+_SAFE_LABEL_TAIL = r"(?![a-z0-9.\-\[\]:]+/\u2026(?:$|[\s'\"<>:,;.)\]]))"
 _URL_PATTERN = re.compile(
-    r"(?i)(?:\b(?:https?|ftp|rtmp|rtmps|rtsp|wss?):(?:\\?/){2}"
-    r"|\bhttps?%3a%2f%2f|(?<![^\s'\"])(?:\\?/){2})[^\s'\"<>]+"
+    r"(?i)(?:\b(?:https?|ftp|rtmp|rtmps|rtsp|wss?):(?:\\?/){2}" + _SAFE_LABEL_TAIL
+    + r"|\bhttps?%3a%2f%2f|(?<![^\s'\"])(?:\\?/){2})[^\s'\"<>]+"
 )
 _REDACTED = "<url>"
 _URL_SECRETS: ContextVar[list[str] | None] = ContextVar("url_secrets", default=None)
@@ -197,9 +204,17 @@ def _redact_url_errors(func: Callable[_P, _R]) -> Callable[_P, _R]:
             exc.args = (redact(str(exc)),)
             raise exc from None
         except Exception as exc:
+            # The caller only sees a bounded, redacted reason; keep the redacted
+            # traceback on stderr so an internal error stays reportable.
+            logger.error(
+                "unexpected error in %s:\n%s",
+                func.__name__,
+                redact("".join(traceback.format_exception(exc)).rstrip()),
+            )
             raise ToolFailureError(
-                f"unexpected {type(exc).__name__}: {_bounded_reason(str(exc))} — "
-                "retry once; if it persists, report this internal error"
+                f"unexpected {type(exc).__name__}: {_bounded_reason(str(exc))} — this is an "
+                "internal error; retry once, and if it persists report it with the server's "
+                "stderr log at https://github.com/korovin-aa97/talkthrough-mcp/issues"
             ) from None
         finally:
             _URL_SECRETS.reset(token)
@@ -428,7 +443,11 @@ def normalize_host(host: str) -> str:
         ipaddress.ip_address(bare)
     except ValueError:
         try:
-            return bare.encode("idna").decode("ascii").rstrip(".")
+            if bare.isascii():
+                return bare.encode("idna").decode("ascii").rstrip(".")
+            # IDNA 2008/UTS 46 (as httpx and browsers use): the stdlib codec is
+            # IDNA 2003 and maps "straße.de" to the different domain strasse.de.
+            return idna.encode(bare, uts46=True).decode("ascii").rstrip(".")
         except UnicodeError as exc:
             raise UnsupportedUrlError(
                 "the host name is not a valid internationalized domain name — "

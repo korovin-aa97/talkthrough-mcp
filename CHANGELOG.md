@@ -15,9 +15,12 @@ Patch release; no new tools, arguments or manifest migration (9 tools,
   name as a candidate, preserve the raw evidence, and retain chrome filters.
 - URL errors redact escaped and encoded forms and known queries across
   downloader, worker, CLI and MCP tool-body boundaries, including unexpected
-  exceptions. SDK argument-validation echoes remain an explicit limitation.
-- Internationalized download/redirect hosts use the same ASCII IDNA name
-  for DNS, HTTP Host and TLS SNI; invalid names fail before a connection.
+  exceptions, while the host-only `https://host/…` label stays readable.
+  Unexpected errors keep a redacted traceback on stderr for bug reports.
+  SDK argument-validation echoes remain an explicit limitation.
+- Internationalized download/redirect hosts use the same ASCII IDNA 2008
+  (UTS 46) name for DNS, HTTP Host and TLS SNI, as browsers and httpx do
+  (`straße.de` is not `strasse.de`); invalid names fail before a connection.
 - Different URLs with identical media bytes reuse a verified managed source
   under the job lock instead of retaining duplicate media files. Guidance
   distinguishes pipeline reuse from whether a URL was downloaded.
