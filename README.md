@@ -366,16 +366,16 @@ resolves to this lean form) — an explicit `diarize=true` will then answer
 with the one-line install fix. Details in
 [Speakers](#speakers-optional-diarization).
 
-### Updating to 0.4.3
+### Updating to 0.4.4
 
 Update your plugin or generated config, then warm its exact pinned launcher
 before reconnecting the MCP client:
 
 ```bash
-uvx --python ">=3.11,<3.14" "talkthrough-mcp[diarization,url]==0.4.3" --version
+uvx --python ">=3.11,<3.14" "talkthrough-mcp[diarization,url]==0.4.4" --version
 ```
 
-The output should name 0.4.3 and both extras. This prepares dependencies;
+The output should name 0.4.4 and both extras. This prepares dependencies;
 the first recording can still need model/tool downloads. A cold environment
 can exceed the client's startup timeout. See
 [startup recovery](docs/TROUBLESHOOTING.md#first-run-is-slow--downloads-a-lot).

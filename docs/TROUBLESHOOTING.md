@@ -35,7 +35,7 @@ Stage 1 can outlast the MCP client's startup timeout. Warm the exact
 launcher from your installed config after updating the plugin:
 
 ```bash
-uvx --python ">=3.11,<3.14" "talkthrough-mcp[diarization,url]==0.4.3" --version
+uvx --python ">=3.11,<3.14" "talkthrough-mcp[diarization,url]==0.4.4" --version
 ```
 
 This installs the Python environment and reports the server version and
@@ -56,6 +56,20 @@ Warm processing is network-free and reuses model caches; re-processing the
 same file returns instantly from the content-addressed job store. On an
 Apple-Silicon CPU, processing with the default `small` model and OCR is
 typically around 3× faster than real time (a 2-minute clip ≈ 40 s).
+
+## Windows: Cyrillic paths report no audio or video streams
+
+Versions through 0.4.3 read FFmpeg output using Python's default encoding.
+On Windows with a legacy code page, a Cyrillic filename in ffprobe's UTF-8
+JSON can fail decoding in a background pipe reader. The resulting missing
+output was reported as `no audio or video streams found`, even though the
+recording contained both tracks. Frame-extraction logs were affected too.
+
+Version 0.4.4 decodes all FFmpeg pipes explicitly as UTF-8. To work around
+this on an older installation, add `"PYTHONUTF8": "1"` to the Talkthrough server's
+existing `env` object in the MCP client config, then fully quit and restart
+the client. This enables Python's UTF-8 mode at server startup; recordings
+can stay at their original paths.
 
 ## Corporate networks: model downloads stall or fail TLS
 
