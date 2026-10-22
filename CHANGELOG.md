@@ -4,6 +4,26 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions follow
 [SemVer](https://semver.org/).
 
+## [0.4.3] — 2026-10-22
+
+### Fixed
+
+- Fresh installations, including Claude Desktop via `uvx` on Windows, keep
+  PyAV below 19. PyAV 19 removed the `metadata_errors` argument still passed
+  by faster-whisper 1.2.1, causing `process_media` to fail while opening audio
+  with `TypeError: open() got an unexpected keyword argument 'metadata_errors'`.
+- Declare the URL downloader's `httpx` dependency directly, so fresh installs
+  still support direct HTTPS media when the MCP SDK changes its HTTP client.
+- Fresh-wheel CI checks real audio decoding on Windows, macOS and Linux
+  without downloading a Whisper model.
+
+### Upgrading
+
+Refresh the server environment with
+`uvx --refresh --python ">=3.11,<3.14" "talkthrough-mcp[diarization,url]==0.4.3" --version`
+and reconnect/restart the MCP client. Claude Code plugin users should update
+the plugin to 0.4.3. Existing recordings, models and jobs remain reusable.
+
 ## [0.4.2] — 2026-09-27
 
 Patch release; no new tools, arguments or manifest migration (9 tools,
