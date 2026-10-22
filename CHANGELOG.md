@@ -12,6 +12,8 @@ All notable changes to this project are documented here. The format follows
   PyAV below 19. PyAV 19 removed the `metadata_errors` argument still passed
   by faster-whisper 1.2.1, causing `process_media` to fail while opening audio
   with `TypeError: open() got an unexpected keyword argument 'metadata_errors'`.
+- Declare the URL downloader's `httpx` dependency directly, so fresh installs
+  still support direct HTTPS media when the MCP SDK changes its HTTP client.
 - Fresh-wheel CI checks real audio decoding on Windows, macOS and Linux
   without downloading a Whisper model.
 

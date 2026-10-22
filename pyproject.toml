@@ -38,6 +38,9 @@ dependencies = [
     # it. Keep fresh PyPI/uvx installs compatible until an upstream fix ships.
     "av>=11,<19",
     "faster-whisper>=1.2.1",
+    # Used directly by the URL downloader; do not rely on the MCP SDK's
+    # transitive dependencies to keep installing this HTTP client.
+    "httpx>=0.28.1,<1",
     # Explicit: url_ingest encodes non-ASCII hosts with IDNA 2008/UTS 46 (the
     # stdlib codec is IDNA 2003). Already required transitively via httpx.
     "idna>=3.7",
