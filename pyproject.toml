@@ -1,6 +1,6 @@
 [project]
 name = "talkthrough-mcp"
-version = "0.4.2"
+version = "0.4.3"
 description = "Local MCP server: turn screen recordings into transcript, exact frames, OCR and wall-clock evidence for coding agents."
 readme = "README.md"
 authors = [
@@ -34,6 +34,9 @@ classifiers = [
     "Typing :: Typed",
 ]
 dependencies = [
+    # faster-whisper 1.2.1 passes metadata_errors to av.open; PyAV 19 removed
+    # it. Keep fresh PyPI/uvx installs compatible until an upstream fix ships.
+    "av>=11,<19",
     "faster-whisper>=1.2.1",
     # Explicit: url_ingest encodes non-ASCII hosts with IDNA 2008/UTS 46 (the
     # stdlib codec is IDNA 2003). Already required transitively via httpx.

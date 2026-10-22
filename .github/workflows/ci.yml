@@ -104,6 +104,11 @@ jobs:
           uv venv clean-venv --python 3.12
           wheel="$(ls dist/*.whl)"
           uv pip install --python clean-venv "${wheel}[diarization,url]"
+      - name: Real audio decode with freshly resolved dependencies
+        shell: bash
+        run: |
+          uv pip install --python clean-venv pytest pytest-timeout
+          uv run --no-project --python clean-venv python -m pytest tests/unit/test_stt_audio_decode.py -q
       - name: Deno and yt-dlp come from PyPI, no system runtime needed
         shell: bash
         run: |
@@ -123,7 +128,6 @@ jobs:
           TALKTHROUGH_WHISPER_MODEL: tiny
         shell: bash
         run: |
-          uv pip install --python clean-venv pytest pytest-timeout
           uv run --no-project --python clean-venv python -c "import talkthrough_mcp; from pathlib import Path; p=Path(talkthrough_mcp.__file__).resolve(); assert 'site-packages' in p.parts, p; print(p)"
           uv run --no-project --python clean-venv python -m pytest -q
       - name: Minimal wheel and sdist install smokes on Linux

@@ -35,7 +35,7 @@ Stage 1 can outlast the MCP client's startup timeout. Warm the exact
 launcher from your installed config after updating the plugin:
 
 ```bash
-uvx --python ">=3.11,<3.14" "talkthrough-mcp[diarization,url]==0.4.2" --version
+uvx --python ">=3.11,<3.14" "talkthrough-mcp[diarization,url]==0.4.3" --version
 ```
 
 This installs the Python environment and reports the server version and
