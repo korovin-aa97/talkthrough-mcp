@@ -6,7 +6,7 @@ import json
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from .errors import ValidationError
+from .errors import ToolFailureError, ValidationError
 from .ffmpeg import ffprobe_path, run_tool
 
 
@@ -40,7 +40,13 @@ def probe_media(media: Path) -> MediaInfo:
         ],
         timeout=120,
     )
-    payload = json.loads(proc.stdout or "{}")
+    if not proc.stdout or not proc.stdout.strip():
+        detail = " | ".join((proc.stderr or "").strip().splitlines()[-8:])[:1200]
+        raise ToolFailureError(
+            f"ffprobe returned empty output for {media.name!r}"
+            + (f": {detail}" if detail else " — check the ffprobe installation and retry")
+        )
+    payload = json.loads(proc.stdout)
     streams = payload.get("streams") or []
     video = next((s for s in streams if s.get("codec_type") == "video"), None)
     audio = next((s for s in streams if s.get("codec_type") == "audio"), None)

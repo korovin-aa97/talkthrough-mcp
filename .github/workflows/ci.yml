@@ -104,11 +104,11 @@ jobs:
           uv venv clean-venv --python 3.12
           wheel="$(ls dist/*.whl)"
           uv pip install --python clean-venv "${wheel}[diarization,url]"
-      - name: Real audio decode with freshly resolved dependencies
+      - name: Real audio decode and Unicode media paths with fresh dependencies
         shell: bash
         run: |
           uv pip install --python clean-venv pytest pytest-timeout
-          uv run --no-project --python clean-venv python -m pytest tests/unit/test_stt_audio_decode.py -q
+          uv run --no-project --python clean-venv python -m pytest tests/unit/test_stt_audio_decode.py tests/integration/test_media_unicode.py -q
       - name: Deno and yt-dlp come from PyPI, no system runtime needed
         shell: bash
         run: |

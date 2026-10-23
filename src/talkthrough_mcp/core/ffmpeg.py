@@ -54,9 +54,19 @@ def ffprobe_path() -> str:
 
 
 def run_tool(cmd: list[str], *, timeout: int) -> subprocess.CompletedProcess[str]:
-    """Run an external tool, raising ToolFailureError with its stderr on failure."""
+    """Run FFmpeg tools, decoding their UTF-8 pipes independently of locale."""
     try:
-        return subprocess.run(cmd, check=True, capture_output=True, text=True, timeout=timeout)
+        # FFmpeg emits UTF-8, including filenames in ffprobe JSON. A Windows
+        # code-page decode can fail in a pipe reader thread and lose stdout.
+        return subprocess.run(
+            cmd,
+            check=True,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=timeout,
+        )
     except subprocess.CalledProcessError as exc:
         stderr_tail = (exc.stderr or "").strip().splitlines()[-8:]
         tool = Path(cmd[0]).name  # full venv path is noise in a user-facing error

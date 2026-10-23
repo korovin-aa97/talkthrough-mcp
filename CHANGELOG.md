@@ -4,6 +4,25 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions follow
 [SemVer](https://semver.org/).
 
+## [0.4.4] — 2026-10-23
+
+### Fixed
+
+- Read FFmpeg and ffprobe output as UTF-8 regardless of the Windows code
+  page. Cyrillic paths such as `Телемост/ИИ в NDBC.webm` no longer lose probe
+  results or frame timestamps when Python defaults to CP1251 or CP1252.
+- An empty ffprobe response reports a tool failure with bounded diagnostics
+  instead of claiming that the recording has no audio or video streams.
+- Fresh-wheel CI exercises real probing, audio extraction, keyframes and
+  exact-frame extraction with Unicode MP4/WebM paths and legacy code-page
+  defaults on Windows, macOS and Linux.
+
+### Upgrading
+
+Update the plugin or pin the server to `talkthrough-mcp[diarization,url]==0.4.4`
+in your MCP client config, then fully quit and restart the client. Existing
+jobs remain readable; recordings can keep their original Unicode paths.
+
 ## [0.4.3] — 2026-10-22
 
 ### Fixed

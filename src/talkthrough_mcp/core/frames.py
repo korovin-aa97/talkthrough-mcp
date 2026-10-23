@@ -105,6 +105,8 @@ def extract_keyframes(
             check=True,
             capture_output=True,
             text=True,
+            encoding="utf-8",
+            errors="replace",
             timeout=timeout,
         )
     except subprocess.CalledProcessError as exc:
@@ -168,7 +170,15 @@ def extract_exact_frame(
         cmd += ["-vf", f"crop={w}:{h}:{x}:{y}"]
     cmd += ["-q:v", "2", str(out_path)]
     try:
-        subprocess.run(cmd, check=True, capture_output=True, text=True, timeout=timeout)
+        subprocess.run(
+            cmd,
+            check=True,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=timeout,
+        )
     except subprocess.CalledProcessError as exc:
         stderr_tail = (exc.stderr or "").strip().splitlines()[-5:]
         raise ToolFailureError(
